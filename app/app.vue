@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const route = useRoute()
+
 useHead({
   htmlAttrs: { lang: 'en' },
   title: 'Learn — Minimalist Monochrome',
@@ -12,7 +14,7 @@ useHead({
     { 'http-equiv': 'X-UA-Compatible', content: 'IE=edge' },
   ],
   link: [
-    { rel: 'canonical', href: () => 'https://learn.example.com' + useRoute().path },
+    { rel: 'canonical', href: () => 'https://learn.itsash.in' + (route.path || '/') },
     { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
     { rel: 'manifest', href: '/site.webmanifest' },
     { rel: 'apple-touch-icon', href: '/favicon.ico' },
@@ -27,11 +29,11 @@ useHead({
         '@context': 'https://schema.org',
         '@type': 'WebSite',
         name: 'Learn',
-        url: 'https://learn.example.com',
+        url: 'https://learn.itsash.in',
         description: 'A personal reading space built with Nuxt Content — Rust curriculum, programming guides, and technical documentation.',
         potentialAction: {
           '@type': 'SearchAction',
-          target: 'https://learn.example.com/index?q={search_term_string}',
+          target: 'https://learn.itsash.in/browse?q={search_term_string}',
           'query-input': 'required name=search_term_string',
         },
       }),

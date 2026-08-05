@@ -1,17 +1,22 @@
 <script setup lang="ts">
 const route = useRoute()
 const router = useRouter()
-const config = useRuntimeConfig()
 
 const { data: page } = await useAsyncData('page-' + route.path, async () => {
   const found = await queryCollection('content').path(route.path).first()
-  if (found) {
-    return found
-  } else {
-    const readmePath = route.path.replace(/\/?$/, '/readme')
+  if (found) return found
+
+  const readmePath = route.path.replace(/\/?$/, '/readme')
+  const readme = await queryCollection('content').path(readmePath).first()
+  if (readme) {
+    if (import.meta.server) {
+      throw createError({ statusCode: 307, statusMessage: 'Redirect', data: { location: readmePath } })
+    }
     router.replace(readmePath)
+    return readme
   }
 
+  return null
 })
 
 if (!page.value) {
@@ -54,7 +59,7 @@ const pageImage = computed(() => {
   return page.value?.meta?.image || page.value?.image || null
 })
 
-const currentUrl = computed(() => 'https://learn.example.com' + route.path)
+const currentUrl = computed(() => 'https://learn.itsash.in' + route.path)
 
 const readingTime = computed(() => {
   const body = page.value?.body?.text || ''
@@ -109,7 +114,7 @@ useHead({
             '@type': 'ListItem',
             position: i + 1,
             name: c.label,
-            item: 'https://learn.example.com' + c.to,
+            item: 'https://learn.itsash.in' + c.to,
           })),
         },
       }),
@@ -123,7 +128,7 @@ useHead({
           '@type': 'ListItem',
           position: i + 1,
           name: c.label,
-          item: 'https://learn.example.com' + c.to,
+          item: 'https://learn.itsash.in' + c.to,
         })),
       }),
     },

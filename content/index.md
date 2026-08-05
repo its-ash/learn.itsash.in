@@ -9,7 +9,7 @@ A personal reading space built with **Nuxt Content** in the **Minimalist Monochr
 
 ## What's inside
 
-- The [Index](/index) — searchable list of every page.
+- The [Index](/browse) — searchable list of every page.
 - The [Rust curriculum](/rust) — a comprehensive, idiomatic course from zero to pro.
 
 ## How it works
