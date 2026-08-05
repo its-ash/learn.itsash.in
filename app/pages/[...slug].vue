@@ -2,7 +2,7 @@
 const route = useRoute()
 const router = useRouter()
 
-const { data: page } = await useAsyncData(
+const { data: page, pending } = await useAsyncData(
   () => 'page-' + route.path,
   async () => {
     const found = await queryCollection('content').path(route.path).first()
@@ -23,7 +23,7 @@ const { data: page } = await useAsyncData(
   { watch: [() => route.path] }
 )
 
-if (!page.value) {
+if (!page.value && !pending.value) {
   throw createError({ statusCode: 404, statusMessage: 'Page not found', fatal: true })
 }
 
@@ -174,6 +174,9 @@ definePageMeta({
         </div>
 
         <ContentRenderer v-if="page" :value="page" />
+        <div v-else-if="pending" class="flex items-center justify-center py-24">
+          <span class="code-spinner" style="width: 1.5rem; height: 1.5rem; border-width: 2px;" />
+        </div>
 
         <div class="not-prose mt-16 flex items-center justify-between gap-4 border-t-[2px] border-c-fg pt-6">
           <BackButton label="Go back" />

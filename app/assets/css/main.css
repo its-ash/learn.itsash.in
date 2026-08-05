@@ -233,18 +233,33 @@ html.dark .md-prose pre.shiki {
 
 .md-prose table {
   @apply mb-6 w-full border-2 border-c-fg text-left text-sm;
-}
-
-.md-prose th {
-  @apply border-b-2 border-c-fg px-4 py-3 font-mono text-xs font-medium uppercase tracking-widest text-c-fg whitespace-nowrap;
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
 }
 
 .md-prose thead {
   @apply border-b-2 border-c-fg;
 }
 
+.md-prose th {
+  @apply border-b-2 border-c-fg px-4 py-3 font-mono text-xs font-medium uppercase tracking-widest text-c-fg whitespace-nowrap;
+}
+
 .md-prose td {
-  @apply border-b border-c-border-light px-4 py-3 text-c-fg align-top;
+  @apply border-b border-c-border-light px-4 py-3 text-c-fg align-top whitespace-nowrap;
+}
+
+@media (min-width: 768px) {
+  .md-prose table {
+    display: table;
+    white-space: normal;
+  }
+
+  .md-prose td {
+    white-space: normal;
+  }
 }
 
 .md-prose tbody tr {
