@@ -49,29 +49,64 @@ const resolvedLang = computed(() => {
     return langMap[l] || l || 'plaintext'
 })
 
-function escapeHtml(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+const wrapperRef = ref<HTMLElement | null>(null)
+const isDownloading = ref(false)
+
+async function downloadAsImage() {
+    if (!wrapperRef.value || isDownloading.value) return
+    isDownloading.value = true
+    try {
+        const { default: html2canvas } = await import('html2canvas')
+        const canvas = await html2canvas(wrapperRef.value, { useCORS: true, scale: 3, backgroundColor: null, logging: false,  allowTaint: true })
+        const link = document.createElement('a')
+        link.download = (props.filename || resolvedLang.value || 'code') + '.png'
+        link.href = canvas.toDataURL('image/png')
+        link.click()
+    } catch (e) {
+        console.error('Failed to capture code block:', e)
+    } finally {
+        isDownloading.value = false
+    }
 }
 </script>
 
 <template>
-    <div class="code-wrapper">
-        <div v-if="filename || language" class="code-header">
-            <div class="flex items-center gap-2">
-                <span class="code-dot" />
-                <span class="code-dot" />
-                <span class="code-dot" />
+    <div class="code-wrapper-parent p-4" ref="wrapperRef">
+        <div  class="code-wrapper">
+            <div v-if="filename || language" class="code-header">
+                <div class="flex items-center gap-2">
+                    <span class="code-dot" />
+                    <span class="code-dot" />
+                    <span class="code-dot" />
+                </div>
+                <div class="flex items-center gap-3">
+                    <span v-if="filename" class="code-filename">{{ filename }}</span>
+                    <span v-else-if="language" class="code-lang">{{ resolvedLang }}</span>
+                    <button data-html2canvas-ignore="true" type="button" class="code-download" :disabled="isDownloading"
+                        :title="isDownloading ? 'Generating...' : 'Download as image'" @click="downloadAsImage">
+                        <svg v-if="!isDownloading" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        <span v-else class="code-spinner" />
+                    </button>
+                </div>
             </div>
-            <span v-if="filename" class="code-filename">{{ filename }}</span>
-            <span v-else-if="language" class="code-lang">{{ resolvedLang }}</span>
+            <slot />
         </div>
-        <slot />
     </div>
 </template>
 
 <style scoped>
+.code-wrapper-parent{
+    background: var(--c-bg);
+    border-radius: 0.5rem;
+}
 .code-wrapper {
-    margin-bottom: 1.5rem;
     border: 1px solid var(--c-fg);
     overflow: hidden;
 }
@@ -84,6 +119,8 @@ function escapeHtml(s: string): string {
     border-bottom: 1px solid var(--c-fg);
     background: var(--c-bg);
 }
+
+
 
 .code-dot {
     width: 0.625rem;
@@ -99,6 +136,44 @@ function escapeHtml(s: string): string {
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--c-muted-fg);
+}
+
+.code-download {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--c-fg);
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.1s;
+}
+
+.code-download:hover:not(:disabled) {
+    opacity: 1;
+}
+
+.code-download:disabled {
+    cursor: wait;
+}
+
+.code-spinner {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: 1.5px solid var(--c-fg);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: code-spin 0.6s linear infinite;
+}
+
+@keyframes code-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .code-wrapper :deep(pre) {

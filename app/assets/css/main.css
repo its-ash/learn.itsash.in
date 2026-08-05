@@ -16,7 +16,7 @@
   @apply mb-4 mt-16 text-3xl font-bold tracking-tight text-c-fg sm:text-4xl;
   line-height: 1.1;
   scroll-margin-top: 5rem;
-  border-bottom: 4px solid var(--c-fg);
+  border-bottom: 2px solid var(--c-fg);
   padding-bottom: 0.5rem;
 }
 
@@ -95,6 +95,30 @@
   font-size: 1.2rem;
 }
 
+.md-prose h1 code {
+  font-size: 0.85em;
+}
+
+.md-prose h2 code {
+  font-size: 0.85em;
+}
+
+.md-prose h3 code {
+  font-size: 0.85em;
+}
+
+.md-prose h4 code {
+  font-size: 1em;
+}
+
+.md-prose h5 code {
+  font-size: 1em;
+}
+
+.md-prose h6 code {
+  font-size: 1em;
+}
+
 .md-prose pre {
   @apply mb-6;
 }
@@ -106,6 +130,29 @@
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.6;
+}
+
+.md-prose pre.shiki::-webkit-scrollbar {
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.md-prose pre.shiki::-webkit-scrollbar-track {
+  background: var(--c-bg);
+}
+
+.md-prose pre.shiki::-webkit-scrollbar-thumb {
+  background: var(--c-fg);
+  border-radius: 0.25rem;
+}
+
+.md-prose pre.shiki::-webkit-scrollbar-thumb:hover {
+  background: var(--c-muted-fg);
+}
+
+.md-prose pre.shiki {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-fg) var(--c-bg);
 }
 
 .md-prose .code-wrapper pre.shiki {

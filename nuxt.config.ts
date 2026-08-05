@@ -1,6 +1,6 @@
 import tailwindcssVite from "@tailwindcss/vite";
 import { readdirSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 
 const contentDir = resolve("content");
 const contentRoutes: string[] = [];
@@ -38,20 +38,31 @@ export default defineNuxtConfig({
   app: {
     baseURL: "/",
     buildAssetsDir: "/_nuxt/",
+    pageTransition: true,
+    layoutTransition: true,
+  },
+  experimental: {
+    payloadExtraction: true,
+  },
+  features: {
+    inlineStyles: false,
+  },
+  build: {
+    transpile: [],
+  },
+  css: ["~/assets/css/tailwind.css", "~/assets/css/main.css"],
+  vite: {
+    plugins: [tailwindcssVite()],
+    optimizeDeps: {
+      include: ['html2canvas'],
+    },
+    ssr: {
+      noExternal: ['html2canvas'],
+    },
   },
   nitro: {
     output: {
       publicDir: "docs",
-    },
-    rollupConfig: {
-      onwarn(warning, defaultHandler) {
-        if (
-          warning.code === "UNUSED_EXTERNAL_IMPORT" ||
-          warning.code === "CIRCULAR_DEPENDENCY"
-        )
-          return;
-        defaultHandler(warning);
-      },
     },
     prerender: {
       crawlLinks: true,
@@ -86,13 +97,6 @@ export default defineNuxtConfig({
         },
       },
     },
-  },
-  build: {
-    transpile: [],
-  },
-  css: ["~/assets/css/tailwind.css", "~/assets/css/main.css"],
-  vite: {
-    plugins: [tailwindcssVite()],
   },
   googleFonts: {
     families: {

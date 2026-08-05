@@ -2,22 +2,26 @@
 const route = useRoute()
 const router = useRouter()
 
-const { data: page } = await useAsyncData('page-' + route.path, async () => {
-  const found = await queryCollection('content').path(route.path).first()
-  if (found) return found
+const { data: page } = await useAsyncData(
+  () => 'page-' + route.path,
+  async () => {
+    const found = await queryCollection('content').path(route.path).first()
+    if (found) return found
 
-  const readmePath = route.path.replace(/\/?$/, '/readme')
-  const readme = await queryCollection('content').path(readmePath).first()
-  if (readme) {
-    if (import.meta.server) {
-      throw createError({ statusCode: 307, statusMessage: 'Redirect', data: { location: readmePath } })
+    const readmePath = route.path.replace(/\/?$/, '/readme')
+    const readme = await queryCollection('content').path(readmePath).first()
+    if (readme) {
+      if (import.meta.server) {
+        throw createError({ statusCode: 307, statusMessage: 'Redirect', data: { location: readmePath } })
+      }
+      router.replace(readmePath)
+      return readme
     }
-    router.replace(readmePath)
-    return readme
-  }
 
-  return null
-})
+    return null
+  },
+  { watch: [() => route.path] }
+)
 
 if (!page.value) {
   throw createError({ statusCode: 404, statusMessage: 'Page not found', fatal: true })
@@ -134,6 +138,10 @@ useHead({
     },
   ],
 })
+
+definePageMeta({
+  ssr: true,
+})
 </script>
 
 <template>
@@ -157,7 +165,7 @@ useHead({
         <meta itemprop="author" content="Learn" />
         <meta itemprop="publisher" content="Learn" />
         <meta itemprop="wordCount" :content="wordCount" />
-        <div class="not-prose mb-12 flex items-center justify-between gap-4 border-b-[4px] border-c-fg pb-6">
+        <div class="not-prose mb-12 flex items-center justify-between gap-4 border-b-[2px] border-c-fg pb-6">
           <BackButton label="Back" />
           <span
             class="inline-flex items-center gap-2 border border-c-fg px-3 py-1.5 font-mono text-xs font-medium uppercase tracking-widest text-c-fg">
@@ -167,7 +175,7 @@ useHead({
 
         <ContentRenderer v-if="page" :value="page" />
 
-        <div class="not-prose mt-16 flex items-center justify-between gap-4 border-t-[4px] border-c-fg pt-6">
+        <div class="not-prose mt-16 flex items-center justify-between gap-4 border-t-[2px] border-c-fg pt-6">
           <BackButton label="Go back" />
         </div>
       </article>

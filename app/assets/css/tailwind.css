@@ -50,6 +50,7 @@
     scroll-behavior: smooth;
     background-color: var(--c-bg);
     color: var(--c-fg);
+    overflow-y: scroll;
   }
 
   body {
@@ -81,6 +82,29 @@
   ::selection {
     background-color: var(--c-fg);
     color: var(--c-bg);
+  }
+
+  ::-webkit-scrollbar {
+    width: 0.625rem;
+    height: 0.625rem;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--c-bg);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--c-fg);
+    border-radius: 0.25rem;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--c-muted-fg);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--c-fg) var(--c-bg);
   }
 
   :focus-visible {
