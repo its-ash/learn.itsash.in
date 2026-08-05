@@ -15,14 +15,24 @@ useHead({
   ],
   link: [
     { rel: 'canonical', href: () => 'https://learn.itsash.in' + (route.path || '/') },
-    { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
+    { rel: 'icon', type: 'image/png', href: '/favicon.png' },
     { rel: 'manifest', href: '/site.webmanifest' },
-    { rel: 'apple-touch-icon', href: '/favicon.ico' },
+    { rel: 'apple-touch-icon', href: '/favicon.png' },
     { rel: 'preconnect', href: 'https://fonts.googleapis.com', crossorigin: '' },
     { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
     { rel: 'dns-prefetch', href: 'https://fonts.googleapis.com' },
   ],
   script: [
+    {
+      async: true,
+      src: 'https://www.googletagmanager.com/gtag/js?id=G-J1LB55YZY2',
+    },
+    {
+      innerHTML: `window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-J1LB55YZY2');`,
+    },
     {
       type: 'application/ld+json',
       innerHTML: JSON.stringify({

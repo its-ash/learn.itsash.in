@@ -45,7 +45,7 @@ export default defineNuxtConfig({
     },
     rollupConfig: {
       onwarn(warning, defaultHandler) {
-        if (warning.code === 'UNUSED_EXTERNAL_IMPORT') return
+        if (warning.code === 'UNUSED_EXTERNAL_IMPORT' || warning.code === 'CIRCULAR_DEPENDENCY') return
         defaultHandler(warning)
       },
     },
