@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Source Serif 4", Georgia, serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-c-bg: #ffffff;
+  --color-c-fg: #000000;
+  --color-c-muted: #f5f5f5;
+  --color-c-muted-fg: #525252;
+  --color-c-border: #000000;
+  --color-c-border-light: #e5e5e5;
+}
+
+:root {
+  --c-bg: #ffffff;
+  --c-fg: #000000;
+  --c-muted: #f5f5f5;
+  --c-muted-fg: #525252;
+  --c-border: #000000;
+  --c-border-light: #e5e5e5;
+  --c-texture: #000000;
+}
+
+.dark {
+  --c-bg: #000000;
+  --c-fg: #ffffff;
+  --c-muted: #1a1a1a;
+  --c-muted-fg: #a3a3a3;
+  --c-border: #ffffff;
+  --c-border-light: #2a2a2a;
+  --c-texture: #ffffff;
+}
+
+.warm {
+  --c-bg: #faf6f0;
+  --c-fg: #2b2419;
+  --c-muted: #f0ebe0;
+  --c-muted-fg: #6b5d4f;
+  --c-border: #2b2419;
+  --c-border-light: #d6cfc0;
+  --c-texture: #2b2419;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    background-color: var(--c-bg);
+    color: var(--c-fg);
+  }
+
+  body {
+    background-color: var(--c-bg);
+    color: var(--c-fg);
+    font-family: var(--font-sans);
+    antialiased: true;
+    font-feature-settings: "kern";
+    text-rendering: optimizeLegibility;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 1px,
+      var(--c-texture) 1px,
+      var(--c-texture) 2px
+    );
+    background-size: 100% 4px;
+    opacity: 0.015;
+  }
+
+  ::selection {
+    background-color: var(--c-fg);
+    color: var(--c-bg);
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--c-fg);
+    outline-offset: 3px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@theme {
+  --color-c-bg: var(--c-bg);
+  --color-c-fg: var(--c-fg);
+  --color-c-muted: var(--c-muted);
+  --color-c-muted-fg: var(--c-muted-fg);
+  --color-c-border: var(--c-border);
+  --color-c-border-light: var(--c-border-light);
+}

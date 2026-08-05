@@ -1,0 +1,16 @@
+{
+  "name": "Learn — Minimalist Monochrome",
+  "short_name": "Learn",
+  "description": "Programming guides, Rust curriculum, and technical documentation.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ]
+}

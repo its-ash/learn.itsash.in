@@ -1,0 +1,182 @@
+@reference "./tailwind.css";
+
+.md-prose {
+  @apply text-c-fg;
+}
+
+.md-prose h1 {
+  font-family: var(--font-serif);
+  @apply mb-6 text-5xl font-black tracking-tighter text-c-fg sm:text-6xl md:text-7xl;
+  line-height: 1;
+  scroll-margin-top: 5rem;
+}
+
+.md-prose h2 {
+  font-family: var(--font-serif);
+  @apply mb-4 mt-16 text-3xl font-bold tracking-tight text-c-fg sm:text-4xl;
+  line-height: 1.1;
+  scroll-margin-top: 5rem;
+  border-bottom: 4px solid var(--c-fg);
+  padding-bottom: 0.5rem;
+}
+
+.md-prose h3 {
+  font-family: var(--font-serif);
+  @apply mb-3 mt-12 text-2xl font-semibold tracking-tight text-c-fg;
+  line-height: 1.2;
+  scroll-margin-top: 5rem;
+}
+
+.md-prose h4 {
+  font-family: var(--font-mono);
+  @apply mb-2 mt-8 text-sm font-medium uppercase tracking-widest text-c-fg;
+}
+
+.md-prose p {
+  @apply mb-6 text-base leading-relaxed text-c-fg sm:text-lg;
+  line-height: 1.7;
+}
+
+.md-prose p.has-dropcap:first-of-type::first-letter {
+  font-family: var(--font-serif);
+  font-size: 4rem;
+  font-weight: 900;
+  line-height: 0.8;
+  float: left;
+  margin-right: 0.5rem;
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border: 2px solid var(--c-fg);
+}
+
+.md-prose a {
+  @apply font-medium text-c-fg underline decoration-2 underline-offset-4 transition-opacity duration-100 hover:opacity-60;
+}
+
+.md-prose ul {
+  @apply mb-6 list-none space-y-3 pl-0 text-base text-c-fg sm:text-lg;
+}
+
+.md-prose ol {
+  @apply mb-6 list-none space-y-3 pl-0 text-base text-c-fg sm:text-lg;
+  counter-reset: item;
+}
+
+.md-prose li {
+  @apply relative pl-8 leading-relaxed;
+}
+
+.md-prose ul > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.65em;
+  width: 16px;
+  height: 1px;
+  background: var(--c-fg);
+}
+
+.md-prose ol > li::before {
+  counter-increment: item;
+  content: counter(item, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--c-muted-fg);
+}
+
+.md-prose code {
+  font-family: var(--font-mono);
+  @apply px-1.5 py-0.5 text-[0.85em] font-medium text-c-fg;
+}
+
+.md-prose pre {
+  @apply mb-6;
+}
+
+.md-prose a code {
+  @apply transition-colors duration-100;
+}
+
+.md-prose a:hover code {
+  @apply bg-c-fg text-c-bg;
+}
+
+.md-prose blockquote {
+  @apply mb-8 border-l-4 border-c-fg py-2 pl-6 pr-4 text-xl italic text-c-fg sm:text-2xl;
+  font-family: var(--font-serif);
+}
+
+.md-prose blockquote::before {
+  content: "\201C";
+  font-size: 5rem;
+  line-height: 0;
+  vertical-align: -0.4em;
+  margin-right: 0.25rem;
+  font-weight: 900;
+}
+
+.md-prose hr {
+  @apply my-12 h-1 border-0 bg-c-fg;
+}
+
+.md-prose img {
+  @apply mb-6 border-2 border-c-fg grayscale transition-all duration-300;
+}
+
+.md-prose strong {
+  @apply font-bold text-c-fg;
+}
+
+.md-prose table {
+  @apply mb-6 w-full border-2 border-c-fg text-left text-sm;
+}
+
+.md-prose th {
+  @apply border-b-2 border-c-fg px-4 py-3 font-mono text-xs font-medium uppercase tracking-widest text-c-fg whitespace-nowrap;
+}
+
+.md-prose thead {
+  @apply border-b-2 border-c-fg;
+}
+
+.md-prose td {
+  @apply border-b border-c-border-light px-4 py-3 text-c-fg align-top;
+}
+
+.md-prose tbody tr {
+  @apply transition-colors duration-100;
+}
+
+.md-prose tbody tr:hover {
+  @apply bg-c-fg;
+}
+
+.md-prose tbody tr:hover td {
+  @apply text-c-bg;
+}
+
+.md-prose tbody tr:hover a {
+  @apply text-c-bg;
+}
+
+.md-prose tbody tr:hover code {
+  @apply border-c-bg text-c-bg;
+}
+
+.md-prose tbody tr:last-child {
+  @apply border-0;
+}
+
+.md-prose tbody tr:last-child td {
+  @apply border-0;
+}
+
+.md-prose input,
+.md-prose textarea {
+  @apply h-12 w-full border-b-2 border-c-fg bg-transparent px-0 text-base text-c-fg transition-all duration-100 placeholder:italic placeholder:text-c-muted-fg focus:border-b-[4px] focus:outline-none;
+}
