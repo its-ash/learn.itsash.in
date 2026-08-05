@@ -169,7 +169,6 @@ useHead({
 
         <div class="not-prose mt-16 flex items-center justify-between gap-4 border-t-[4px] border-c-fg pt-6">
           <BackButton label="Go back" />
-          
         </div>
       </article>
     </div>
