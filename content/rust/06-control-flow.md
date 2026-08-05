@@ -2,6 +2,7 @@
 
 ## `if` Expressions
 
+::code-wrapper{language="rust"}
 ```rust
 let n = 5;
 if n > 0 {
@@ -14,21 +15,25 @@ if n > 0 {
 
 let sign = if n > 0 { 1 } else { -1 };   // if is an expression
 ```
+::
 
 - Branches must return the **same type** (or `!`).
 - The condition must be a `bool` — no truthy integers, no `if x { }` where `x` is `i32`.
 - `if let` combines pattern match + branch.
 
+::code-wrapper{language="rust"}
 ```rust
 if let Some(v) = opt {
     println!("{v}");
 }
 ```
+::
 
 ## `loop`
 
 Infinite loop until `break`. `break` can return a value:
 
+::code-wrapper{language="rust"}
 ```rust
 let mut i = 0;
 let result = loop {
@@ -36,9 +41,11 @@ let result = loop {
     i += 1;
 };
 ```
+::
 
 ### Labeled Loops
 
+::code-wrapper{language="rust"}
 ```rust
 'outer: for i in 0..3 {
     for j in 0..3 {
@@ -48,11 +55,13 @@ let result = loop {
     }
 }
 ```
+::
 
 Labels start with `'`. `break 'label` and `continue 'label` control the outer loop.
 
 ## `while`
 
+::code-wrapper{language="rust"}
 ```rust
 let mut n = 5;
 while n > 0 {
@@ -63,11 +72,13 @@ while let Some(x) = stack.pop() {
     println!("{x}");
 }
 ```
+::
 
 `while let` repeatedly matches; exits when pattern fails.
 
 ## `for` (Iterator Based)
 
+::code-wrapper{language="rust"}
 ```rust
 for i in 0..5 { print!("{i} "); }        // 0 1 2 3 4
 for i in 0..=5 { print!("{i} "); }       // inclusive 0..5
@@ -75,6 +86,7 @@ for c in "abc".chars() { print!("{c}"); }
 for b in &[1, 2, 3] { print!("{b} "); }   // borrows
 for v in vec![1, 2, 3] { print!("{v} "); } // consumes
 ```
+::
 
 `for` consumes an `IntoIterator`. Arrays implement `IntoIterator` (by value) since edition 2021.
 
@@ -82,6 +94,7 @@ for v in vec![1, 2, 3] { print!("{v} "); } // consumes
 
 Exhaustive pattern matching. Powerful and central to Rust:
 
+::code-wrapper{language="rust"}
 ```rust
 match x {
     0 => "zero",
@@ -91,6 +104,7 @@ match x {
     _ => "huge",
 };
 ```
+::
 
 - Must be exhaustive; `_` is the wildcard.
 - Arms evaluate to a single common type.
@@ -102,17 +116,20 @@ match x {
 
 ### Binding Modes (2021 edition)
 
+::code-wrapper{language="rust"}
 ```rust
 match &opt {
     Some(x) => println!("{x}"),   // x: &i32 — auto-ref
     None => {}
 }
 ```
+::
 
 The 2021 edition "default binding modes" let you avoid writing `&` everywhere; the compiler inserts references as needed. This can be subtle — see the Patterns chapter.
 
 ## `match` on References
 
+::code-wrapper{language="rust"}
 ```rust
 match &s {
     &"yes" => 1,
@@ -124,9 +141,11 @@ match s.as_str() {
     _ => 0,
 }
 ```
+::
 
 ## Destructuring in `match`
 
+::code-wrapper{language="rust"}
 ```rust
 enum Shape { Circle(f64), Square(f64), Rect(f64, f64) }
 match shape {
@@ -136,6 +155,7 @@ match shape {
     Shape::Rect(a, b) => a * b,
 }
 ```
+::
 
 ## Returning from `match` vs `break`
 
@@ -143,12 +163,14 @@ match shape {
 
 ## `?` Operator (Error Propagation)
 
+::code-wrapper{language="rust"}
 ```rust
 fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
     let n: i32 = s.parse()?;
     Ok(n * 2)
 }
 ```
+::
 
 `?` returns early from the function on `Err` (or `None` with `Option`). Works on anything implementing `Try` (stabilized for `Option`/`Result`). See Error Handling chapter.
 
@@ -167,9 +189,11 @@ fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
 
 ## `if let` chains (unstable) / `let-else`
 
+::code-wrapper{language="rust"}
 ```rust
 let Some(x) = opt else { return; };
 ```
+::
 
 `let-else` is the idiomatic early-return form. For multiple conditions, use nested `let-else` or a `match`.
 

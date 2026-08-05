@@ -4,23 +4,30 @@ Rust's error handling is a defining strength. There's no exceptions, no `null`. 
 
 ## `Option<T>` — Absence
 
+::code-wrapper{language="rust"}
 ```rust
 enum Option<T> { Some(T), None }
 ```
+::
 
 Use when a value is logically absent. The compiler forces you to handle `None`:
 
+::code-wrapper{language="rust"}
 ```rust
 let v: Option<i32> = Some(5);
 let s = match v { Some(x) => x.to_string(), None => String::from("none") };
 ```
+::
 
 ## `Result<T, E>` — Recoverable Errors
 
+::code-wrapper{language="rust"}
 ```rust
 enum Result<T, E> { Ok(T), Err(E) }
 ```
+::
 
+::code-wrapper{language="rust"}
 ```rust
 fn parse(s: &str) -> Result<i32, std::num::ParseIntError> {
     s.parse()
@@ -30,36 +37,43 @@ match parse("42") {
     Err(e) => println!("err: {e}"),
 }
 ```
+::
 
 ## The `?` Operator
 
 Short-circuits on error, propagating `Err`:
 
+::code-wrapper{language="rust"}
 ```rust
 fn parse_and_double(s: &str) -> Result<i32, std::num::ParseIntError> {
     let n: i32 = s.parse()?;     // returns Err on failure
     Ok(n * 2)
 }
 ```
+::
 
 `?` desugars roughly to:
 
+::code-wrapper{language="rust"}
 ```rust
 match expr {
     Ok(v) => v,
     Err(e) => return Err(e.into()),
 }
 ```
+::
 
 It uses `From` to convert errors, so you can mix error types if they implement `From`.
 
 ### `?` on `Option`
 
+::code-wrapper{language="rust"}
 ```rust
 fn first_char(s: &str) -> Option<char> {
     s.chars().next()?
 }
 ```
+::
 
 Returns `None` if the inner is `None`.
 
@@ -67,6 +81,7 @@ Returns `None` if the inner is `None`.
 
 Since Rust 1.56, `main` can return `Result`:
 
+::code-wrapper{language="rust"}
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n: i32 = std::env::args().nth(1).unwrap().parse()?;
@@ -74,11 +89,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+::
 
 If `main` returns `Err`, the program exits with code 1 and prints the error.
 
 ## Recovering Values
 
+::code-wrapper{language="rust"}
 ```rust
 let v = opt.unwrap();          // panics on None
 let v = opt.expect("msg");      // panics with custom msg
@@ -92,16 +109,19 @@ let v = opt.or_else(|| Some(0));
 let v = opt.get_or_insert(0);
 let v = opt.take();             // leaves None in opt
 ```
+::
 
 Same combinator suite exists for `Result` (with `map_err`, `map`, `and_then`, etc.).
 
 ## The `std::error::Error` Trait
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Error: Debug + Display {
     fn source(&self) -> Option<&(dyn Error + 'static)> { None }
 }
 ```
+::
 
 A type implementing `Error` can be used with `Result<_, MyError>`, chained with `?` (via `From`), and printed with `{:?}`/`{}`. The `source` method gives an error chain.
 
@@ -109,6 +129,7 @@ A type implementing `Error` can be used with `Result<_, MyError>`, chained with 
 
 ### The Manual Way
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug)]
 enum AppError {
@@ -140,9 +161,11 @@ impl std::error::Error for AppError {
 impl From<std::io::Error> for AppError { fn from(e: std::io::Error) -> Self { AppError::Io(e) } }
 impl From<std::num::ParseIntError> for AppError { fn from(e: std::num::ParseIntError) -> Self { AppError::Parse(e) } }
 ```
+::
 
 ### The `thiserror` Crate (idiomatic)
 
+::code-wrapper{language="rust"}
 ```rust
 use thiserror::Error;
 
@@ -156,11 +179,13 @@ enum AppError {
     Custom(String),
 }
 ```
+::
 
 `#[from]` generates the `From` impl. `#[error]` generates `Display`. Use `thiserror` for libraries.
 
 ### The `anyhow` Crate (applications)
 
+::code-wrapper{language="rust"}
 ```rust
 use anyhow::{Context, Result};
 
@@ -169,11 +194,13 @@ fn read_config(path: &str) -> Result<Config> {
     Ok(parse(&s)?)
 }
 ```
+::
 
 `anyhow::Error` is a boxed trait object with backtraces and context. Perfect for application code where you just want errors to bubble up with context.
 
 ## `panic!` — Unrecoverable
 
+::code-wrapper{language="rust"}
 ```rust
 panic!("cannot continue");
 unreachable!("documented unreachable");
@@ -184,6 +211,7 @@ assert_eq!(a, b);
 assert_ne!(a, b);
 debug_assert!(x > 0);   // only in debug builds
 ```
+::
 
 `panic!` is for invariants: "this state should never happen." It unwinds the stack (calling destructors) unless `panic = "abort"` is set in the profile.
 
@@ -203,6 +231,7 @@ Catch a panic with `std::panic::catch_unwind` (rare; mostly for FFI).
 
 ## `Option` and `Result` Conversion
 
+::code-wrapper{language="rust"}
 ```rust
 opt.ok_or(ErrorKind::Missing)?;
 res.ok()?;                    // discards Err, returns None on Err
@@ -210,9 +239,11 @@ res.err()?;                   // discards Ok
 res.ok().filter(|x| *x > 0);
 opt.ok_or_else(|| ErrorKind::Missing)?;
 ```
+::
 
 ## `Result` Combinators
 
+::code-wrapper{language="rust"}
 ```rust
 let r: Result<i32, E> = Ok(5);
 r.map(|x| x + 1);
@@ -231,9 +262,11 @@ r.as_ref();
 r.as_mut();
 r.transpose();    // Option<Result<T, E>> -> Result<Option<T>, E>
 ```
+::
 
 ## Multiple Errors
 
+::code-wrapper{language="rust"}
 ```rust
 fn parse_two(s1: &str, s2: &str) -> Result<(i32, i32), ParseIntError> {
     let a: i32 = s1.parse()?;
@@ -241,6 +274,7 @@ fn parse_two(s1: &str, s2: &str) -> Result<(i32, i32), ParseIntError> {
     Ok((a, b))
 }
 ```
+::
 
 For independent errors you want to accumulate (not short-circuit), use `itertools::process_results` or roll your own.
 
@@ -250,6 +284,7 @@ Use `Result<T, MyErrorEnum>` and a custom error enum (see `thiserror` above).
 
 ## `Box<dyn Error>` as Catchall
 
+::code-wrapper{language="rust"}
 ```rust
 fn foo() -> Result<i32, Box<dyn std::error::Error>> {
     let n: i32 = "x".parse()?;     // works for any Error type
@@ -257,20 +292,25 @@ fn foo() -> Result<i32, Box<dyn std::error::Error>> {
     Ok(n)
 }
 ```
+::
 
 `Box<dyn Error>` accepts any error via `?`. Loses static type info; ok for prototypes.
 
 ## Error Chaining
 
+::code-wrapper{language="rust"}
 ```rust
 return Err(MyError::New).context("while processing X"));
 ```
+::
 
 `anyhow`'s `Context` trait adds messages:
 
+::code-wrapper{language="rust"}
 ```rust
 std::fs::read_to_string(path).context("read config")?;
 ```
+::
 
 The error chain shows: "read config" → original `io::Error`.
 

@@ -2,17 +2,21 @@
 
 ## The Minimal Program
 
+::code-wrapper{language="rust"}
 ```rust
 // src/main.rs
 fn main() {
     println!("Hello, world!");
 }
 ```
+::
 Compile and run directly with `rustc`:
 
+::code-wrapper{language="bash"}
 ```bash
 rustc src/main.rs && ./main      # produces ./main (or main.exe)
 ```
+::
 
 `rustc` is the compiler. In practice you use `cargo` instead, but understanding `rustc` helps you read compiler errors.
 
@@ -20,6 +24,7 @@ rustc src/main.rs && ./main      # produces ./main (or main.exe)
 
 `println!` ends with `!` because it's a **macro**. It can't be a function because it validates format strings at compile time and takes a variadic number of arguments.
 
+::code-wrapper{language="rust"}
 ```rust
 let name = "Ada";
 let age = 36;
@@ -35,6 +40,7 @@ println!("{:e}", 12345.678f64);          // scientific
 println!("{:#?}", some_struct);          // pretty-print debug
 println!("{:>10.2}", 3.14159);           // width 10, 2 decimals
 ```
+::
 
 ### Format Trait Hierarchy
 
@@ -42,34 +48,41 @@ println!("{:>10.2}", 3.14159);           // width 10, 2 decimals
 
 ## Anatomy of `main`
 
+::code-wrapper{language="rust"}
 ```rust
 fn main() {
     // program entry point
 }
 ```
+::
 
 - `main` never takes arguments and never returns a value (returns unit `()`).
 - To exit with a code, use `std::process::exit(code)` (skips destructors!) or return from `main`:
 
+::code-wrapper{language="rust"}
 ```rust
 fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 ```
+::
 
 (Stable `ExitCode` and `Termination` trait are available since 1.61.)
 
 ## Cargo: `new` vs `init`
 
+::code-wrapper{language="bash"}
 ```bash
 cargo new my_app          # creates new directory with a binary project
 cargo new my_lib --lib    # library project (lib.rs, no main)
 cargo init                # scaffolds in the current directory (existing git repo preserved)
 cargo init --name custom_name
 ```
+::
 
 ## `Cargo.toml` Anatomy
 
+::code-wrapper{language="toml"}
 ```toml
 [package]
 name = "my_app"
@@ -100,6 +113,7 @@ path = "src/main.rs"
 default = ["json"]
 json = ["serde"]
 ```
+::
 
 ### Version Requirement Syntax
 
@@ -111,6 +125,7 @@ json = ["serde"]
 
 ## Dependency Sources
 
+::code-wrapper{language="toml"}
 ```toml
 [dependencies]
 # crates.io
@@ -127,15 +142,18 @@ my_local = { path = "../my_local" }
 # optional dependency behind a feature
 extra = { version = "1.0", optional = true }
 ```
+::
 
 ## Features
 
 Features enable **conditional compilation**. Avoid exposing features of dependencies (this causes "feature unification" surprises). Use direct deps + optional features instead.
 
+::code-wrapper{language="rust"}
 ```rust
 #[cfg(feature = "json")]
 mod json;
 ```
+::
 
 ## `Cargo.lock`
 
@@ -147,6 +165,7 @@ mod json;
 
 When multiple crates share a workspace, dependency versions unify and `target/` is shared:
 
+::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml (workspace root)
 [workspace]
@@ -155,6 +174,7 @@ members = ["crates/*", "app"]
 [workspace.dependencies]
 serde = "1.0"
 ```
+::
 
 Members then reference with `serde.workspace = true`.
 

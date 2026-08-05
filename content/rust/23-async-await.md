@@ -4,30 +4,36 @@ Async lets you write concurrent code that looks sequential. Rust's async is **ze
 
 ## Async Functions
 
+::code-wrapper{language="rust"}
 ```rust
 async fn fetch(url: &str) -> String {
     // ... await something ...
     String::from("data")
 }
 ```
+::
 
 Calling `fetch(...)` returns a **future**, not a value. The body doesn't run until the future is polled.
 
 ## `await`
 
+::code-wrapper{language="rust"}
 ```rust
 let s = fetch("https://x").await;
 ```
+::
 
 `.await` yields control to the executor if the future is pending. The current task is suspended and later resumed.
 
 ## Async Is Lazy
 
+::code-wrapper{language="rust"}
 ```rust
 let f = async { println!("hi"); };
 // nothing happens yet
 f.await;   // body runs now
 ```
+::
 
 You must `.await` (or `spawn`) a future for it to make progress.
 
@@ -39,17 +45,20 @@ Rust ships **no built-in async runtime** — you choose one:
 - `smol`: small, simple.
 - `embassy`: embedded (`no_std`).
 
+::code-wrapper{language="rust"}
 ```rust
 #[tokio::main]
 async fn main() {
     println!("hello from tokio");
 }
 ```
+::
 
 `tokio::main` builds a runtime and runs your async `main`.
 
 ## Spawning Tasks
 
+::code-wrapper{language="rust"}
 ```rust
 #[tokio::main]
 async fn main() {
@@ -60,6 +69,7 @@ async fn main() {
     println!("{n}");
 }
 ```
+::
 
 - `tokio::spawn` returns a `JoinHandle<T>`.
 - Spawned tasks must be `Send + 'static`.
@@ -67,6 +77,7 @@ async fn main() {
 
 ## Futures
 
+::code-wrapper{language="rust"}
 ```rust
 trait Future {
     type Output;
@@ -75,6 +86,7 @@ trait Future {
 
 enum Poll<T> { Ready(T), Pending }
 ```
+::
 
 You rarely implement `Future` manually. Async functions desugar to anonymous `Future`-implementing state machines.
 
@@ -82,10 +94,12 @@ You rarely implement `Future` manually. Async functions desugar to anonymous `Fu
 
 `Pin` guarantees a value won't be moved in memory. Required because self-referential futures (which reference their own stack across `.await`) would break if moved.
 
+::code-wrapper{language="rust"}
 ```rust
 let mut fut = async { 5 };
 let pinned: Pin<&mut _> = Pin::new(&mut fut);
 ```
+::
 
 You mostly encounter `Pin` in trait signatures and APIs (e.g., `Future::poll`). The `pin-utils` or `Box::pin` handle the common cases.
 
@@ -93,21 +107,25 @@ You mostly encounter `Pin` in trait signatures and APIs (e.g., `Future::poll`). 
 
 Because futures have unique unnameable types, storing them in collections or returning them generically requires boxing:
 
+::code-wrapper{language="rust"}
 ```rust
 fn make_fut() -> Pin<Box<dyn Future<Output = i32> + Send>> {
     Box::pin(async { 5 })
 }
 ```
+::
 
 `Pin<Box<dyn Future>>` is the trait-object form of a future.
 
 ## `impl Future`
 
+::code-wrapper{language="rust"}
 ```rust
 fn make_fut() -> impl Future<Output = i32> {
     async { 5 }
 }
 ```
+::
 
 Returns a concrete future type, hidden. Single type per return site.
 
@@ -123,6 +141,7 @@ Returns a concrete future type, hidden. Single type per return site.
 
 ## Async IO
 
+::code-wrapper{language="rust"}
 ```rust
 use tokio::fs;
 #[tokio::main]
@@ -132,6 +151,7 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 ```
+::
 
 Async `read`/`write` yield when the syscall would block. The runtime parks the task and wakes it when the OS signals readiness.
 
@@ -139,17 +159,20 @@ Async `read`/`write` yield when the syscall would block. The runtime parks the t
 
 Race multiple futures, take the first to complete:
 
+::code-wrapper{language="rust"}
 ```rust
 tokio::select! {
     v = first_future() => println!("first: {v}"),
     _ = tokio::time::sleep(Duration::from_secs(1)) => println!("timeout"),
 }
 ```
+::
 
 Unselected branches are dropped. Use `biased` for ordering, or branch with `&mut` futures to reuse them.
 
 ## Streams (Async Iterators)
 
+::code-wrapper{language="rust"}
 ```rust
 use futures::stream::{self, StreamExt};
 
@@ -158,6 +181,7 @@ while let Some(v) = s.next().await {
     println!("{v}");
 }
 ```
+::
 
 `StreamExt::next().await` is the async equivalent of `Iterator::next()`. `try_stream`/`tokio_stream` for building streams.
 
@@ -165,6 +189,7 @@ while let Some(v) = s.next().await {
 
 `tokio::sync::mpsc`, `tokio::sync::broadcast`, `tokio::sync::oneshot`, `tokio::sync::watch`:
 
+::code-wrapper{language="rust"}
 ```rust
 let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 tokio::spawn(async move {
@@ -172,6 +197,7 @@ tokio::spawn(async move {
 });
 let v = rx.recv().await;
 ```
+::
 
 Async channels `.await` on send/recv instead of blocking.
 
@@ -179,16 +205,19 @@ Async channels `.await` on send/recv instead of blocking.
 
 For CPU-bound work or blocking syscalls inside async code:
 
+::code-wrapper{language="rust"}
 ```rust
 let v = tokio::task::spawn_blocking(|| {
     cpu_heavy_computation()
 }).await.unwrap();
 ```
+::
 
 Offloads work to a separate thread pool so the async executor isn't blocked.
 
 ## Holding Locks Across `.await` — Pitfall
 
+::code-wrapper{language="rust"}
 ```rust
 // BAD: holding std Mutex across await can deadlock / block executor
 let guard = std_mutex.lock().unwrap();
@@ -204,6 +233,7 @@ some_async(val).await;
 let guard = tokio_mutex.lock().await;
 some_async().await;
 ```
+::
 
 `std::sync::Mutex` is fine *within* an async function if released before `.await`. For locks held across `.await`, use `tokio::sync::Mutex`.
 
@@ -217,11 +247,13 @@ Use bounded channels (`mpsc::channel(n)`). `.send().await` blocks when full, nat
 
 ## Async Traits (1.75+)
 
+::code-wrapper{language="rust"}
 ```rust
 trait Service {
     async fn call(&self, req: Request) -> Response;
 }
 ```
+::
 
 Native async traits stabilized in 1.75 with limitations (no `dyn` dispatch without `#[async_trait]` crate, no recursion in some cases). For full features including `dyn`, use the `async-trait` crate.
 
@@ -229,22 +261,27 @@ Native async traits stabilized in 1.75 with limitations (no `dyn` dispatch witho
 
 ### Concurrency with `join!`
 
+::code-wrapper{language="rust"}
 ```rust
 let (a, b, c) = tokio::join!(fa(), fb(), fc());
 ```
+::
 
 Runs all three concurrently, waits for all, returns a tuple.
 
 ### Concurrency with `try_join!`
 
+::code-wrapper{language="rust"}
 ```rust
 let (a, b) = tokio::try_join!(fa(), fb())?;
 ```
+::
 
 Like `join!` but short-circuits on `Err`.
 
 ### `FuturesUnordered`
 
+::code-wrapper{language="rust"}
 ```rust
 use futures::stream::FuturesUnordered;
 let mut futs = FuturesUnordered::new();
@@ -252,6 +289,7 @@ futs.push(fa());
 futs.push(fb());
 while let Some(r) = futs.next().await { /* ... */ }
 ```
+::
 
 Spawn N futures, await results as they complete (unordered).
 

@@ -4,6 +4,7 @@ Cargo features are the standard mechanism for conditional compilation. Combined 
 
 ## Defining Features
 
+::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml
 [features]
@@ -13,6 +14,7 @@ csv = ["dep:csv"]
 full = ["json", "csv", "yaml"]
 yaml = []
 ```
+::
 
 ### Feature Syntax (1.60+)
 
@@ -22,15 +24,18 @@ yaml = []
 
 ### Optional Dependencies
 
+::code-wrapper{language="toml"}
 ```toml
 [dependencies]
 serde_json = { version = "1.0", optional = true }
 ```
+::
 
 Optional deps implicitly create a feature of the same name (unless `dep:` is used).
 
 ## Using Features
 
+::code-wrapper{language="rust"}
 ```rust
 #[cfg(feature = "json")]
 mod json;
@@ -38,12 +43,15 @@ mod json;
 #[cfg(feature = "json")]
 pub use json::parse_json;
 ```
+::
 
+::code-wrapper{language="bash"}
 ```bash
 cargo build --no-default-features
 cargo build --features json,yaml
 cargo build --all-features
 ```
+::
 
 ## Feature Unification
 
@@ -66,6 +74,7 @@ Features should be strictly additive: enabling a feature adds capabilities, neve
 
 ## Build Profiles
 
+::code-wrapper{language="toml"}
 ```toml
 [profile.dev]
 opt-level = 0
@@ -93,16 +102,19 @@ debug = true
 inherits = "release"
 lto = "thin"
 ```
+::
 
 ### `inherits`
 
 Custom profiles can inherit from existing ones:
 
+::code-wrapper{language="toml"}
 ```toml
 [profile.profiling]
 inherits = "release"
 debug = true
 ```
+::
 
 Build with `cargo build --profile profiling`. Output goes to `target/profiling`.
 
@@ -115,6 +127,7 @@ Build with `cargo build --profile profiling`. Output goes to `target/profiling`.
 
 ## Build Scripts (`build.rs`)
 
+::code-wrapper{language="rust"}
 ```rust
 // build.rs
 fn main() {
@@ -124,6 +137,7 @@ fn main() {
     println!("cargo:rustc-link-search=vendor/lib");
 }
 ```
+::
 
 Use for:
 - Compiling C code (`cc` crate).
@@ -137,10 +151,12 @@ Use `env!("VAR")` or `option_env!("VAR")` in code to read build-time env vars.
 
 ## `links` Key
 
+::code-wrapper{language="toml"}
 ```toml
 [links]
 foo = "1.0"
 ```
+::
 
 `links` declares that the crate links to a native library named `foo`. Prevents two crates from both linking to `foo` with conflicting build scripts.
 
@@ -183,11 +199,13 @@ foo = "1.0"
 
 ### Publishing
 
+::code-wrapper{language="bash"}
 ```bash
 cargo login <token>
 cargo publish --dry-run
 cargo publish
 ```
+::
 
 - Crates.io is the public registry.
 - `publish = false` to prevent accidental publication.
@@ -199,6 +217,7 @@ Use `cargo release`, `git-cliff`, or `changesets` to generate from commits/PRs. 
 
 ## CI (GitHub Actions)
 
+::code-wrapper{language="yaml"}
 ```yaml
 name: CI
 on: [push, pull_request]
@@ -218,22 +237,27 @@ jobs:
       - run: cargo test --all-features
       - run: cargo doc --no-deps
 ```
+::
 
 Add `cargo-deny`, `cargo-audit` for security. Use `cargo nextest run` for faster test execution.
 
 ## Cross-Compilation
 
+::code-wrapper{language="bash"}
 ```bash
 rustup target add x86_64-unknown-linux-musl
 cargo build --target x86_64-unknown-linux-musl
 ```
+::
 
 For cross-platform, `cross` (Docker-based) is the easiest:
 
+::code-wrapper{language="bash"}
 ```bash
 cargo install cross
 cross build --target aarch64-unknown-linux-gnu
 ```
+::
 
 `cargo-zigbuild` uses Zig as a cross-linker (good for musl and Windows targets from Linux).
 
@@ -249,18 +273,22 @@ For multi-crate workspaces, `cargo release` handles inter-crate version bumps an
 
 ## MSRV
 
+::code-wrapper{language="toml"}
 ```toml
 [package]
 rust-version = "1.75"
 ```
+::
 
 CI must test with that version:
 
+::code-wrapper{language="yaml"}
 ```yaml
 - run: rustup install 1.75
 - run: rustup override set 1.75
 - run: cargo build
 ```
+::
 
 ## Edge Cases
 

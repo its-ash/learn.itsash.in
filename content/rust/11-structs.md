@@ -4,6 +4,7 @@ Structs group related data. Rust structs come in three flavors.
 
 ## Named-Field Structs
 
+::code-wrapper{language="rust"}
 ```rust
 struct User {
     username: String,
@@ -19,22 +20,27 @@ let u = User {
     active: true,
 };
 ```
+::
 
 ### Field-Init Shorthand
 
+::code-wrapper{language="rust"}
 ```rust
 fn new(email: String, username: String) -> User {
     User { email, username, active: true, sign_in_count: 0 }
 }
 ```
+::
 
 When a variable name matches the field, omit `: value`.
 
 ### Struct Update Syntax
 
+::code-wrapper{language="rust"}
 ```rust
 let u2 = User { email: String::from("ada2@x.com"), ..u };
 ```
+::
 
 - `..u` copies/moves the remaining fields from `u`.
 - Like a partial move — `u.username` is now invalid if `String` was moved (non-`Copy`).
@@ -42,11 +48,13 @@ let u2 = User { email: String::from("ada2@x.com"), ..u };
 
 ## Tuple Structs
 
+::code-wrapper{language="rust"}
 ```rust
 struct Color(i32, i32, i32);
 let c = Color(255, 128, 0);
 let r = c.0;
 ```
+::
 
 - Look like tuples but are distinct types.
 - Useful for newtype pattern: `struct Meters(f64);` prevents mixing with other `f64`.
@@ -54,15 +62,18 @@ let r = c.0;
 
 ## Unit Structs
 
+::code-wrapper{language="rust"}
 ```rust
 struct AlwaysEqual;
 let _a = AlwaysEqual;
 ```
+::
 
 Zero-sized; useful for trait implementations with no data (e.g., marker traits, type-state).
 
 ## `impl` Blocks
 
+::code-wrapper{language="rust"}
 ```rust
 impl User {
     fn new(email: String, username: String) -> Self {
@@ -73,6 +84,7 @@ impl User {
     fn deactivate(self) -> User { User { active: false, ..self } }
 }
 ```
+::
 
 You can split `impl` across multiple blocks (common in real codebases: one for methods, one for trait impls).
 
@@ -84,13 +96,16 @@ You can split `impl` across multiple blocks (common in real codebases: one for m
 
 ## Lifetime on Structs (recap)
 
+::code-wrapper{language="rust"}
 ```rust
 struct Excerpt<'a> { part: &'a str }
 impl<'a> Excerpt<'a> { fn part(&self) -> &'a str { self.part } }
 ```
+::
 
 ## Generic Structs
 
+::code-wrapper{language="rust"}
 ```rust
 struct Point<T> { x: T, y: T }
 
@@ -104,26 +119,31 @@ impl Point<f64> {            // specialized impl for f64
     }
 }
 ```
+::
 
 Type params can be specialized: methods exist only for a specific `T`.
 
 ## Constants in Structs
 
+::code-wrapper{language="rust"}
 ```rust
 struct Grid<const W: usize, const H: usize> {
     cells: [[u8; W]; H],
 }
 let g: Grid<10, 20> = Grid { cells: [[0; 10]; 20] };
 ```
+::
 
 Const generics (1.51+) allow parametrizing by compile-time constants. Limited to integers/bool/char for now (full generic constants are unstable).
 
 ## Derive Macros
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Pos { x: i32, y: i32 }
 ```
+::
 
 Common derives:
 - `Debug` → `{:?}`
@@ -137,11 +157,13 @@ Common derives:
 
 ## `Default`
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Default)]
 struct Config { host: String, port: u16 }
 let c = Config { host: "localhost".into(), ..Default::default() };
 ```
+::
 
 Idiomatic way to provide "default with overrides".
 
@@ -150,6 +172,7 @@ Idiomatic way to provide "default with overrides".
 - `Debug` is derived, machine-readable-ish (`{:?}` / pretty `{:#?}`).
 - `Display` is user-facing; you must write it manually.
 
+::code-wrapper{language="rust"}
 ```rust
 impl std::fmt::Display for User {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -157,14 +180,17 @@ impl std::fmt::Display for User {
     }
 }
 ```
+::
 
 ## Struct Updates and Moves
 
+::code-wrapper{language="rust"}
 ```rust
 let u = User { /* filled */ };
 let email = u.email;             // partial move
 // u is partially moved; can still read other fields, but not u as a whole
 ```
+::
 
 Reconstruct with `..` if needed.
 

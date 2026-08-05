@@ -6,6 +6,7 @@ A checklist of mistakes every Rust developer makes — and the idiomatic fix for
 
 ### Symptom: "cannot borrow as mutable because it is also borrowed as immutable"
 
+::code-wrapper{language="rust"}
 ```rust
 // Bad
 let mut v = vec![1, 2, 3];
@@ -26,18 +27,22 @@ v.push(4);
 let r = v[0].clone();
 v.push(4);
 ```
+::
 
 ### Symptom: "cannot borrow as mutable, as it is not declared as mut"
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("hi");
 let r = &mut s;     // ERROR
 ```
+::
 
 Fix: `let mut s = String::from("hi");`.
 
 ### Symptom: "borrowed value does not live long enough"
 
+::code-wrapper{language="rust"}
 ```rust
 // Bad
 fn bad() -> &str { let s = String::from("hi"); &s }
@@ -45,6 +50,7 @@ fn bad() -> &str { let s = String::from("hi"); &s }
 // Fix: return owned
 fn good() -> String { String::from("hi") }
 ```
+::
 
 Returning a reference to a local is impossible. Return owned, or accept the data as input.
 
@@ -56,17 +62,20 @@ Same as above. Return owned, or restructure so the data lives outside the functi
 
 ### Symptom: closure captures too much
 
+::code-wrapper{language="rust"}
 ```rust
 let v = vec![1, 2, 3];
 let n = 5;
 let f = move || { println!("{n}"); };   // moves n, doesn't need v
 // v still owned — but if closure captured v, v would be gone
 ```
+::
 
 Edition 2021 captures only used variables, but `move` still moves all of them.
 
 ### Symptom: lifetime issues with thread closure
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("hi");
 std::thread::spawn(|| println!("{s}"));    // ERROR: 'static required
@@ -74,11 +83,13 @@ std::thread::spawn(|| println!("{s}"));    // ERROR: 'static required
 std::thread::spawn(move || println!("{s}"));
 // or clone
 ```
+::
 
 ## 3. `clone()` Everywhere
 
 Cloning is fine when necessary but often signals a design issue:
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 fn process(s: String) { /* ... */ }
@@ -91,11 +102,13 @@ fn process(s: &str) { /* ... */ }
 process(&s);
 process(&s);
 ```
+::
 
 Borrow by `&str`/`&[T]`/`&Path` when you don't need ownership.
 
 ## 4. `unwrap()`/`expect()` in Production
 
+::code-wrapper{language="rust"}
 ```rust
 // Bad
 fn parse(s: &str) -> i32 { s.parse().unwrap() }
@@ -105,11 +118,13 @@ fn parse(s: &str) -> Result<i32, ParseIntError> { s.parse() }
 // or
 fn parse_or_default(s: &str) -> i32 { s.parse().unwrap_or(0) }
 ```
+::
 
 `unwrap` panics on `None`/`Err`. Use `?`, `unwrap_or`, `unwrap_or_default`, or explicit match.
 
 ## 5. Treating `Result` Like Exceptions
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 fn process() {
@@ -125,11 +140,13 @@ fn process() -> Result<(), AppError> {
     Ok(())
 }
 ```
+::
 
 Propagate with `?`. Don't `unwrap` in non-test paths.
 
 ## 6. Mutable Global State
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 static mut COUNTER: u32 = 0;
@@ -140,11 +157,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 fn incr() { COUNTER.fetch_add(1, Ordering::Relaxed); }
 ```
+::
 
 Atomics or `Arc<Mutex<T>>` are safe and testable.
 
 ## 7. `Vec<Vec<T>>` for Matrices
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly: cache-unfriendly
 let m: Vec<Vec<f32>> = vec![vec![0.0; 100]; 100];
@@ -153,9 +172,11 @@ let m: Vec<Vec<f32>> = vec![vec![0.0; 100]; 100];
 let m: Vec<f32> = vec![0.0; 100 * 100];
 fn at(m: &[f32], x: usize, y: usize, w: usize) -> f32 { m[y * w + x] }
 ```
+::
 
 ## 8. `Vec<u8>` Repeated Reallocations
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 let mut v = Vec::new();
@@ -167,9 +188,11 @@ for _ in 0..1000 { v.push(0u8); }
 // or
 let v = vec![0u8; 1000];
 ```
+::
 
 ## 9. `String` for Static Text
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 fn label() -> String { String::from("OK") }
@@ -177,11 +200,13 @@ fn label() -> String { String::from("OK") }
 // Better
 fn label() -> &'static str { "OK" }
 ```
+::
 
 Return `&'static str` for compile-time constants; `String` only when constructed.
 
 ## 10. Indexing Out of Bounds
 
+::code-wrapper{language="rust"}
 ```rust
 // Panics
 let v = vec![1, 2, 3];
@@ -190,17 +215,20 @@ let x = v[5];
 // Safe
 let x = v.get(5).copied().unwrap_or(0);
 ```
+::
 
 Use `get`/`get_mut` when bounds are uncertain.
 
 ## 11. String Indexing Confusion
 
+::code-wrapper{language="rust"}
 ```rust
 let s = "héllo";
 let c = s[0];       // ERROR: String can't be indexed by integer
 let b = s.as_bytes()[0];    // u8, byte
 let c = s.chars().nth(0);   // Option<char>
 ```
+::
 
 UTF-8 strings don't support byte indexing semantically. Iterate `chars()` for code points, `bytes()` for bytes.
 
@@ -208,6 +236,7 @@ UTF-8 strings don't support byte indexing semantically. Iterate `chars()` for co
 
 `Deref` is for smart pointers, not modeling. Misuse leads to confusing method resolution:
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 struct A { /* ... */ }
@@ -220,6 +249,7 @@ impl B {
     fn method_of_a(&self) { self.0.method_of_a(); }
 }
 ```
+::
 
 ## 13. `unsafe impl Send for Rc<T>`
 
@@ -227,6 +257,7 @@ impl B {
 
 ## 14. `Vec::clone()` Where `Rc::clone` Would Do
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly: deep clones the whole vec
 let v = vec![1, 2, 3];
@@ -236,9 +267,11 @@ let v2 = v.clone();
 let v = Rc::new(vec![1, 2, 3]);
 let v2 = Rc::clone(&v);    // just bumps refcount
 ```
+::
 
 ## 15. Locking Across `.await`
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly: holding std::sync::Mutex across await
 let m = std::sync::Mutex::new(0);
@@ -255,15 +288,18 @@ let m = tokio::sync::Mutex::new(0);
 let mut g = m.lock().await;
 some_async(&mut *g).await;
 ```
+::
 
 ## 16. Forgetting `move` in Async Blocks
 
+::code-wrapper{language="rust"}
 ```rust
 let v = vec![1, 2, 3];
 let f = async { println!("{:?}", v); };   // borrows v
 // f must outlive v — if returned/spawned, error
 let f = async move { println!("{:?}", v); };   // moves v
 ```
+::
 
 ## 17. `Arc::clone` vs `Clone::clone`
 
@@ -275,14 +311,17 @@ let f = async move { println!("{:?}", v); };   // moves v
 
 ## 19. `unwrap()` on `lock()`
 
+::code-wrapper{language="rust"}
 ```rust
 let g = m.lock().unwrap();    // panics on poison
 ```
+::
 
 In production, decide a poison policy: `.lock().unwrap_or_else(|e| e.into_inner())` to recover the data despite a panic.
 
 ## 20. `Box<dyn Trait>` Where Generic Works
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly: dyn for a single type
 fn process(items: Vec<Box<dyn Process>>) { /* ... */ }
@@ -290,6 +329,7 @@ fn process(items: Vec<Box<dyn Process>>) { /* ... */ }
 // Better: generic, monomorphizes
 fn process<T: Process>(items: Vec<T>) { /* ... */ }
 ```
+::
 
 `dyn` is for heterogeneous collections or when binary size matters.
 
@@ -297,13 +337,16 @@ fn process<T: Process>(items: Vec<T>) { /* ... */ }
 
 If you know the size, `Vec::with_capacity`:
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = Vec::with_capacity(1024);
 file.read_to_end(&mut v)?;
 ```
+::
 
 ## 22. `format!` in Hot Loops
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 for x in items { log::info!("{}", format!("{:?}", x)); }
@@ -311,11 +354,13 @@ for x in items { log::info!("{}", format!("{:?}", x)); }
 // Better
 for x in items { log::info!("{:?}", x); }
 ```
+::
 
 `format!` allocates. Use `write!` into a reused buffer if you must build a string in a loop.
 
 ## 23. Returning `()` From Blocks by Accident
 
+::code-wrapper{language="rust"}
 ```rust
 // Bad
 fn foo() -> i32 {
@@ -329,11 +374,13 @@ fn foo() -> i32 {
     x + 1       // no semicolon — returns 6
 }
 ```
+::
 
 A trailing `;` turns an expression into a statement returning `()`.
 
 ## 24. `match` Without `_` When All Cases Matter
 
+::code-wrapper{language="rust"}
 ```rust
 // Bad: silently breaks when a new variant is added
 match color {
@@ -348,26 +395,31 @@ match color {
     Color::Blue => 0,
 }
 ```
+::
 
 Let exhaustiveness drive you to handle new variants.
 
 ## 25. `mut` You Don't Need
 
+::code-wrapper{language="rust"}
 ```rust
 let mut x = 5;
 let y = x + 1;     // x never mutates — warning: unused mut
 ```
+::
 
 Remove `mut` or prefix `_x` if intentional.
 
 ## 26. Unreachable `unreachable!`
 
+::code-wrapper{language="rust"}
 ```rust
 match opt {
     Some(_) => 1,
     None => unreachable!(),   // will panic if someone passes None
 }
 ```
+::
 
 If the API allows `None`, handle it. Reserve `unreachable!` for truly impossible states.
 
@@ -377,6 +429,7 @@ All three work for `String`. `into()` is shortest, `to_string()` reads clearly, 
 
 ## 28. `&Vec<T>` Parameters
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly: forces caller to have a Vec
 fn sum(v: &Vec<i32>) -> i32 { v.iter().sum() }
@@ -384,9 +437,11 @@ fn sum(v: &Vec<i32>) -> i32 { v.iter().sum() }
 // Better: accepts slices, arrays, Vec
 fn sum(v: &[i32]) -> i32 { v.iter().sum() }
 ```
+::
 
 ## 29. `&String` Parameters
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 fn greet(s: &String) { /* ... */ }
@@ -395,9 +450,11 @@ fn greet(s: &String) { /* ... */ }
 fn greet(s: &str) { /* ... */ }
 // accepts String, &str, literals
 ```
+::
 
 ## 30. `if x.is_ok() { x.unwrap() }`
 
+::code-wrapper{language="rust"}
 ```rust
 // Smelly
 if let Ok(v) = result { /* use v */ }
@@ -407,6 +464,7 @@ let v = result?;
 // or
 match result { Ok(v) => /* use v */, Err(e) => /* handle */ }
 ```
+::
 
 ## 31. `vec![None; n]` vs `vec![0; n]`
 
@@ -428,15 +486,18 @@ If you'll push N chars, `with_capacity(N)` avoids regrow.
 
 `Result`, `Option` warn by default. For your types:
 
+::code-wrapper{language="rust"}
 ```rust
 #[must_use]
 pub struct Handle { /* ... */ }
 ```
+::
 
 ## 36. `as` Casts
 
 `as` is unchecked and may truncate. Use `TryFrom`/`TryInto`:
 
+::code-wrapper{language="rust"}
 ```rust
 // Risky
 let n: u8 = 1000u32 as u8;     // 232, silently
@@ -444,12 +505,15 @@ let n: u8 = 1000u32 as u8;     // 232, silently
 // Safe
 let n: u8 = 1000u32.try_into().unwrap_or(u8::MAX);
 ```
+::
 
 ## 37. `cargo build` in CI Without `--locked`
 
+::code-wrapper{language="yaml"}
 ```yaml
 - run: cargo build --locked --release
 ```
+::
 
 `--locked` ensures `Cargo.lock` is honored (reproducible builds).
 
@@ -457,9 +521,11 @@ let n: u8 = 1000u32.try_into().unwrap_or(u8::MAX);
 
 Treat Clippy warnings as errors in CI:
 
+::code-wrapper{language="yaml"}
 ```yaml
 - run: cargo clippy --all-targets -- -D warnings
 ```
+::
 
 Many lints catch real bugs (e.g., `clippy::needless_collect`, `clippy::mem_forget`).
 

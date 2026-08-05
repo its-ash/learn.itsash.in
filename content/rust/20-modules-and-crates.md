@@ -11,6 +11,7 @@ Rust's module system controls visibility, organization, and namespacing.
 
 ## Module Declaration
 
+::code-wrapper{language="rust"}
 ```rust
 // src/lib.rs
 mod network;
@@ -19,6 +20,7 @@ mod ui {
     pub mod button;
 }
 ```
+::
 
 `mod network;` looks for `network.rs` or `network/mod.rs` (legacy) and includes it as a submodule.
 
@@ -37,6 +39,7 @@ The 2018 edition prefers `network.rs` over `network/mod.rs`. Don't mix the two f
 
 ## `use` — Importing
 
+::code-wrapper{language="rust"}
 ```rust
 use std::collections::HashMap;
 use std::io::{self, Read, Write};   // bring multiple items
@@ -45,23 +48,28 @@ use crate::network::server;          // absolute path from crate root
 use super::sibling;                  // one module up
 use self::inner;                     // current module
 ```
+::
 
 ### Glob Imports
 
+::code-wrapper{language="rust"}
 ```rust
 use std::io::prelude::*;            // rare; usually too broad
 use crate::network::*;               // bring all public items
 ```
+::
 
 Avoid glob imports except for preludes.
 
 ## `pub use` — Re-exports
 
+::code-wrapper{language="rust"}
 ```rust
 // lib.rs
 pub mod api;
 pub use api::Client;   // re-export so users can `use my_crate::Client`
 ```
+::
 
 Re-export is the standard way to flatten the public API and hide internal structure.
 
@@ -71,14 +79,17 @@ Re-export is the standard way to flatten the public API and hide internal struct
 - `self::` — current module.
 - `super::` — parent module.
 
+::code-wrapper{language="rust"}
 ```rust
 // in src/network/server.rs
 use super::connection;     // src/network/connection.rs
 use crate::network::connection;   // same, explicit
 ```
+::
 
 ## Visibility
 
+::code-wrapper{language="rust"}
 ```rust
 pub fn public_fn() {}            // visible everywhere
 fn private_fn() {}                // visible only in this module
@@ -86,15 +97,18 @@ pub(crate) fn internal() {}       // visible within this crate only
 pub(super) fn for_parent() {}     // visible in parent module
 pub(in path) fn scoped() {}       // visible in a specific module path
 ```
+::
 
 Fields and variants have their own visibility:
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct User {
     pub name: String,
     email: String,       // private — only this module can construct/modify
 }
 ```
+::
 
 Enums' variants inherit the enum's visibility by default; you can override per-variant.
 
@@ -121,6 +135,7 @@ A child module can access anything in its parent (privacy is per-module-tree, wi
 
 ## Crates Within a Package
 
+::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml
 [lib]
@@ -131,30 +146,37 @@ path = "src/lib.rs"
 name = "my_app"
 path = "src/main.rs"
 ```
+::
 
 A package can have many binaries and at most one library. Binaries can use the library via `use my_lib::...`.
 
 ## External Crates
 
+::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml
 [dependencies]
 serde = "1.0"
 ```
+::
 
+::code-wrapper{language="rust"}
 ```rust
 use serde::Serialize;     // external crates are in the extern prelude
 ```
+::
 
 In edition 2018+, you don't need `extern crate serde;` — `use` finds it.
 
 ## Workspaces
 
+::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml
 [workspace]
 members = ["crates/api", "crates/cli", "crates/core"]
 ```
+::
 
 Members can depend on each other via `path = "../core"`. Shared `Cargo.lock` and `target/` directory.
 
@@ -162,10 +184,12 @@ Members can depend on each other via `path = "../core"`. Shared `Cargo.lock` and
 
 `macro_rules!` macros need `#[macro_export]` to be used outside their defining module:
 
+::code-wrapper{language="rust"}
 ```rust
 #[macro_export]
 macro_rules! my_macro { /* ... */ }
 ```
+::
 
 They're exported at the crate root. Use `pub use my_macro;` to re-export.
 
@@ -185,13 +209,16 @@ my_project/
 
 ### Feature-Gated Modules
 
+::code-wrapper{language="rust"}
 ```rust
 #[cfg(feature = "json")]
 pub mod json;
 ```
+::
 
 ### Tests Inline and Separate
 
+::code-wrapper{language="rust"}
 ```rust
 // src/lib.rs
 pub fn add(a: i32, b: i32) -> i32 { a + b }
@@ -203,6 +230,7 @@ mod tests {
     fn test_add() { assert_eq!(add(1, 2), 3); }
 }
 ```
+::
 
 Integration tests live in `tests/` as separate crate:
 

@@ -4,6 +4,7 @@ Enums are Rust's killer feature for modeling domain choices. Each variant can ca
 
 ## Basic Enum
 
+::code-wrapper{language="rust"}
 ```rust
 enum IpAddr {
     V4(u8, u8, u8, u8),
@@ -13,11 +14,13 @@ enum IpAddr {
 let v4 = IpAddr::V4(127, 0, 0, 1);
 let v6 = IpAddr::V6(String::from("::1"));
 ```
+::
 
 Each variant is a constructor; the enum value is *exactly one* of them.
 
 ## Variants with Named Fields
 
+::code-wrapper{language="rust"}
 ```rust
 enum Message {
     Quit,
@@ -26,6 +29,7 @@ enum Message {
     ChangeColor(i32, i32, i32),
 }
 ```
+::
 
 - `Quit` — unit variant (no data).
 - `Move` — struct-like variant.
@@ -34,6 +38,7 @@ enum Message {
 
 Pattern matching destructures them:
 
+::code-wrapper{language="rust"}
 ```rust
 match msg {
     Message::Quit => {},
@@ -42,38 +47,46 @@ match msg {
     Message::ChangeColor(r, g, b) => println!("{r},{g},{b}"),
 }
 ```
+::
 
 ## `Option<T>` — The Null Replacement
 
+::code-wrapper{language="rust"}
 ```rust
 enum Option<T> {
     Some(T),
     None,
 }
 ```
+::
 
 There is **no null** in Rust. Use `Option<T>` when a value may be absent. The compiler forces you to handle `None`.
 
+::code-wrapper{language="rust"}
 ```rust
 let v: Option<i32> = Some(5);
 let none: Option<i32> = None;
 match v { Some(x) => println!("{x}"), None => println!("none") }
 let unwrapped = v.unwrap_or(0);
 ```
+::
 
 ## `Result<T, E>` — Error Handling Primitive
 
+::code-wrapper{language="rust"}
 ```rust
 enum Result<T, E> {
     Ok(T),
     Err(E),
 }
 ```
+::
 
 The basis of Rust error handling. See Error Handling chapter.
 
 ## Methods on Enums
 
+::code-wrapper{language="rust"}
 ```rust
 impl Message {
     fn call(&self) {
@@ -81,11 +94,13 @@ impl Message {
     }
 }
 ```
+::
 
 Enums can have methods, just like structs.
 
 ## Enums with Generic Parameters
 
+::code-wrapper{language="rust"}
 ```rust
 enum Either<L, R> {
     Left(L),
@@ -97,15 +112,18 @@ enum Tree<T> {
     Node(Box<Tree<T>>, T, Box<Tree<T>>),
 }
 ```
+::
 
 Recursive enums need indirection (`Box`) because the compiler needs to know the size — direct self-recursion would be infinitely sized.
 
 ## `#[derive]` for Enums
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Color { Red, Green, Blue }
 ```
+::
 
 `Copy` only works if **every** variant's data is `Copy` (e.g., no `String`).
 
@@ -113,23 +131,28 @@ enum Color { Red, Green, Blue }
 
 `match` must cover every variant. Use `_` for "everything else". For `#[non_exhaustive]` enums from external crates, `_` is *required* even if you cover all current variants (upstream may add more).
 
+::code-wrapper{language="rust"}
 ```rust
 #[non_exhaustive]
 pub enum Event { Login, Logout }
 // External crate must write `_ => ...` arm.
 ```
+::
 
 ## Field-Access on Tuple Variants
 
+::code-wrapper{language="rust"}
 ```rust
 let m = Message::Write("hi".into());
 let s = m.0;  // ERROR: cannot access field — must pattern match
 ```
+::
 
 Tuple-variant fields aren't accessible via `.0` — you must destructure with `let Message::Write(s) = m;`. (Some newer nightly features relax this.)
 
 ## Pattern Matching Patterns
 
+::code-wrapper{language="rust"}
 ```rust
 match opt {
     Some(0) => "zero",
@@ -152,13 +175,16 @@ match c {
     _ => "consonant",
 }
 ```
+::
 
 ## `if let` and `while let`
 
+::code-wrapper{language="rust"}
 ```rust
 if let Some(x) = opt { println!("{x}"); }
 while let Some(x) = iter.next() { /* ... */ }
 ```
+::
 
 Short for "match one pattern and ignore the rest". Use when you only care about one case.
 
@@ -166,6 +192,7 @@ Short for "match one pattern and ignore the rest". Use when you only care about 
 
 Enums store a discriminant (tag) plus enough space for the largest variant's payload:
 
+::code-wrapper{language="rust"}
 ```rust
 enum E {
     A,
@@ -174,6 +201,7 @@ enum E {
 }
 // size = max(payload size) + discriminant (often optimized)
 ```
+::
 
 The compiler performs **niche optimization**: if a variant is impossible to overlap with another, it can drop the discriminant. Classic case: `Option<&T>` is the same size as `&T` (null pointer is reserved for `None`).
 
@@ -183,6 +211,7 @@ The compiler performs **niche optimization**: if a variant is impossible to over
 
 Enums are perfect for state machines:
 
+::code-wrapper{language="rust"}
 ```rust
 enum Conn {
     Idle,
@@ -191,14 +220,17 @@ enum Conn {
     Error(String),
 }
 ```
+::
 
 Each state carries the data relevant to it. Transitions are explicit functions returning a new `Conn`.
 
 ## Variants as Constructors
 
+::code-wrapper{language="rust"}
 ```rust
 let f: fn(String) -> Message = Message::Write;
 ```
+::
 
 Each variant acts as a function. Useful for higher-order code.
 
@@ -215,10 +247,12 @@ Each variant acts as a function. Useful for higher-order code.
 
 ## `matches!` Macro
 
+::code-wrapper{language="rust"}
 ```rust
 let ok = matches!(result, Ok(_));
 let small = matches!(n, 0..=9);
 ```
+::
 
 Like a tiny `match` returning `bool`.
 
@@ -226,6 +260,7 @@ Like a tiny `match` returning `bool`.
 
 Use type params to encode states:
 
+::code-wrapper{language="rust"}
 ```rust
 struct Builder<T>(PhantomData<T>);
 struct Unconfigured;
@@ -237,6 +272,7 @@ impl Builder<Configured> {
     fn build(self) -> Product { /* ... */ }
 }
 ```
+::
 
 Calling `build` on an `Unconfigured` builder is a compile-time error. Encode invariants in the type system.
 

@@ -16,7 +16,7 @@ useSeoMeta({
 })
 
 useHead({
-  link: [{ rel: 'canonical', href: 'https://learn.itsash.in/browse' }],
+
 })
 
 const allItems = computed(() =>
@@ -102,10 +102,7 @@ function selectResult() {
         <div class="h-4 w-4 border-2 border-c-fg" />
       </div>
 
-      <h1
-        class="mb-2 font-serif text-6xl font-black tracking-tighter sm:text-7xl md:text-8xl"
-        style="line-height: 1"
-      >
+      <h1 class="mb-2 font-serif text-6xl font-black tracking-tighter sm:text-7xl md:text-8xl" style="line-height: 1">
         Index
       </h1>
       <p class="mb-12 max-w-xl text-lg leading-relaxed text-c-muted-fg">
@@ -113,32 +110,20 @@ function selectResult() {
       </p>
 
       <div class="relative mb-16 border-[2px] border-c-fg">
-        <input
-          v-model="search"
-          type="text"
-          placeholder="Search pages..."
-          autocomplete="off"
+        <input v-model="search" type="text" placeholder="Search pages..." autocomplete="off"
           class="h-14 w-full border-none bg-transparent px-5 font-mono text-sm uppercase tracking-widest text-c-fg placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-c-muted-fg focus:outline-none"
-          @focus="isFocused = true"
-          @blur="setTimeout(() => isFocused = false, 150)"
-          @keydown.enter="selectResult"
-        />
+          @focus="isFocused = true" @blur="setTimeout(() => isFocused = false, 150)" @keydown.enter="selectResult" />
 
-        <div
-          v-if="isFocused && dropdownResults.length > 0"
-          class="absolute inset-x-0 top-full z-50 mt-px border-[2px] border-t-0 border-c-fg bg-c-bg"
-        >
-          <NuxtLink
-            v-for="item in dropdownResults"
-            :key="item.path"
-            :to="item.path"
-            class="group flex items-center justify-between gap-4 border-b border-c-border-light px-5 py-3 transition-colors duration-100 last:border-0 hover:bg-c-fg"
-          >
+        <div v-if="isFocused && dropdownResults.length > 0"
+          class="absolute inset-x-0 top-full z-50 mt-px border-[2px] border-t-0 border-c-fg bg-c-bg">
+          <NuxtLink v-for="item in dropdownResults" :key="item.path" :to="item.path"
+            class="group flex items-center justify-between gap-4 border-b border-c-border-light px-5 py-3 transition-colors duration-100 last:border-0 hover:bg-c-fg">
             <div class="min-w-0 flex-1">
               <p class="truncate font-serif text-base font-medium text-c-fg group-hover:text-c-bg">
                 {{ item.label }}
               </p>
-              <p class="mt-0.5 truncate font-mono text-xs uppercase tracking-widest text-c-muted-fg group-hover:text-c-bg/70">
+              <p
+                class="mt-0.5 truncate font-mono text-xs uppercase tracking-widest text-c-muted-fg group-hover:text-c-bg/70">
                 {{ item.category }} · {{ item.path }}
               </p>
             </div>
@@ -155,10 +140,8 @@ function selectResult() {
 
       <div v-else class="space-y-16">
         <div v-for="[category] in grouped" :key="category">
-          <NuxtLink
-            :to="'/' + category"
-            class="group block border border-c-fg transition-colors duration-100 hover:bg-c-fg"
-          >
+          <NuxtLink :to="'/' + category"
+            class="group block border border-c-fg transition-colors duration-100 hover:bg-c-fg">
             <div class="flex items-center justify-between gap-4 px-5 py-6">
               <h2 class="font-serif text-3xl font-bold capitalize tracking-tight text-c-fg group-hover:text-c-bg">
                 {{ category }}

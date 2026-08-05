@@ -6,6 +6,7 @@ Rust isn't OOP, but it has idioms for abstraction, polymorphism, and reuse. Here
 
 For complex construction with many optional parameters:
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct Server {
     host: String,
@@ -41,11 +42,13 @@ impl ServerBuilder {
 
 let s = ServerBuilder::new().host("localhost").tls(true).build()?;
 ```
+::
 
 For less boilerplate, use the `derive_builder` or `typed_builder` crates.
 
 ### Typestate Builder
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct MissingHost;
 pub struct WithHost(String);
@@ -60,11 +63,13 @@ impl ServerBuilder<WithHost> {
     pub fn build(self) -> Server { /* ... */ }
 }
 ```
+::
 
 Compile-time enforcement: you can't `build()` without setting `host`. The `bon` crate provides this ergonomically.
 
 ## 2. Newtype Pattern
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct UserId(pub u64);
 pub struct Email(pub String);
@@ -75,6 +80,7 @@ impl Email {
     }
 }
 ```
+::
 
 - Zero-cost type distinction.
 - Constructor can validate invariants.
@@ -84,6 +90,7 @@ impl Email {
 
 Encode state machines in types:
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct Draft; pub struct Reviewed; pub struct Published;
 
@@ -100,11 +107,13 @@ impl<S> Article<S> {
     pub fn content(&self) -> &str { &self.content }
 }
 ```
+::
 
 Calling `publish` on `Draft` is a compile-time error. Methods only exist in valid states.
 
 ## 4. Strategy via Traits
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Compressor { fn compress(&self, data: &[u8]) -> Vec<u8>; }
 
@@ -119,6 +128,7 @@ pub fn archive<C: Compressor>(compressor: &C, files: &[File]) -> Vec<u8> {
     out
 }
 ```
+::
 
 Static dispatch via generics, or dynamic via `Box<dyn Compressor>`.
 
@@ -126,6 +136,7 @@ Static dispatch via generics, or dynamic via `Box<dyn Compressor>`.
 
 For traversing heterogeneous structures:
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Visitor {
     fn visit_string(&mut self, s: &str);
@@ -145,11 +156,13 @@ impl Value {
     }
 }
 ```
+::
 
 Common in `serde` deserializers and AST traversal.
 
 ## 6. Command Pattern
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Command { fn execute(&self, ctx: &mut Context); }
 
@@ -165,11 +178,13 @@ let cmds: Vec<Box<dyn Command>> = vec![
 ];
 for c in cmds { c.execute(&mut ctx); }
 ```
+::
 
 ## 7. RAII — Resource Acquisition Is Initialization
 
 The most Rust-idiomatic pattern. Resources are tied to types; `Drop` cleans up:
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct File { handle: RawFd }
 impl File {
@@ -182,6 +197,7 @@ impl Drop for File {
     fn drop(&mut self) { unsafe { libc::close(self.handle); } }
 }
 ```
+::
 
 No leak, no double-close, no use-after-close — all enforced by the compiler.
 
@@ -189,6 +205,7 @@ No leak, no double-close, no use-after-close — all enforced by the compiler.
 
 Lazy, composable:
 
+::code-wrapper{language="rust"}
 ```rust
 let v: Vec<i32> = (1..100)
     .filter(|x| x % 2 == 0)
@@ -196,11 +213,13 @@ let v: Vec<i32> = (1..100)
     .take(10)
     .collect();
 ```
+::
 
 Custom iterators implement `Iterator::next`. `collect` builds any `FromIterator`.
 
 ## 9. Smart-Constructor Pattern
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct Percent(u8);
 impl Percent {
@@ -209,6 +228,7 @@ impl Percent {
     }
 }
 ```
+::
 
 Never expose the inner; force construction through validation.
 
@@ -216,74 +236,90 @@ Never expose the inner; force construction through validation.
 
 Add methods to external types (with a wrapper):
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait StrExt { fn shout(&self) -> String; }
 impl StrExt for str { fn shout(&self) -> String { format!("{}!!!", self.to_uppercase()) } }
 use crate::StrExt;
 "hi".shout();
 ```
+::
 
 You can't implement an external trait for an external type (orphan rule), but you *can* implement your own trait for any type.
 
 ## 11. Handle / RAII Wrapper around Foreign Types
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct Database(*mut bindings::sqlite3);
 impl Drop for Database { fn drop(&mut self) { unsafe { bindings::close(self.0) } } }
 ```
+::
 
 ## 12. `From`/`Into` for Conversions
 
+::code-wrapper{language="rust"}
 ```rust
 impl From<RawData> for Processed { fn from(r: RawData) -> Self { /* ... */ } }
 let p: Processed = raw.into();
 ```
+::
 
 Idiomatic conversion path. Implement `From`, never `Into` directly.
 
 ## 13. `AsRef`/`AsMut` for Flexible Borrowing
 
+::code-wrapper{language="rust"}
 ```rust
 pub fn open<P: AsRef<Path>>(path: P) { let p = path.as_ref(); /* ... */ }
 open("file.txt"); open(Path::new("f")); open(String::from("f"));
 ```
+::
 
 ## 14. Error-Conversion via `?`
 
+::code-wrapper{language="rust"}
 ```rust
 pub fn run() -> Result<(), AppError> {
     let n: i32 = "x".parse()?;     // uses From<ParseIntError> for AppError
     Ok(())
 }
 ```
+::
 
 `thiserror`'s `#[from]` generates the `From` impl automatically.
 
 ## 15. Trait Composition via Supertraits
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Service: Send + Sync + Debug {
     fn call(&self, req: Request) -> Response;
 }
 ```
+::
 
 A supertrait bound requires all subtraits. Implementations must provide all.
 
 ## 16. Default Trait for Defaults
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Default)]
 pub struct Config { pub host: String, pub port: u16 }
 let c = Config { port: 8080, ..Default::default() };
 ```
+::
 
 ## 17. Phantom Type Parameters
 
+::code-wrapper{language="rust"}
 ```rust
 pub struct Id<T>(u64, PhantomData<T>);
 pub struct User; pub struct Post;
 type UserId = Id<User>; type PostId = Id<Post>;
 ```
+::
 
 Same numeric value, distinct types — prevents mixing IDs.
 
@@ -297,6 +333,7 @@ The Rust-native "tagged union" — see the Enums chapter.
 
 ## 20. Dependency Injection via Traits
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Clock { fn now(&self) -> Instant; }
 pub struct RealClock; impl Clock for RealClock { fn now(&self) -> Instant { Instant::now() } }
@@ -304,6 +341,7 @@ pub struct MockClock(Instant); impl Clock for MockClock { fn now(&self) -> Insta
 
 pub struct Service<C: Clock> { clock: C }
 ```
+::
 
 Tests inject `MockClock`; production uses `RealClock`. No global mutable state needed.
 
@@ -317,6 +355,7 @@ Idiomatic error propagation. Avoid deeply nested `match` when `?` works.
 
 ## 23. Use Iterators Over Loops
 
+::code-wrapper{language="rust"}
 ```rust
 // Idiomatic
 let sum: i32 = v.iter().map(|x| x * 2).sum();
@@ -325,6 +364,7 @@ let sum: i32 = v.iter().map(|x| x * 2).sum();
 let mut sum = 0;
 for x in &v { sum += x * 2; }
 ```
+::
 
 The iterator form is equally fast (zero-cost) and more declarative.
 
@@ -334,6 +374,7 @@ In tests, `unwrap` is fine. In production APIs, use `?`, return `Result`, or `ex
 
 ## 25. Documentation Comments
 
+::code-wrapper{language="rust"}
 ```rust
 /// Adds two numbers.
 ///
@@ -347,6 +388,7 @@ In tests, `unwrap` is fine. In production APIs, use `?`, return `Result`, or `ex
 /// ```
 pub fn add(a: i32, b: i32) -> i32 { a + b }
 ```
+::
 
 - `///` for items, `//!` for crates/modules.
 - Sections: `# Panics`, `# Errors`, `# Examples`, `# Safety`, `# Arguments`.
@@ -370,6 +412,7 @@ pub fn add(a: i32, b: i32) -> i32 { a + b }
 
 ## 29. `Cow` for Borrowed-or-Owned
 
+::code-wrapper{language="rust"}
 ```rust
 pub fn normalize(s: &str) -> Cow<str> {
     if s.chars().any(|c| c.is_uppercase()) {
@@ -379,6 +422,7 @@ pub fn normalize(s: &str) -> Cow<str> {
     }
 }
 ```
+::
 
 Avoids cloning when no transformation is needed.
 

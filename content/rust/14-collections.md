@@ -2,6 +2,7 @@
 
 ## `Vec<T>` — The Growable Array
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v: Vec<i32> = Vec::new();
 v.push(1);
@@ -9,6 +10,7 @@ v.push(2);
 let v2 = vec![1, 2, 3];          // macro shortcut
 let v3 = vec![0; 5];              // [0, 0, 0, 0, 0]
 ```
+::
 
 ### Memory Model
 
@@ -17,23 +19,28 @@ let v3 = vec![0; 5];              // [0, 0, 0, 0, 0]
 - `len` → number of elements currently stored
 - `capacity` → allocated space; pushing beyond doubles capacity (amortized O(1))
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = Vec::with_capacity(100);   // pre-allocate for perf
 v.push(1);
 println!("{:?}", v.capacity());
 ```
+::
 
 ### Indexing & Slicing
 
+::code-wrapper{language="rust"}
 ```rust
 v[0];            // panics on OOB
 v.get(0);        // Option<&T> — safe
 &v[1..3];        // slice, panics on OOB
 v.get(1..3);     // Option<&[T]>
 ```
+::
 
 ### Iteration
 
+::code-wrapper{language="rust"}
 ```rust
 for x in &v { /* x: &i32 */ }
 for x in &mut v { /* x: &mut i32 */ }
@@ -42,9 +49,11 @@ v.iter();        // iterator over &T
 v.iter_mut();    // over &mut T
 v.into_iter();   // consumes v, yields T (or &T for &Vec)
 ```
+::
 
 ### Insert / Remove / Swap
 
+::code-wrapper{language="rust"}
 ```rust
 v.insert(0, 99);   // O(n) — shifts
 v.remove(0);       // O(n)
@@ -55,17 +64,21 @@ v.truncate(2);
 v.retain(|x| *x > 0);   // filter in place
 v.drain(1..3);          // removes range, returns iterator
 ```
+::
 
 ### Capacity Management
 
+::code-wrapper{language="rust"}
 ```rust
 v.shrink_to_fit();
 v.reserve(10);
 v.reserve_exact(10);
 ```
+::
 
 ### Sorting & Searching
 
+::code-wrapper{language="rust"}
 ```rust
 v.sort();
 v.sort_by(|a, b| b.cmp(a));
@@ -74,6 +87,7 @@ v.sort_unstable_by_key(|x| *x);    // faster, non-stable
 v.dedup();                        // remove consecutive duplicates (after sort)
 v.binary_search(&5);              // Option<usize> on sorted vec
 ```
+::
 
 ### Edge Cases
 
@@ -88,6 +102,7 @@ v.binary_search(&5);              // Option<usize> on sorted vec
 
 ## `String` — Owned UTF-8 String
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::new();
 let s = String::from("hi");
@@ -99,17 +114,20 @@ s.replace("hi", "bye");
 s.to_lowercase();
 s.split(' ').collect::<Vec<_>>();
 ```
+::
 
 ### UTF-8 Invariant
 
 `String` is a `Vec<u8>` with the invariant that bytes are valid UTF-8. You can't push arbitrary bytes:
 
+::code-wrapper{language="rust"}
 ```rust
 let bytes = vec![0xffu8];
 // String::from_utf8(bytes).unwrap();  // ERROR: invalid UTF-8
 String::from_utf8(bytes).unwrap_err(); // ok
 String::from_utf8_lossy(&[0xffu8, b'h']);  // "�h"
 ```
+::
 
 ### `String` vs `&str`
 
@@ -122,6 +140,7 @@ String::from_utf8_lossy(&[0xffu8, b'h']);  // "�h"
 
 ### Common Conversions
 
+::code-wrapper{language="rust"}
 ```rust
 let s: String = String::from("hi");
 let r: &str = &s;
@@ -131,9 +150,11 @@ let bytes: Vec<u8> = s.into_bytes();
 let s: String = String::from_utf8(bytes).unwrap();
 let s: String = unsafe { String::from_utf8_unchecked(bytes) };   // fast, dangerous
 ```
+::
 
 ### Byte-Oriented Operations
 
+::code-wrapper{language="rust"}
 ```rust
 let s = "hello";
 for b in s.bytes() { /* u8 */ }
@@ -141,15 +162,18 @@ for c in s.chars() { /* char */ }
 for (i, c) in s.char_indices() { /* (byte_offset, char) */ }
 s.as_bytes();      // &[u8]
 ```
+::
 
 ### Concatenation
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("a") + "b" + "c";   // + takes String by value, &str args
 let s = ["a", "b", "c"].concat();
 let s = format!("{}-{}", "a", "b");
 let s: String = "a".to_string() + "b";
 ```
+::
 
 ### Edge Cases
 
@@ -161,6 +185,7 @@ let s: String = "a".to_string() + "b";
 
 ## `HashMap<K, V>` and `BTreeMap<K, V>`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::collections::HashMap;
 let mut m: HashMap<String, i32> = HashMap::new();
@@ -172,6 +197,7 @@ let v = m.get_key_value("a");
 m.remove("a");
 for (k, v) in &m { /* ... */ }
 ```
+::
 
 - `HashMap` uses hashing (SipHash by default, secure but slower; use `FxHashMap`/`AHashMap` for perf).
 - `BTreeMap` keeps keys sorted (binary tree), iteration is ordered, lookups are O(log n) vs HashMap's amortized O(1).
@@ -180,17 +206,21 @@ for (k, v) in &m { /* ... */ }
 
 The idiomatic way to "insert if absent, else modify":
 
+::code-wrapper{language="rust"}
 ```rust
 m.entry(key).or_insert_with(|| expensive_default());
 *m.entry(key).or_insert(0) += 1;
 ```
+::
 
 ### Custom Keys
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Hash, Eq, PartialEq)]
 struct MyKey { /* ... */ }
 ```
+::
 
 `HashMap` requires `Hash + Eq`. `BTreeMap` requires `Ord`.
 
@@ -204,6 +234,7 @@ struct MyKey { /* ... */ }
 
 ## `HashSet` and `BTreeSet`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::collections::HashSet;
 let mut s: HashSet<i32> = HashSet::new();
@@ -217,15 +248,18 @@ s.symmetric_difference(&other);
 s.is_subset(&other);
 s.is_disjoint(&other);
 ```
+::
 
 ## `VecDeque<T>` — Double-Ended Queue
 
+::code-wrapper{language="rust"}
 ```rust
 use std::collections::VecDeque;
 let mut dq: VecDeque<i32> = VecDeque::new();
 dq.push_back(1); dq.push_front(0);
 dq.pop_back(); dq.pop_front();
 ```
+::
 
 Ring buffer; O(1) push/pop on both ends.
 
@@ -235,19 +269,23 @@ Ring buffer; O(1) push/pop on both ends.
 
 ## `BinaryHeap<T>` — Max-Heap
 
+::code-wrapper{language="rust"}
 ```rust
 use std::collections::BinaryHeap;
 let mut h = BinaryHeap::new();
 h.push(5); h.push(1); h.push(10);
 h.pop();     // 10
 ```
+::
 
 For a min-heap, wrap with `Reverse` or `std::cmp::Reverse`:
 
+::code-wrapper{language="rust"}
 ```rust
 let mut h: BinaryHeap<std::cmp::Reverse<i32>> = BinaryHeap::new();
 h.push(std::cmp::Reverse(5));
 ```
+::
 
 ## Other Useful Collections (std + crates)
 

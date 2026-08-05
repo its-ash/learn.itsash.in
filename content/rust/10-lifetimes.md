@@ -6,6 +6,7 @@ Lifetimes are the borrow checker's way of tracking **how long a reference is val
 
 A reference's lifetime is the region of code where it's valid to use. The compiler *rejects* code where a reference could outlive the data it points to:
 
+::code-wrapper{language="rust"}
 ```rust
 let r;
 {
@@ -14,16 +15,19 @@ let r;
 }                       // x dropped here
 println!("{r}");        // ERROR: x does not live long enough
 ```
+::
 
 ## Generic Lifetime Parameters
 
 When a function returns a reference, the compiler needs to know its lifetime is tied to *some* input:
 
+::code-wrapper{language="rust"}
 ```rust
 fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
     if x.len() > y.len() { x } else { y }
 }
 ```
+::
 
 `<'a>` declares a generic lifetime. `&'a str` means "a `str` reference valid for at least `'a`". The signature says: *the returned reference is valid for at least as long as the shorter of `x` and `y`.*
 
@@ -37,9 +41,11 @@ To reduce boilerplate, the compiler applies three elision rules:
 
 If after these rules the output lifetime is ambiguous, you must write it explicitly:
 
+::code-wrapper{language="rust"}
 ```rust
 fn longest<'a>(x: &'a str, y: &'a str) -> &'a str { ... }
 ```
+::
 
 ## `'static`
 
@@ -49,9 +55,11 @@ The `'static` lifetime lasts the entire program. Examples:
 - `const` values that are references.
 - Global statics.
 
+::code-wrapper{language="rust"}
 ```rust
 let s: &'static str = "I live forever";
 ```
+::
 
 Don't reach for `'static` to silence lifetime errors — it usually means a design problem. Common accidental `'static`: spawning threads that capture references requires `'static` (see Concurrency chapter).
 
@@ -59,6 +67,7 @@ Don't reach for `'static` to silence lifetime errors — it usually means a desi
 
 If a struct holds a reference, it must declare a lifetime:
 
+::code-wrapper{language="rust"}
 ```rust
 struct Excerpt<'a> { part: &'a str }
 
@@ -66,11 +75,13 @@ let novel = String::from("a long novel...");
 let first = novel.split(' ').next().unwrap();
 let e = Excerpt { part: first };
 ```
+::
 
 The struct can't outlive the data `part` borrows. The compiler enforces this.
 
 ## Lifetimes in Method Signatures
 
+::code-wrapper{language="rust"}
 ```rust
 impl<'a> Excerpt<'a> {
     fn announce(&self, msg: &str) -> &str {
@@ -79,17 +90,20 @@ impl<'a> Excerpt<'a> {
     }
 }
 ```
+::
 
 Output references are tied to `&self` automatically when there's no other choice.
 
 ## Multiple Lifetimes
 
+::code-wrapper{language="rust"}
 ```rust
 struct Parser<'src, 'arena> {
     source: &'src str,
     arena: &'arena Arena,
 }
 ```
+::
 
 Two distinct lifetimes express "the source lives at least `'src`, the arena lives at least `'arena`". If the struct never mixes them (e.g., never puts `source` into `arena`), this is more flexible than collapsing to one lifetime.
 
@@ -103,17 +117,21 @@ A `&'a T` is **covariant** in `'a`: you can use a longer-lived reference where a
 
 ## Higher-Rank Trait Bounds (HRTB)
 
+::code-wrapper{language="rust"}
 ```rust
 fn foo<F>(f: F) where F: for<'a> Fn(&'a str) { ... }
 ```
+::
 
 `for<'a>` means "for all possible lifetimes `'a`". Closures that work with any borrowed input need this. The `Fn` traits implicitly have HRTB on their arguments.
 
 ## Anonymous Lifetime `'_`
 
+::code-wrapper{language="rust"}
 ```rust
 fn longest(x: &str, y: &str) -> &'_ str { ... }
 ```
+::
 
 `'_` is "use elision here". Useful in `impl Trait` positions and to silence "elided lifetime in path" warnings. Don't sprinkle it; only when you specifically want elision.
 
@@ -121,12 +139,15 @@ fn longest(x: &str, y: &str) -> &'_ str { ... }
 
 Same rules as structs:
 
+::code-wrapper{language="rust"}
 ```rust
 enum Node<'a> { Leaf(&'a str), Branch(&'a [Node<'a>]) }
 ```
+::
 
 ## Static vs Stack Lifetimes
 
+::code-wrapper{language="rust"}
 ```rust
 fn returns_str() -> &'static str { "literal" }  // OK
 fn returns_stack() -> &str {
@@ -134,21 +155,26 @@ fn returns_stack() -> &str {
     &local                  // ERROR: local does not live long enough
 }
 ```
+::
 
 ## Lifetime Bounds on Generics
 
+::code-wrapper{language="rust"}
 ```rust
 fn parse<T>(s: &str) -> T where T: FromStr, T::Err: Debug { ... }
 fn longest_anon<'a, T: 'a>(x: &'a T) -> &'a T { x }
 ```
+::
 
 `T: 'a` means "T's owned references (if any) outlive `'a`". Often implicit, but needed when `T` itself contains references.
 
 ## Lifetime Extension via `Box::leak`
 
+::code-wrapper{language="rust"}
 ```rust
 let leaked: &'static mut [u8] = Box::leak(vec![1, 2, 3].into_boxed_slice());
 ```
+::
 
 `Box::leak` turns an owned heap value into a `'static` reference (memory is never reclaimed). Useful for long-lived configs but a memory leak by design.
 

@@ -4,6 +4,7 @@ Rust's iterators are **lazy**, **zero-cost**, and compose into chains that compi
 
 ## The `Iterator` Trait
 
+::code-wrapper{language="rust"}
 ```rust
 pub trait Iterator {
     type Item;
@@ -11,16 +12,19 @@ pub trait Iterator {
     // ... dozens of provided methods
 }
 ```
+::
 
 Implement `next()` and you get `map`, `filter`, `fold`, `collect`, etc. for free.
 
 ## Laziness
 
+::code-wrapper{language="rust"}
 ```rust
 let v = vec![1, 2, 3];
 let it = v.iter().map(|x| x * 2);   // no work yet
 for y in it { println!("{y}"); }    // work happens here
 ```
+::
 
 Iterator chains don't run until consumed (by `for`, `collect`, `sum`, `count`, etc.).
 
@@ -28,11 +32,13 @@ Iterator chains don't run until consumed (by `for`, `collect`, `sum`, `count`, e
 
 Anything implementing `IntoIterator` can be used in `for`:
 
+::code-wrapper{language="rust"}
 ```rust
 for x in &vec { }       // &Vec<T>  -> Iterator<Item = &T>
 for x in &mut vec { }  // &mut Vec<T> -> Iterator<Item = &mut T>
 for x in vec { }        // Vec<T> -> consumes, yields T
 ```
+::
 
 `Vec<T>: IntoIterator<Item = T>` since edition 2021. Pre-2021, arrays only borrowed-by-default — `for x in [1,2,3]` errored unless you wrote `for x in &[1,2,3]` or `into_iter()`.
 
@@ -46,6 +52,7 @@ for x in vec { }        // Vec<T> -> consumes, yields T
 
 ## Common Adapters (Producers)
 
+::code-wrapper{language="rust"}
 ```rust
 0..10                       // Range
 (1..=5).rev()
@@ -71,9 +78,11 @@ std::iter::successors(Some(1), |n| Some(n * 2))   // unfold
 std::iter::from_fn(|| Some(1))
 std::iter::zip(a, b)         // zip two iterables
 ```
+::
 
 ## Common Transformers
 
+::code-wrapper{language="rust"}
 ```rust
 it.map(|x| x * 2)
 it.filter(|x| *x > 0)
@@ -99,9 +108,11 @@ it.copied()                    // Iterator<Item=&T where T:Copy> -> Item=T
 it.cloned()                    // Iterator<Item=&T> -> Item=T (T: Clone)
 it.by_ref()                    // borrow iterator for partial consumption
 ```
+::
 
 ## Common Consumers
 
+::code-wrapper{language="rust"}
 ```rust
 it.collect::<Vec<_>>()
 it.collect::<HashMap<K, V>>()
@@ -127,20 +138,24 @@ it.cmp(other)
 it.partition(|x| *x > 0)   // (Vec<T>, Vec<T>)
 it.unzip()
 ```
+::
 
 ## `collect` and `FromIterator`
 
+::code-wrapper{language="rust"}
 ```rust
 let v: Vec<i32> = (0..5).collect();
 let s: String = "abc".chars().collect();
 let m: HashMap<&str, i32> = [("a", 1), ("b", 2)].into_iter().collect();
 let (evens, odds): (Vec<i32>, Vec<i32>) = (0..10).partition(|x| x % 2 == 0);
 ```
+::
 
 `collect` can build *any* `FromIterator` type — the turbofish or type annotation tells it which.
 
 ## Custom Iterator (Manual `impl`)
 
+::code-wrapper{language="rust"}
 ```rust
 struct Counter { count: u32 }
 impl Counter {
@@ -158,13 +173,16 @@ for n in Counter::new().map(|x| x * 2) {
     println!("{n}");   // 2, 4, 6, 8, 10
 }
 ```
+::
 
 ## Performance: Iterators Compile to Tight Loops
 
+::code-wrapper{language="rust"}
 ```rust
 let v: Vec<i32> = (0..1_000_000).collect();
 let sum: i32 = v.iter().map(|x| x + 1).filter(|x| x % 2 == 0).sum();
 ```
+::
 
 This compiles to essentially the same machine code as a hand-written `for` loop. No allocations, no closures dispatched at runtime — everything inlines.
 
@@ -172,9 +190,11 @@ This compiles to essentially the same machine code as a hand-written `for` loop.
 
 `.rev()` requires `DoubleEndedIterator` (can pull from the back):
 
+::code-wrapper{language="rust"}
 ```rust
 for x in (0..5).rev() { print!("{x} "); }   // 4 3 2 1 0
 ```
+::
 
 Not all iterators are double-ended (`std::io::Lines` reading a file isn't).
 
@@ -184,22 +204,26 @@ Not all iterators are double-ended (`std::io::Lines` reading a file isn't).
 
 ## Infinite Iterators
 
+::code-wrapper{language="rust"}
 ```rust
 let ones = std::iter::repeat(1);
 let natural = (0..).map(|x| x * 2);
 let mut evens = (0..).step_by(2);
 ```
+::
 
 Use `take(n)` or `take_while` to bound them. Don't `.collect()` an infinite iterator!
 
 ## `peekable`
 
+::code-wrapper{language="rust"}
 ```rust
 let mut it = vec.iter().peekable();
 let first = it.peek();
 if let Some(&&3) = first { /* ... */ }
 let actual = it.next();
 ```
+::
 
 `peek` returns `Option<&Item>` without advancing.
 
@@ -207,16 +231,19 @@ let actual = it.next();
 
 After an iterator returns `None` once, calling `next` again is unspecified — `fuse` makes it always return `None` after the first:
 
+::code-wrapper{language="rust"}
 ```rust
 let mut it = some_iter.fuse();
 while let Some(x) = it.next() { /* ... */ }
 it.next();   // guaranteed None
 ```
+::
 
 ## `inspect`
 
 For debugging chains without breaking them:
 
+::code-wrapper{language="rust"}
 ```rust
 (0..5)
     .inspect(|x| println!("before: {x}"))
@@ -224,9 +251,11 @@ For debugging chains without breaking them:
     .inspect(|x| println!("after:  {x}"))
     .collect::<Vec<_>>();
 ```
+::
 
 ## Iterators and Ownership
 
+::code-wrapper{language="rust"}
 ```rust
 let v = vec![String::from("a"), String::from("b")];
 
@@ -241,46 +270,59 @@ let mut it = v.into_iter();
 let first = it.next();
 let rest: Vec<_> = it.collect();
 ```
+::
 
 ## Common Patterns
 
 ### Group consecutive equal elements
 
+::code-wrapper{language="rust"}
 ```rust
 let v = vec![1, 1, 2, 2, 2, 3];
 for (key, group) in v.into_iter().group_by(|a, b| a == b) { /* unstable API */ }
 // Use `itertools` crate for `group_by` on stable.
 ```
+::
 
 ### Chunked iterator
 
+::code-wrapper{language="rust"}
 ```rust
 for chunk in v.chunks(10) { /* process */ }
 ```
+::
 
 ### Build a map from a vec
 
+::code-wrapper{language="rust"}
 ```rust
 let m: HashMap<i32, &str> = vec.iter().map(|x| (*x, "x")).collect();
 ```
+::
 
 ### Sum of squares of evens
 
+::code-wrapper{language="rust"}
 ```rust
 let sum: i32 = (1..=100).filter(|x| x % 2 == 0).map(|x| x * x).sum();
 ```
+::
 
 ### Flatten nested options
 
+::code-wrapper{language="rust"}
 ```rust
 let v: Vec<i32> = vec![Some(1), None, Some(2)].into_iter().flatten().collect();
 ```
+::
 
 ### Find max by key
 
+::code-wrapper{language="rust"}
 ```rust
 let max = v.iter().max_by_key(|x| x.score);
 ```
+::
 
 ## Edge Cases & Pitfalls
 

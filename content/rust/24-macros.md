@@ -16,6 +16,7 @@ Macros run **before** the type checker — they expand into AST, which is then t
 
 ## Declarative Macros: `macro_rules!`
 
+::code-wrapper{language="rust"}
 ```rust
 macro_rules! vec_of {
     ($($x:expr),*) => {{
@@ -27,6 +28,7 @@ macro_rules! vec_of {
 
 let v = vec_of!(1, 2, 3);
 ```
+::
 
 ### Macro Syntax
 
@@ -37,6 +39,7 @@ let v = vec_of!(1, 2, 3);
 
 ### Example: a `hashmap!` macro
 
+::code-wrapper{language="rust"}
 ```rust
 macro_rules! hashmap {
     ($( $key:expr => $val:expr ),* $(,)?) => {{
@@ -49,15 +52,18 @@ macro_rules! hashmap {
 }
 let m = hashmap!("a" => 1, "b" => 2);
 ```
+::
 
 ### Repetition Specifiers
 
+::code-wrapper{language="rust"}
 ```rust
 macro_rules! sum {
     ($($x:expr),*) => { 0 $(+ $x)* };
     ($first:expr $(, $rest:expr)*) => { $first $(+ $rest)* };
 }
 ```
+::
 
 Two arms handle empty/one/many. The first arm matches the empty case (sum of nothing = 0). The `$(+ $x)*` expands to `+ $x` repeated.
 
@@ -69,6 +75,7 @@ Each fragment type has rules about what can follow it (because the parser is amb
 
 Macro-introduced identifiers don't collide with caller identifiers:
 
+::code-wrapper{language="rust"}
 ```rust
 macro_rules! swap {
     ($a:expr, $b:expr) => {
@@ -80,29 +87,36 @@ macro_rules! swap {
 let mut a = 1; let mut b = 2;
 swap!(a, b);
 ```
+::
 
 ### `macro_export`
 
+::code-wrapper{language="rust"}
 ```rust
 #[macro_export]
 macro_rules! my_macro {
     ($x:expr) => { /* ... */ };
 }
 ```
+::
 
 `#[macro_export]` makes the macro available crate-wide and externally (placed at crate root, regardless of where it's defined).
 
 ### Re-Exporting
 
+::code-wrapper{language="rust"}
 ```rust
 pub use crate::my_macro;
 ```
+::
 
 ### Importing
 
+::code-wrapper{language="rust"}
 ```rust
 use my_crate::my_macro;
 ```
+::
 
 In edition 2018+, macros are imported via `use` like any item.
 
@@ -110,6 +124,7 @@ In edition 2018+, macros are imported via `use` like any item.
 
 `vec!` matches several patterns:
 
+::code-wrapper{language="rust"}
 ```rust
 macro_rules! vec {
     () => ($crate::Vec::new());
@@ -117,6 +132,7 @@ macro_rules! vec {
     ($($x:expr),+ $(,)?) => ([$($x),+].into_iter().collect());
 }
 ```
+::
 
 `println!` parses the format string and expands into `std::io::_print(format_args!(...))`. Format args are validated at compile time.
 
@@ -152,6 +168,7 @@ Proc-macro crates must be separate and have `proc-macro = true` in `[lib]`.
 
 ### Function-Like Example (using `syn`/`quote`)
 
+::code-wrapper{language="rust"}
 ```rust
 // my_crate_derive/src/lib.rs
 use proc_macro::TokenStream;
@@ -163,17 +180,21 @@ pub fn make_hello(_item: TokenStream) -> TokenStream {
     "fn hello() { println!(\"hi\"); }".parse().unwrap()
 }
 ```
+::
 
 Usage:
 
+::code-wrapper{language="rust"}
 ```rust
 use my_crate_derive::make_hello;
 make_hello!();
 hello();
 ```
+::
 
 ### Derive Example
 
+::code-wrapper{language="rust"}
 ```rust
 #[proc_macro_derive(Hello)]
 pub fn derive_hello(input: TokenStream) -> TokenStream {
@@ -187,17 +208,21 @@ pub fn derive_hello(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 ```
+::
 
 Usage:
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Hello)]
 struct Foo;
 Foo::hello();
 ```
+::
 
 ### Derive with Helper Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 #[proc_macro_derive(Hello, attributes(hello_name))]
 pub fn derive_hello(input: TokenStream) -> TokenStream { /* ... */ }
@@ -207,13 +232,16 @@ pub fn derive_hello(input: TokenStream) -> TokenStream { /* ... */ }
 #[hello_name = "Bar"]
 struct Foo;
 ```
+::
 
 ### Attribute Macros
 
+::code-wrapper{language="rust"}
 ```rust
 #[proc_macro_attribute]
 pub fn log_calls(attr: TokenStream, item: TokenStream) -> TokenStream { /* ... */ }
 ```
+::
 
 Receives both the attribute arguments and the item being annotated.
 
@@ -227,10 +255,12 @@ Receives both the attribute arguments and the item being annotated.
 
 ## Built-in Derives
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 struct Foo { /* ... */ }
 ```
+::
 
 These are built into the compiler.
 
@@ -249,10 +279,12 @@ These are built into the compiler.
 
 ## `cargo expand`
 
+::code-wrapper{language="bash"}
 ```bash
 cargo install cargo-expand
 cargo expand
 ```
+::
 
 Prints the post-macro-expansion source. Invaluable for debugging declarative and proc-macros.
 

@@ -12,24 +12,29 @@ The rest of Rust still applies (borrowing, types, lifetimes). Unsafe is a contra
 
 ## `unsafe` Blocks
 
+::code-wrapper{language="rust"}
 ```rust
 let p: *const i32 = &5;
 unsafe {
     println!("{}", *p);
 }
 ```
+::
 
 `unsafe fn` is a function whose body requires unsafe — calling it from safe code is allowed only in an `unsafe` block (or `unsafe fn`).
 
+::code-wrapper{language="rust"}
 ```rust
 unsafe fn dangerous() {}
 unsafe { dangerous(); }   // OK
 ```
+::
 
 In edition 2024+, calling `unsafe fn` inside `unsafe fn` also requires an explicit `unsafe` block (no longer implicit).
 
 ## Raw Pointers
 
+::code-wrapper{language="rust"}
 ```rust
 let x = 5;
 let p1: *const i32 = &x;        // implicit coercion
@@ -37,6 +42,7 @@ let p2: *mut i32 = &mut x as *mut i32;
 
 unsafe { println!("{} {}", *p1, *p2); }
 ```
+::
 
 - `*const T` (read-only) and `*mut T` (writable).
 - Can be created from any reference, even outside `unsafe`.
@@ -49,6 +55,7 @@ Reading a `*const T` requires the pointer to point to a valid `T` (properly init
 
 ## FFI
 
+::code-wrapper{language="rust"}
 ```rust
 extern "C" {
     fn abs(x: i32) -> i32;
@@ -58,32 +65,40 @@ fn main() {
     unsafe { println!("{}", abs(-5)); }
 }
 ```
+::
 
 Calling C functions requires `unsafe`. Functions can be marked `extern "C"`:
 
+::code-wrapper{language="rust"}
 ```rust
 #[no_mangle]
 pub extern "C" fn add(a: i32, b: i32) -> i32 { a + b }
 ```
+::
 
 `#[no_mangle]` preserves the symbol name for C to call. `extern "C"` sets the ABI.
 
 ## `unsafe` Traits
 
+::code-wrapper{language="rust"}
 ```rust
 unsafe trait TrustedIter {}
 unsafe impl TrustedIter for std::slice::Iter<'static, u8> {}
 ```
+::
 
 `Send` and `Sync` are unsafe traits; the compiler auto-derives them, but you can opt in via `unsafe impl` if you've verified thread-safety.
 
+::code-wrapper{language="rust"}
 ```rust
 struct MyType(*mut u8);
 unsafe impl Send for MyType {}     // we promise the pointer is safe to move to another thread
 ```
+::
 
 ## `static mut`
 
+::code-wrapper{language="rust"}
 ```rust
 static mut COUNTER: u32 = 0;
 
@@ -91,12 +106,14 @@ fn incr() {
     unsafe { COUNTER += 1; }
 }
 ```
+::
 
 - Reading/writing requires `unsafe`.
 - No synchronization — use atomics instead.
 
 ## Unions
 
+::code-wrapper{language="rust"}
 ```rust
 union Value {
     int_val: i32,
@@ -106,11 +123,13 @@ union Value {
 let v = Value { int_val: 5 };
 unsafe { println!("{}", v.float_val); }   // ⚠️ UB if int_val was the active field
 ```
+::
 
 Unions overlap memory; reading the inactive field is UB. Reading requires `unsafe`. Useful for FFI/C interop; otherwise use enums.
 
 ## `MaybeUninit<T>` — Uninitialized Memory
 
+::code-wrapper{language="rust"}
 ```rust
 use std::mem::MaybeUninit;
 
@@ -118,28 +137,33 @@ let mut mu: MaybeUninit<Vec<u8>> = MaybeUninit::uninit();
 unsafe { mu.write(Vec::new()); }
 let v: Vec<u8> = unsafe { mu.assume_init() };
 ```
+::
 
 `MaybeUninit<T>` is the safe way to *hold* uninitialized memory; reading it requires `unsafe`. The standard alternative to uninitialized `mem::uninitialized` (deprecated).
 
 ## `ManuallyDrop<T>` — Suppress Drop
 
+::code-wrapper{language="rust"}
 ```rust
 use std::mem::ManuallyDrop;
 let s = ManuallyDrop::new(String::from("hi"));
 // s's destructor won't run; manual cleanup needed
 unsafe { drop(ManuallyDrop::into_inner(s)) };   // no, into_inner extracts
 ```
+::
 
 `ManuallyDrop<T>` wraps a `T` and disables its `Drop`. Use `ManuallyDrop::into_inner` to recover the value, or `unsafe { ManuallyDrop::take(&mut md) }` to extract without dropping.
 
 ## Splitting Borrows Safely
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = vec![1, 2, 3, 4];
 let slice: &mut [i32] = &mut v[..];
 let (left, right) = slice.split_at_mut(2);
 // left = &mut [1, 2], right = &mut [3, 4]
 ```
+::
 
 `split_at_mut` is internally `unsafe` because the compiler can't prove disjointness, but it's a safe API.
 
@@ -156,10 +180,12 @@ Miri (`cargo +nightly miri test`) is a tool that detects UB in unsafe code at ru
 
 ## `miri`
 
+::code-wrapper{language="bash"}
 ```bash
 rustup +nightly component add miri
 cargo +nightly miri test
 ```
+::
 
 Miri interprets your code and catches many UB forms (invalid pointer arithmetic, unaligned access, data races in some cases, use of uninitialized memory). Doesn't catch all bugs but catches many.
 
@@ -182,12 +208,14 @@ Miri interprets your code and catches many UB forms (invalid pointer arithmetic,
 
 The idiomatic way: expose a safe API, do the unsafe internally:
 
+::code-wrapper{language="rust"}
 ```rust
 pub fn first_byte(s: &str) -> u8 {
     let ptr = s.as_ptr();
     unsafe { *ptr }   // SAFETY: ptr is valid (s is a valid &str)
 }
 ```
+::
 
 Comment with `// SAFETY:` explaining why each unsafe operation is sound.
 
@@ -197,11 +225,13 @@ Only when you've verified the type can be safely transferred/shared across threa
 
 ### Reusing Raw Memory
 
+::code-wrapper{language="rust"}
 ```rust
 let mut buf: Vec<u8> = Vec::with_capacity(100);
 let ptr = buf.as_mut_ptr() as *mut u64;
 unsafe { *ptr = 5; }   // ⚠️ requires valid alignment and within capacity
 ```
+::
 
 `Vec<u8>` allocations are aligned to `u8`, **not** `u64`. To get a properly-aligned buffer, use `Vec<u64>` directly or `alloc::alloc_aligned`.
 
@@ -209,6 +239,7 @@ unsafe { *ptr = 5; }   // ⚠️ requires valid alignment and within capacity
 
 ### Owning Foreign Memory
 
+::code-wrapper{language="rust"}
 ```rust
 struct Buffer(*mut u8, usize);
 impl Drop for Buffer {
@@ -218,25 +249,30 @@ impl Drop for Buffer {
 }
 unsafe impl Send for Buffer {}
 ```
+::
 
 RAII: the constructor allocates, `Drop` deallocates.
 
 ### `extern "C"` Block with Variadics
 
+::code-wrapper{language="rust"}
 ```rust
 extern "C" {
     fn printf(fmt: *const u8, ...) -> i32;
 }
 ```
+::
 
 ### `link` Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 #[link(name = "crypto")]
 extern "C" {
     fn sha256(input: *const u8, len: usize) -> *mut u8;
 }
 ```
+::
 
 ## `#[no_mangle]`, `#[export_name]`, `#[link_name]`
 
@@ -248,11 +284,14 @@ extern "C" {
 
 Use `bindgen` to auto-generate Rust FFI bindings from C headers:
 
+::code-wrapper{language="toml"}
 ```toml
 [build-dependencies]
 bindgen = "0.69"
 ```
+::
 
+::code-wrapper{language="rust"}
 ```rust
 // build.rs
 fn main() {
@@ -262,6 +301,7 @@ fn main() {
     bindings.write_to_file("src/bindings.rs").unwrap();
 }
 ```
+::
 
 ## `extern "C"` vs `extern "Rust"`
 

@@ -17,6 +17,7 @@ Implement FizzBuzz for 1..=100 using iterators and `collect::<Vec<String>>()`.
 
 ### 2. Stack with Generics
 
+::code-wrapper{language="rust"}
 ```rust
 struct Stack<T> { /* ... */ }
 impl<T> Stack<T> {
@@ -28,6 +29,7 @@ impl<T> Stack<T> {
     fn is_empty(&self) -> bool;
 }
 ```
+::
 
 Use `Vec<T>` internally. Implement `IntoIterator` for owned, `&`, and `&mut`.
 
@@ -59,6 +61,7 @@ Watch a directory for changes using `notify` (crate), print events. Use `tokio::
 
 ### 9. Custom `Iterator` for Fibonacci
 
+::code-wrapper{language="rust"}
 ```rust
 struct Fib { a: u64, b: u64 }
 impl Iterator for Fib {
@@ -66,6 +69,7 @@ impl Iterator for Fib {
     fn next(&mut self) -> Option<u64> { /* ... */ }
 }
 ```
+::
 
 Add `.map`, `.filter`, `.take` chains.
 
@@ -79,9 +83,11 @@ A `RequestBuilder<Method, Path, Body>` with states `Unset`, `Set`. Methods only 
 
 Implement your own dispatch table:
 
+::code-wrapper{language="rust"}
 ```rust
 struct VTable { size: usize, drop: unsafe fn(*mut u8), display: unsafe fn(*const u8, &mut Formatter) -> Result }
 ```
+::
 
 Compare with `Box<dyn Display>`.
 

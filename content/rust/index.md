@@ -130,12 +130,14 @@ Skim 01–14. Read 16, 18, 22, 23, 27, 28 closely. Use 30, 34 as references. Ski
 
 ## Tooling to Install
 
+::code-wrapper{language="bash"}
 ```bash
 rustup component add rustfmt clippy rust-src rust-analyzer
 cargo install cargo-expand cargo-nextest cargo-deny cargo-audit \
     cargo-flamegraph cargo-bloat cargo-machete cargo-release \
     samply cargo-watch mdbook
 ```
+::
 
 ## License
 

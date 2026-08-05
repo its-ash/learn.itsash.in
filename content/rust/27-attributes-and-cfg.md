@@ -17,6 +17,7 @@ Attributes are metadata annotations that influence compilation, linting, codegen
 
 ### Conditional Compilation
 
+::code-wrapper{language="rust"}
 ```rust
 #[cfg(target_os = "linux")]
 fn linux_only() {}
@@ -34,6 +35,7 @@ fn with_format() {}
 #[derive(serde::Serialize)]
 struct S;
 ```
+::
 
 ### `cfg` Predicates
 
@@ -49,43 +51,52 @@ struct S;
 
 Apply an attribute conditionally:
 
+::code-wrapper{language="rust"}
 ```rust
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 struct S;
 ```
+::
 
 Equivalent to `#[cfg(feature = "serde")] #[derive(...)]` but cleaner.
 
 ### `#[cfg]` on Modules
 
+::code-wrapper{language="rust"}
 ```rust
 #[cfg(feature = "json")]
 pub mod json;
 ```
+::
 
 The module is only compiled when the feature is on.
 
 ## Compile-Time `cfg!` Macro
 
+::code-wrapper{language="rust"}
 ```rust
 if cfg!(target_os = "linux") {
     println!("linux");
 }
 ```
+::
 
 Returns `true`/`false` at compile time — the dead branch is still type-checked but eliminated at codegen. Use `#[cfg]` for actual code removal.
 
 ## `#[derive(...)]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Foo;
 ```
+::
 
 Standard derives: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`, `Default`. External crates add more (`serde::Serialize`, `thiserror::Error`).
 
 ## Lint Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 #![allow(dead_code)]              // crate-wide
 #[allow(unused)]                  // item-level
@@ -93,6 +104,7 @@ Standard derives: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Or
 #[deny(unused)]
 #[forbid(unused)]                 // can't be overridden downstream
 ```
+::
 
 - `allow`: silence.
 - `warn`: warn (default for many lints).
@@ -109,15 +121,18 @@ Standard derives: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Or
 
 ### Clippy
 
+::code-wrapper{language="rust"}
 ```rust
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_inception)]
 ```
+::
 
 Configure in `Cargo.toml` or source.
 
 ## `#[non_exhaustive]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[non_exhaustive]
 pub enum Event { Login, Logout }
@@ -125,21 +140,25 @@ pub enum Event { Login, Logout }
 #[non_exhaustive]
 pub struct Config { pub host: String }
 ```
+::
 
 - External crates must include a `_ => ...` arm (enum) or use `..Default::default()`/constructor (struct).
 - Allows adding variants/fields in non-breaking minor releases.
 
 ## `#[must_use]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[must_use = "the result indicates success"]
 pub fn try_connect() -> bool { /* ... */ }
 ```
+::
 
 Warns if the return value is ignored. Applied to Result, Option by default.
 
 ## `#[deprecated]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[deprecated(since = "1.2", note = "use new_fn instead")]
 pub fn old_fn() {}
@@ -147,11 +166,13 @@ pub fn old_fn() {}
 #[deprecated(since = "1.2", replacement = "new_fn")]
 pub fn old_fn2() {}
 ```
+::
 
 Emits a warning when used.
 
 ## `#[doc]` Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 /// Docs.
 #[doc = "Inline docs string"]
@@ -165,9 +186,11 @@ pub fn f2() {}
 
 #![doc(html_root_url = "https://docs.rs/my_crate/1.0")]
 ```
+::
 
 ## Inner vs Outer Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 #![allow(dead_code)]   // inner — applies to crate/module
 
@@ -179,46 +202,56 @@ mod m {
     fn bar() {}
 }
 ```
+::
 
 Inner attributes go *inside* the item's braces; outer attributes go before it.
 
 ## `#[path]` for Module Files
 
+::code-wrapper{language="rust"}
 ```rust
 #[path = "other/path.rs"]
 mod my_mod;
 ```
+::
 
 Overrides the default file lookup.
 
 ## `#[link]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[link(name = "crypto", kind = "static")]
 extern "C" { /* ... */ }
 ```
+::
 
 `kind`: `static`, `dylib`, `framework` (macOS). Default is `dylib`.
 
 ## `#[link_section]`, `#[used]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[link_section = ".custom"]
 #[used]
 static DATA: [u8; 4] = [0, 1, 2, 3];
 ```
+::
 
 `#[used]` prevents the compiler from optimizing away the symbol. `#[link_section]` places it in a custom section (advanced/embedded).
 
 ## `#[target_feature]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[target_feature(enable = "avx2")]
 unsafe fn avx2_func() {}
 ```
+::
 
 Enables CPU features for a specific function. Requires `unsafe` (calling on a CPU without the feature is UB).
 
+::code-wrapper{language="rust"}
 ```rust
 #[target_feature(enable = "avx2")]
 #[cfg(target_arch = "x86_64")]
@@ -228,22 +261,27 @@ if is_x86_feature_detected!("avx2") {
     unsafe { fast(); }
 }
 ```
+::
 
 ## `#[cold]`, `#[inline]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[cold]
 fn error_path() {}     // hint: rare path
 ```
+::
 
 ## `#[track_caller]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[track_caller]
 fn caller() -> &'static Location {
     Location::caller()
 }
 ```
+::
 
 Captures the source location of the call site; useful for panic messages and assertion helpers.
 
@@ -253,6 +291,7 @@ Applied by `#[derive(...)]` to prevent lints from firing on generated code.
 
 ## `#[repr(...)]` (Layout)
 
+::code-wrapper{language="rust"}
 ```rust
 #[repr(C)]              // C-compatible layout
 #[repr(transparent)]    // same layout as a single field
@@ -261,20 +300,24 @@ Applied by `#[derive(...)]` to prevent lints from firing on generated code.
 #[repr(align(16))]      // force alignment
 #[repr(C, u8)]           // C layout + explicit enum discriminant width
 ```
+::
 
 ## `#[panic_handler]`
 
 In `no_std` environments:
 
+::code-wrapper{language="rust"}
 ```rust
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! { loop {} }
 ```
+::
 
 Defines the panic behavior for a custom target.
 
 ## `#[global_allocator]`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::alloc::{GlobalAlloc, Layout};
 
@@ -287,14 +330,17 @@ unsafe impl GlobalAlloc for MyAlloc {
 #[global_allocator]
 static A: MyAlloc = MyAlloc;
 ```
+::
 
 Replace Rust's default allocator (e.g., for `jemalloc`).
 
 ## `#[no_std]` and `#![no_std]`
 
+::code-wrapper{language="rust"}
 ```rust
 #![no_std]
 ```
+::
 
 Disables `std`, only `core` (+ optional `alloc`) available. For embedded/wasm/kernels.
 
@@ -305,9 +351,11 @@ Disables `std`, only `core` (+ optional `alloc`) available. For embedded/wasm/ke
 
 ## Feature Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 #![feature(async_fn_traits)]   // nightly
 ```
+::
 
 Unstable features require nightly + explicit `#![feature]`.
 
@@ -324,6 +372,7 @@ Unstable features require nightly + explicit `#![feature]`.
 
 ## `cfg_if!` Macro
 
+::code-wrapper{language="rust"}
 ```rust
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
@@ -335,6 +384,7 @@ cfg_if::cfg_if! {
     }
 }
 ```
+::
 
 Cleaner than stacked `#[cfg]` attributes.
 

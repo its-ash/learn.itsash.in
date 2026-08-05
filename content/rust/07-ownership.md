@@ -13,11 +13,13 @@ Ownership is **the** defining feature of Rust. Every other memory-safety guarant
 - Stack: fast, LIFO, fixed-size values (integers, `bool`, fixed arrays, pointers).
 - Heap: dynamic, slower, runtime-allocated (`Box`, `Vec`, `String`). Ownership primarily concerns heap data.
 
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let s1 = String::from("hi");   // heap allocation
 let s2 = s1;                    // MOVE — s1 is now invalid
 // println!("{s1}");            // ERROR: borrow of moved value
 ```
+::
 
 `String` is `{ ptr, len, capacity }` (stack) pointing to heap bytes. A move copies the stack header and **invalidates the old binding** so you can't have two owners trying to free the same heap memory.
 
@@ -32,14 +34,17 @@ Types whose bits can be trivially copied without invalidating the source are `Co
 
 Non-`Copy` types (heap-ish): `String`, `Vec`, `Box`, `HashMap`, any type with a destructor or that owns a resource.
 
+::code-wrapper{language="rust"}
 ```rust
 let a = 5;
 let b = a;            // i32 is Copy — a is still valid
 println!("{a} {b}");  // fine
 ```
+::
 
 ## Move Semantics in Functions
 
+::code-wrapper{language="rust"}
 ```rust
 fn take(s: String) { println!("{s}"); }
 
@@ -47,20 +52,25 @@ let s = String::from("hi");
 take(s);
 // s is now invalid — moved into the function
 ```
+::
 
 To keep ownership, pass by reference or `clone()`:
 
+::code-wrapper{language="rust"}
 ```rust
 take(s.clone());      // s still owned here
 take(&s);             // pass reference (covered in References chapter)
 ```
+::
 
 ## Returning Ownership
 
+::code-wrapper{language="rust"}
 ```rust
 fn make() -> String { String::from("hi") }
 let s = make();       // ownership moves to caller
 ```
+::
 
 Returning transfers ownership out without a copy. This is the Rust idiom for "constructing" data.
 
@@ -68,6 +78,7 @@ Returning transfers ownership out without a copy. This is the Rust idiom for "co
 
 Destructors run in **reverse declaration order** within a scope:
 
+::code-wrapper{language="rust"}
 ```rust
 {
     let a = String::from("a");
@@ -75,6 +86,7 @@ Destructors run in **reverse declaration order** within a scope:
     // b drops, then a drops
 }
 ```
+::
 
 `Drop` trait's `drop(&mut self)` is the destructor. You usually don't call it manually — use `std::mem::drop(value)` to drop early.
 
@@ -84,6 +96,7 @@ A type with a custom `Drop` cannot be `Copy` (you can't derive both). `Copy` mea
 
 ## Partial Moves
 
+::code-wrapper{language="rust"}
 ```rust
 struct Person { name: String, age: u32 }
 let p = Person { name: "Ada".into(), age: 36 };
@@ -91,6 +104,7 @@ let n = p.name;       // partial move — p.name is moved, p.age still valid
 // println!("{}", p); // ERROR: p partially moved
 println!("{}", p.age); // OK — only name was moved
 ```
+::
 
 You can still access non-moved fields after a partial move.
 
@@ -105,6 +119,7 @@ You can still access non-moved fields after a partial move.
 
 Struct fields drop in **declaration order** (NOT reverse), per RFC 1857. This is a common surprise:
 
+::code-wrapper{language="rust"}
 ```rust
 struct A { /* ... */ }
 impl Drop for A { fn drop(&mut self) { println!("A dropped"); } }
@@ -112,6 +127,7 @@ impl Drop for A { fn drop(&mut self) { println!("A dropped"); } }
 struct Pair { first: A, second: A }
 // when a Pair is dropped: first drops, then second
 ```
+::
 
 Tuple fields drop in order 0, 1, 2, ...
 
@@ -128,21 +144,25 @@ Languages choose between:
 
 ## Common Error: `cannot move out of ...`
 
+::code-wrapper{language="rust"}
 ```rust
 let v = vec![String::from("a"), String::from("b")];
 let first = v[0];   // ERROR: cannot move out of index of Vec
 ```
+::
 
 Indexing returns a reference (`&String`); moving out would leave the `Vec` in an invalid state. Use `v.into_iter().next()` or `mem::take(&mut v[0])` or `v.remove(0)`.
 
 ## `mem::take` and `mem::replace`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::mem;
 let mut s = String::from("hi");
 let taken = mem::take(&mut s);  // s becomes default (empty String), taken gets "hi"
 let prev = mem::replace(&mut s, "bye".into());  // s = "bye", prev = ""
 ```
+::
 
 These let you extract values from behind a mutable reference without invalidating the container.
 

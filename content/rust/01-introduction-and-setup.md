@@ -19,20 +19,24 @@ Rust moves correctness checks to compile time. A program that compiles is far mo
 
 `rustup` is the official toolchain manager.
 
+::code-wrapper{language="bash"}
 ```bash
 # macOS / Linux
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Windows: download rustup-init.exe from https://rustup.rs
 ```
+::
 
 Verify:
 
+::code-wrapper{language="bash"}
 ```bash
 rustc --version
 cargo --version
 rustup --version
 ```
+::
 
 ### Toolchain Components
 
@@ -40,6 +44,7 @@ rustup --version
 - `beta` — next stable candidate.
 - `nightly` — unstable features (e.g., some macros, inline assembly).
 
+::code-wrapper{language="bash"}
 ```bash
 rustup install stable
 rustup install nightly
@@ -47,15 +52,18 @@ rustup default stable
 rustup component add rustfmt clippy rust-src rust-analyzer
 rustup target add wasm32-unknown-unknown   # cross-compile to WebAssembly
 ```
+::
 
 ### Editions
 
 Editions (2015, 2018, 2021, 2024) are opt-in language evolutions. Set in `Cargo.toml`:
 
+::code-wrapper{language="toml"}
 ```toml
 [package]
 edition = "2021"
 ```
+::
 
 Code from older editions keeps compiling; editions are about how the *parser* sees your code, not the runtime behavior. Key 2021 changes: `IntoIterator` for arrays, disjoint closure captures, `panic` macros consistency. Edition 2024 adds `unsafe` attributes on extern blocks, `gen` keyword reservation, etc.
 
@@ -79,6 +87,7 @@ cargo bench              # run benchmarks (requires nightly or criterion)
 
 ### Profile customization
 
+::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml
 [profile.release]
@@ -88,6 +97,7 @@ codegen-units = 1    # better optimization, slower compile
 strip = true         # strip debug symbols
 panic = "abort"      # smaller binary, no unwinding
 ```
+::
 
 ## Project Layout Conventions
 

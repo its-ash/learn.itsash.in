@@ -11,20 +11,24 @@ Pattern matching is Rust's most expressive control-flow construct. This chapter 
 - Function parameters (limited)
 - `for`/`while` loops (destructure each item)
 
+::code-wrapper{language="rust"}
 ```rust
 let (a, b) = (1, 2);
 fn first((a, _): (i32, i32)) -> i32 { a }
 for (i, v) in vec.iter().enumerate() { /* ... */ }
 ```
+::
 
 ## Pattern Forms
 
 ### Literals
 
+::code-wrapper{language="rust"}
 ```rust
 match x { 0 => "zero", 1 => "one", _ => "many" }
 match c { 'a'..='z' | 'A'..='Z' => "letter", _ => "other" }
 ```
+::
 
 ### Wildcards `_`
 
@@ -32,17 +36,20 @@ Matches anything, doesn't bind. Use to ignore.
 
 ### Variables
 
+::code-wrapper{language="rust"}
 ```rust
 match opt {
     Some(x) => println!("{x}"),   // binds x
     None => {},
 }
 ```
+::
 
 A bare identifier binds the value. `_x` also binds but signals "intentionally unused" (suppresses warnings).
 
 ### Or-Patterns `|`
 
+::code-wrapper{language="rust"}
 ```rust
 match x {
     1 | 2 | 3 => "small",
@@ -50,15 +57,19 @@ match x {
     _ => "big",
 }
 ```
+::
 
 Can bind in all alternatives with the same name (or-pattern binding, edition 2021+):
 
+::code-wrapper{language="rust"}
 ```rust
 let (Ok(n) | Err(n)) = result.map(|n| n + 1).map_err(|e| 0);
 ```
+::
 
 ### Ranges `..=`
 
+::code-wrapper{language="rust"}
 ```rust
 match x {
     0..=9 => "digit",
@@ -66,11 +77,13 @@ match x {
     100.. => "big",     // open-ended (unstable on stable for match arms in some forms)
 }
 ```
+::
 
 Ranges work for `char` and numeric types. Use `..` for exclusive range in slice patterns.
 
 ### Destructuring Structs
 
+::code-wrapper{language="rust"}
 ```rust
 struct P { x: i32, y: i32 }
 match p {
@@ -79,9 +92,11 @@ match p {
     P { x, .. } => println!("only x"),     // ignore rest
 }
 ```
+::
 
 ### Destructuring Tuples
 
+::code-wrapper{language="rust"}
 ```rust
 match t {
     (0, _) => "first zero",
@@ -91,9 +106,11 @@ match t {
 let (x, ..) = (1, 2, 3);    // first element only
 let (.., z) = (1, 2, 3);    // last element only
 ```
+::
 
 ### Destructuring Enums
 
+::code-wrapper{language="rust"}
 ```rust
 match e {
     Message::Quit => {},
@@ -104,9 +121,11 @@ match e {
     Message::ChangeColor(r, g, b) => println!("{r},{g},{b}"),
 }
 ```
+::
 
 ### Slice Patterns
 
+::code-wrapper{language="rust"}
 ```rust
 match slice {
     [] => "empty",
@@ -116,11 +135,13 @@ match slice {
     [a, b, c @ ..] => println!("{a}, {b}, rest={:?}", c),
 }
 ```
+::
 
 `..` in slice patterns matches the middle (any length). Limited stable support; `c @ ..` binds the subslice.
 
 ### Reference Patterns
 
+::code-wrapper{language="rust"}
 ```rust
 match &x {
     &0 => "ref to zero",      // matches &0
@@ -133,9 +154,11 @@ match z {
     ref mut r => *r += 1,    // r: &mut i32
 }
 ```
+::
 
 ### Binding Modes (2021)
 
+::code-wrapper{language="rust"}
 ```rust
 match &opt {
     Some(x) => println!("{x}"),   // x: &i32 — auto-ref
@@ -146,11 +169,13 @@ match &mut opt {
     None => {}
 }
 ```
+::
 
 The 2021 edition simplified this — you no longer sprinkle `&`/`&mut` everywhere. The compiler inserts references as needed based on what you match against.
 
 ### `@` Bindings
 
+::code-wrapper{language="rust"}
 ```rust
 match n {
     x @ 0..=9 => "small: {x}",
@@ -158,11 +183,13 @@ match n {
     _ => "big",
 }
 ```
+::
 
 `@` binds the value while also constraining it with a pattern.
 
 ### Match Guards
 
+::code-wrapper{language="rust"}
 ```rust
 match opt {
     Some(x) if x > 0 => "positive",
@@ -170,6 +197,7 @@ match opt {
     None => "none",
 }
 ```
+::
 
 Guards let you add boolean conditions. They *can* prevent exhaustiveness checking — the compiler considers guards potentially false even for matched patterns, so you often need `_ =>` arms.
 
@@ -177,12 +205,14 @@ Guards let you add boolean conditions. They *can* prevent exhaustiveness checkin
 
 Old-school (pre-2021) way to borrow in patterns:
 
+::code-wrapper{language="rust"}
 ```rust
 match opt {
     Some(ref x) => ...,    // x: &i32
     None => ...,
 }
 ```
+::
 
 Still useful when the default binding mode doesn't fit (e.g., matching by value where you want a ref to one field). Modern Rust mostly auto-borrows.
 
@@ -190,10 +220,12 @@ Still useful when the default binding mode doesn't fit (e.g., matching by value 
 
 `..` ignores remaining fields/elements:
 
+::code-wrapper{language="rust"}
 ```rust
 let P { x, .. } = p;     // ignore y
 let (a, .., z) = tuple;  // ignore middle
 ```
+::
 
 `..` can appear once in a struct pattern and once in a tuple/slice pattern. Multiple `..` is an error.
 
@@ -203,6 +235,7 @@ You can't write `Some(x + 1)` as a pattern. Guards exist for that. Patterns are 
 
 ## Exhaustiveness
 
+::code-wrapper{language="rust"}
 ```rust
 fn classify(c: Color) -> &'static str {
     match c {
@@ -211,15 +244,18 @@ fn classify(c: Color) -> &'static str {
     }
 }
 ```
+::
 
 The compiler lists the missing patterns. Add `_` if you genuinely don't care, but be explicit when you can — exhaustiveness is a feature.
 
 ## `matches!` Macro
 
+::code-wrapper{language="rust"}
 ```rust
 let is_some = matches!(opt, Some(_));
 let in_range = matches!(n, 0..=9 | 100..=199);
 ```
+::
 
 Concise one-arm matcher returning `bool`.
 

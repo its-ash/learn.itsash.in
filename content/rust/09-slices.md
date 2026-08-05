@@ -4,11 +4,13 @@ A slice is a **borrowed view** into a contiguous sequence of elements. It's the 
 
 ## The Slice Type
 
+::code-wrapper{language="rust"}
 ```rust
 let arr = [1, 2, 3, 4, 5];
 let s: &[i32] = &arr;          // slice of the whole array
 let part: &[i32] = &arr[1..4]; // [2, 3, 4]
 ```
+::
 
 A slice `&[T]` is a **fat pointer**: `(pointer, length)`. Two `usize` worth of data on the stack. No ownership of the underlying elements.
 
@@ -16,12 +18,14 @@ A slice `&[T]` is a **fat pointer**: `(pointer, length)`. Two `usize` worth of d
 
 `&str` is a slice of UTF-8 bytes — same fat-pointer layout but with the UTF-8 invariant:
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("hello, world");
 let hello: &str = &s[0..5];     // "hello"
 let world: &s[7..12];            // "world"
 let whole: &str = &s[..];        // whole string
 ```
+::
 
 ## Indexing Rules
 
@@ -30,26 +34,33 @@ let whole: &str = &s[..];        // whole string
 - Out-of-bounds slicing **panics** at runtime.
 - Slicing on a **non-char boundary** in a `&str` panics:
 
+::code-wrapper{language="rust"}
 ```rust
 let s = "hi🦀";  // '🦀' is 4 bytes
 let bad = &s[2..4];   // PANIC: byte index 2 is not a char boundary
 ```
+::
 
 To slice by char, use `.chars()` / `.char_indices()`:
 
+::code-wrapper{language="rust"}
 ```rust
 let first_char_str: &str = s.split(0).next().unwrap();
 ```
+::
 
 Wait — `str::split` splits on a pattern. Use `char_indices` for safety:
 
+::code-wrapper{language="rust"}
 ```rust
 let bytes_to = s.char_indices().nth(1).map(|(i, _)| i).unwrap();
 let first: &str = &s[..bytes_to];
 ```
+::
 
 ## Creating Slices
 
+::code-wrapper{language="rust"}
 ```rust
 // From Vec
 let v = vec![1, 2, 3];
@@ -68,6 +79,7 @@ let s: &str = st.as_str();
 // From raw parts (unsafe)
 let s: &[u8] = unsafe { std::slice::from_raw_parts(ptr, len) };
 ```
+::
 
 ## `&[T]` vs `&[T; N]`
 
@@ -77,30 +89,36 @@ let s: &[u8] = unsafe { std::slice::from_raw_parts(ptr, len) };
 
 ## Mutable Slices
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = vec![1, 2, 3];
 let s: &mut [i32] = &mut v[..];
 s[0] = 99;
 ```
+::
 
 One mutable slice at a time (borrow rules still apply).
 
 ## Splitting Slices
 
+::code-wrapper{language="rust"}
 ```rust
 let (left, right) = s.split_first();   // Option<(&T, &[T])>
 let (mut_left, mut_right) = s.split_at_mut(2);   // (&mut [T], &mut [T])
 ```
+::
 
 `split_at_mut` is the canonical way to get two non-overlapping mutable subslices — the compiler can't otherwise prove disjointness.
 
 ## Iteration
 
+::code-wrapper{language="rust"}
 ```rust
 for x in &arr { /* x: &i32 */ }
 for x in &mut arr { /* x: &mut i32 */ }
 for x in arr { /* x: i32 — consumes (Copy ok) */ }
 ```
+::
 
 `&[T]` and `&mut [T]` implement `IntoIterator` yielding `&T` / `&mut T`.
 
@@ -108,6 +126,7 @@ for x in arr { /* x: i32 — consumes (Copy ok) */ }
 
 Take `&[T]` not `&Vec<T>`:
 
+::code-wrapper{language="rust"}
 ```rust
 fn sum(nums: &[i32]) -> i32 {
     nums.iter().sum()
@@ -116,17 +135,20 @@ sum(&vec![1, 2, 3]);
 sum(&[1, 2, 3]);
 sum(&arr);            // works for arrays too
 ```
+::
 
 `&[T]` is the most general borrowed form.
 
 ## `&str` vs `String` API Choice
 
+::code-wrapper{language="rust"}
 ```rust
 fn print(s: &str) { println!("{s}"); }
 print("literal");          // &str
 print(&owned_string);      // &String -> &str
 print(&substring);         // &str
 ```
+::
 
 Always prefer `&str` in function parameters unless you need to grow the string.
 
@@ -142,6 +164,7 @@ Always prefer `&str` in function parameters unless you need to grow the string.
 
 ## Slice Methods Cheat Sheet
 
+::code-wrapper{language="rust"}
 ```rust
 s.len();
 s.is_empty();
@@ -167,6 +190,7 @@ s.rotate_left(1);
 s.copy_within(0..3, 5);
 s.fill(0);
 ```
+::
 
 ## Summary
 

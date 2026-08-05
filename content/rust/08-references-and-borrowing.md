@@ -4,6 +4,7 @@ Ownership is heavy. **References** let you use a value without taking ownership.
 
 ## Shared References `&T`
 
+::code-wrapper{language="rust"}
 ```rust
 fn len(s: &String) -> usize { s.len() }
 
@@ -11,6 +12,7 @@ let s = String::from("hi");
 let l = len(&s);     // borrow — s still owned by caller
 println!("{s} {l}"); // OK
 ```
+::
 
 - `&T` is a **shared, immutable** borrow.
 - You can have **any number** of simultaneous `&T` to the same value.
@@ -18,6 +20,7 @@ println!("{s} {l}"); // OK
 
 ## Mutable References `&mut T`
 
+::code-wrapper{language="rust"}
 ```rust
 fn push(s: &mut String) { s.push('!'); }
 
@@ -25,6 +28,7 @@ let mut s = String::from("hi");
 push(&mut s);
 println!("{s}");   // "hi!"
 ```
+::
 
 - `&mut T` is an **exclusive** borrow.
 - You can have **exactly one** active `&mut T` at a time.
@@ -38,6 +42,7 @@ println!("{s}");   // "hi!"
 
 These rules are checked at compile time. Violations produce `E0502` (aliased mutable borrow) and similar.
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = vec![1, 2, 3];
 let r = &v;
@@ -46,22 +51,26 @@ println!("{r} {r2}");
 let m = &mut v;       // OK — shared refs ended above (NLL)
 m.push(4);
 ```
+::
 
 ## Non-Lexical Lifetimes (NLL)
 
 Pre-2018, references were valid until the end of their lexical scope. NLL shrinks a reference's lifetime to its **last use**:
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = vec![1, 2, 3];
 let r = &v;
 println!("{r}");      // last use of r
 v.push(4);           // OK — r no longer used
 ```
+::
 
 Without NLL this would error. With NLL it compiles.
 
 ## Reference Scope Edge Cases
 
+::code-wrapper{language="rust"}
 ```rust
 let mut v = vec![1, 2, 3];
 let r = &v;
@@ -69,11 +78,13 @@ let r2 = &v;          // multiple shared OK
 v.push(4);            // ERROR: cannot borrow v as mutable because r/r2 alive
 println!("{r} {r2}");
 ```
+::
 
 Here the mutable borrow happens *before* the last use of `r`, so it's rejected.
 
 ## Reborrowing
 
+::code-wrapper{language="rust"}
 ```rust
 let mut s = String::from("hi");
 let r1: &mut String = &mut s;
@@ -82,29 +93,35 @@ r2.push('!');
 // r1 still inactive until r2 dies
 r1.push('!');                       // OK now
 ```
+::
 
 Reborrowing is the mechanism by which you can chain mutable references through function calls:
 
+::code-wrapper{language="rust"}
 ```rust
 fn push_all(dst: &mut Vec<i32>, src: &[i32]) {
     for &x in src { dst.push(x); }   // dst reborrows each call
 }
 ```
+::
 
 ## Lifetimes of References (preview)
 
 The compiler tracks lifetimes. A function returning a reference must tie its output lifetime to an input:
 
+::code-wrapper{language="rust"}
 ```rust
 fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
     if x.len() > y.len() { x } else { y }
 }
 ```
+::
 
 See the Lifetimes chapter for full details.
 
 ## Dangling References — Impossible
 
+::code-wrapper{language="rust"}
 ```rust
 let r;
 {
@@ -113,6 +130,7 @@ let r;
 }
 println!("{r}");
 ```
+::
 
 The borrow checker rejects code that could produce a dangling reference. This is *the* guarantee that prevents use-after-free in safe Rust.
 
@@ -120,41 +138,49 @@ The borrow checker rejects code that could produce a dangling reference. This is
 
 `&mut T` coerces to `&T` when needed:
 
+::code-wrapper{language="rust"}
 ```rust
 fn len(s: &String) -> usize { s.len() }
 let mut s = String::from("hi");
 let l = len(&mut s);     // &mut String coerces to &String
 ```
+::
 
 ## `&str` vs `&String`
 
 `&String` auto-derefs to `&str`. Idiomatic API: take `&str` (more general; accepts `&String`, `&str`, string literals).
 
+::code-wrapper{language="rust"}
 ```rust
 fn greet(name: &str) { println!("hi {name}"); }
 greet("Ada");              // &str
 greet(&String::from("Ada"));   // &String coerces to &str
 ```
+::
 
 ## `Deref` Coercion
 
 Types implementing `Deref` allow chained deref coercions:
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("hi");
 let r: &str = &s;          // &String -> &str via Deref
 let b = Box::new(String::from("hi"));
 let r: &str = &b;          // &Box<String> -> &String -> &str
 ```
+::
 
 This is how `Box`, `Rc`, `String`, `Vec` all play nicely with `&`-APIs.
 
 ## `as_ref` / `as_mut`
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("hi");
 let r: &str = s.as_ref();   // explicit AsRef coercion
 ```
+::
 
 `AsRef<T>` and `AsMut<T>` allow flexible type-erased borrowing.
 
@@ -166,10 +192,12 @@ let r: &str = s.as_ref();   // explicit AsRef coercion
 
 ## Common Error: `cannot borrow ... as mutable, as it is not declared as mut`
 
+::code-wrapper{language="rust"}
 ```rust
 let s = String::from("hi");
 let r = &mut s;    // ERROR: s is not mut
 ```
+::
 
 The variable itself must be `mut` to allow `&mut`.
 

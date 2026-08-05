@@ -1,91 +1,112 @@
-import tailwindcssVite from '@tailwindcss/vite'
-import { readdirSync, statSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import tailwindcssVite from "@tailwindcss/vite";
+import { readdirSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 
-const contentDir = resolve('content')
-const contentRoutes: string[] = []
+const contentDir = resolve("content");
+const contentRoutes: string[] = [];
 
 for (const entry of readdirSync(contentDir)) {
-  const entryPath = join(contentDir, entry)
+  const entryPath = join(contentDir, entry);
   if (!statSync(entryPath).isDirectory()) {
-    if (entry.endsWith('.md') && entry !== 'index.md') {
-      contentRoutes.push('/' + entry.replace(/\.md$/, ''))
+    if (entry.endsWith(".md") && entry !== "index.md") {
+      contentRoutes.push("/" + entry.replace(/\.md$/, ""));
     }
-    continue
+    continue;
   }
   for (const file of readdirSync(entryPath)) {
-    if (!file.endsWith('.md')) continue
-    const slug = file.replace(/\.md$/, '')
-    if (slug === 'index') {
-      contentRoutes.push('/' + entry)
+    if (!file.endsWith(".md")) continue;
+    const slug = file.replace(/\.md$/, "");
+    if (slug === "index") {
+      contentRoutes.push("/" + entry);
     } else {
-      contentRoutes.push('/' + entry + '/' + slug)
+      contentRoutes.push("/" + entry + "/" + slug);
     }
   }
 }
 
 export default defineNuxtConfig({
   modules: [
-    '@nuxt/content',
-    '@nuxt/icon',
-    '@nuxt/image',
-    '@nuxt/scripts',
-    '@nuxtjs/google-fonts',
+    "@nuxt/content",
+    "@nuxt/icon",
+    "@nuxt/image",
+    "@nuxt/scripts",
+    "@nuxtjs/google-fonts",
   ],
   ssr: true,
   devtools: { enabled: false },
-  compatibilityDate: '2024-04-03',
+  compatibilityDate: "2024-04-03",
   app: {
-    baseURL: '/',
-    buildAssetsDir: '/_nuxt/',
+    baseURL: "/",
+    buildAssetsDir: "/_nuxt/",
   },
   nitro: {
     output: {
-      publicDir: 'docs',
+      publicDir: "docs",
     },
     rollupConfig: {
       onwarn(warning, defaultHandler) {
-        if (warning.code === 'UNUSED_EXTERNAL_IMPORT' || warning.code === 'CIRCULAR_DEPENDENCY') return
-        defaultHandler(warning)
+        if (
+          warning.code === "UNUSED_EXTERNAL_IMPORT" ||
+          warning.code === "CIRCULAR_DEPENDENCY"
+        )
+          return;
+        defaultHandler(warning);
       },
     },
     prerender: {
       crawlLinks: true,
-      routes: [
-        '/',
-        ...contentRoutes,
-        '/404.html',
-      ],
+      routes: ["/", ...contentRoutes, "/404.html"],
       failOnError: false,
     },
   },
   content: {
     build: {
       markdown: {
-        highlight: false,
+        highlight: {
+          theme: {
+            default: "github-light",
+            "github-dark": "github-dark",
+          },
+          langs: [
+            "rust",
+            "python",
+            "javascript",
+            "typescript",
+            "bash",
+            "json",
+            "yaml",
+            "markdown",
+            "sql",
+            "ini",
+            "xml",
+            "css",
+            "shell",
+            "dockerfile",
+          ],
+        },
       },
     },
   },
   build: {
     transpile: [],
   },
-  css: ['~/assets/css/tailwind.css', '~/assets/css/main.css'],
+  css: ["~/assets/css/tailwind.css", "~/assets/css/main.css"],
   vite: {
     plugins: [tailwindcssVite()],
   },
   googleFonts: {
     families: {
-      'Playfair Display': [400, 500, 700, 900],
-      'Source Serif 4': [400, 500, 600],
-      'JetBrains Mono': [400, 500],
+      "Playfair Display": [400, 500, 700, 900],
+      "Source Serif 4": [400, 500, 600],
+      "JetBrains Mono": [400, 500],
     },
-    display: 'swap',
+    display: "swap",
     preconnect: true,
   },
   icon: {
-    serverBundle: 'local',
+    serverBundle: "local",
     clientBundle: {
       scan: true,
     },
   },
-})
+});

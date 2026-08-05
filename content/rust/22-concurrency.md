@@ -19,6 +19,7 @@ Examples:
 
 ## Spawning Threads
 
+::code-wrapper{language="rust"}
 ```rust
 use std::thread;
 use std::time::Duration;
@@ -37,6 +38,7 @@ for i in 0..5 {
 
 handle.join().unwrap();
 ```
+::
 
 - `thread::spawn` returns a `JoinHandle<T>`.
 - `.join()` blocks until the thread exits, returning `Result<T, Box<dyn Any + Send>>` (panic propagates as `Err`).
@@ -44,6 +46,7 @@ handle.join().unwrap();
 
 ## Moving Data into Threads
 
+::code-wrapper{language="rust"}
 ```rust
 let data = vec![1, 2, 3];
 let handle = thread::spawn(move || {
@@ -52,11 +55,13 @@ let handle = thread::spawn(move || {
 // data not accessible here
 handle.join().unwrap();
 ```
+::
 
 `move` is almost always required — captures must outlive the thread (`'static`).
 
 ## Shared State with `Arc` + `Mutex`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -75,11 +80,13 @@ for _ in 0..10 {
 for h in handles { h.join().unwrap(); }
 println!("{:?}", counter);   // 10
 ```
+::
 
 `Arc` for shared ownership; `Mutex` for synchronized mutation. Lock guards auto-unlock on drop (RAII).
 
 ## `RwLock` for Read-Heavy Workloads
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::RwLock;
 let lock = RwLock::new(0);
@@ -91,11 +98,13 @@ drop(r1); drop(r2);
 let mut w = lock.write().unwrap();
 *w += 1;
 ```
+::
 
 ## Channel — Message Passing
 
 `std::sync::mpsc` (multi-producer, single-consumer):
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::mpsc;
 use std::thread;
@@ -110,15 +119,18 @@ let h = thread::spawn(move || {
 tx.send(42).unwrap();
 h.join().unwrap();
 ```
+::
 
 ### Multi-Producer
 
+::code-wrapper{language="rust"}
 ```rust
 let (tx, rx) = mpsc::channel();
 let tx2 = tx.clone();   // multiple senders
 thread::spawn(move || tx.send(1).unwrap());
 thread::spawn(move || tx2.send(2).unwrap());
 ```
+::
 
 ### Sync vs Async Channels
 
@@ -129,15 +141,18 @@ thread::spawn(move || tx2.send(2).unwrap());
 
 `crossbeam-channel` is more featureful: bounded/unbounded, select, after/timeout, easy multi-consumer. Often preferred over `std::mpsc`.
 
+::code-wrapper{language="rust"}
 ```rust
 let (s, r) = crossbeam_channel::unbounded();
 s.send(5).unwrap();
 ```
+::
 
 ## `park` and `unpark`
 
 Threads can be paused and woken:
 
+::code-wrapper{language="rust"}
 ```rust
 let h = thread::spawn(|| {
     thread::park();
@@ -146,11 +161,13 @@ let h = thread::spawn(|| {
 h.thread().unpark();
 h.join().unwrap();
 ```
+::
 
 Low-level synchronization — usually use channels, `Condvar`, or `Barrier`.
 
 ## `Condvar`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::{Arc, Mutex, Condvar};
 
@@ -172,35 +189,42 @@ let h = thread::spawn(move || {
 
 h.join().unwrap();
 ```
+::
 
 The classic pattern: wait inside the lock; `wait` atomically releases + sleeps + reacquires.
 
 ## `Barrier`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::Barrier;
 let barrier = Arc::new(Barrier::new(3));
 // each thread calls barrier.wait(); all unblock once 3 reach it
 ```
+::
 
 ## `Once` and `OnceLock`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::OnceLock;
 static INIT: OnceLock<Vec<u8>> = OnceLock::new();
 let data = INIT.get_or_init(|| load_config());
 ```
+::
 
 ## Atomic Types
 
 `std::sync::atomic`: `AtomicBool`, `AtomicI32`, `AtomicUsize`, `AtomicPtr<T>`, etc.
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::atomic::{AtomicUsize, Ordering};
 let n = AtomicUsize::new(0);
 n.fetch_add(1, Ordering::SeqCst);
 n.compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed);
 ```
+::
 
 ### Orderings
 
@@ -214,6 +238,7 @@ Use `SeqCst` if unsure; switch to `Relaxed`/`Acquire`/`Release` once you underst
 
 ## Thread-Local Storage
 
+::code-wrapper{language="rust"}
 ```rust
 use std::cell::RefCell;
 thread_local! {
@@ -222,6 +247,7 @@ thread_local! {
 
 COUNTER.with(|c| { *c.borrow_mut() += 1; });
 ```
+::
 
 Per-thread state, no synchronization needed.
 
@@ -234,11 +260,13 @@ For CPU-bound work, threads or `rayon` (data parallelism) are appropriate. For m
 
 ## `rayon` for Data Parallelism
 
+::code-wrapper{language="rust"}
 ```rust
 use rayon::prelude::*;
 let v: Vec<i32> = (1..=100).collect();
 let sum: i32 = v.par_iter().map(|x| x * 2).sum();
 ```
+::
 
 `par_iter()` runs the iteration across a thread pool. Drop-in replacement for sequential iterators in many cases.
 

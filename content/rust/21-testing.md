@@ -10,6 +10,7 @@ Rust's testing is built into the language and `cargo`. There are three layers: u
 
 ## Writing a Unit Test
 
+::code-wrapper{language="rust"}
 ```rust
 pub fn add(a: i32, b: i32) -> i32 { a + b }
 
@@ -34,6 +35,7 @@ mod tests {
     }
 }
 ```
+::
 
 - `#[test]` marks a test function.
 - `assert!`, `assert_eq!`, `assert_ne!`.
@@ -42,6 +44,7 @@ mod tests {
 
 ## Running Tests
 
+::code-wrapper{language="bash"}
 ```bash
 cargo test                 # all tests
 cargo test add             # filter by name substring
@@ -52,6 +55,7 @@ cargo test -- --test-threads=4
 cargo test --release       # tests in release mode
 cargo test -- --ignored    # run #[ignore] tests
 ```
+::
 
 ## Integration Tests
 
@@ -60,6 +64,7 @@ tests/
 └── integration_test.rs
 ```
 
+::code-wrapper{language="rust"}
 ```rust
 use my_crate::add;
 
@@ -68,6 +73,7 @@ fn integration_add() {
     assert_eq!(add(2, 3), 5);
 }
 ```
+::
 
 - Separate crate; can only use `pub` API.
 - Multiple files in `tests/` become separate test binaries.
@@ -85,6 +91,7 @@ Files in `tests/common/` (without a top-level test fn) are helpers, not test bin
 
 ## Doc Tests
 
+::code-wrapper{language="rust"}
 ```rust
 /// Adds two numbers.
 ///
@@ -96,23 +103,27 @@ Files in `tests/common/` (without a top-level test fn) are helpers, not test bin
 /// ```
 pub fn add(a: i32, b: i32) -> i32 { a + b }
 ```
+::
 
 - Compiled and run by `cargo test`.
 - Must compile as a separate binary.
 - Hidden imports via `#`:
 
+::code-wrapper{language="rust"}
 ```rust
 /// ```
 /// # use my_crate::add;
 /// assert_eq!(add(2, 2), 4);
 /// ```
 ```
+::
 
 The `#` line is hidden from rendered docs but included when testing.
 
 ### Skipping Doc Tests
 
-````text
+`::code-wrapper{language="text"}
+```text
 /// ```no_run
 /// loop { /* don't actually run */ }
 /// ```
@@ -120,12 +131,14 @@ The `#` line is hidden from rendered docs but included when testing.
 /// ```ignore
 /// let x = todo!();
 /// ```
-````
+```
+::`
 
 `no_run` compiles but doesn't execute. `ignore` skips compilation. `compile_fail` asserts the snippet fails to compile (negative tests). `rust,no_run` etc. customize.
 
 ## Assertions Cheat Sheet
 
+::code-wrapper{language="rust"}
 ```rust
 assert!(cond);
 assert!(cond, "custom message {x}");
@@ -135,11 +148,13 @@ assert_ne!(a, b);
 debug_assert!(cond);          // only in debug builds
 debug_assert_eq!(a, b);
 ```
+::
 
 For `Result`-returning assertions, use the `matches` style or `.unwrap()`/`?` with `Result`-returning tests.
 
 ## `#[should_panic]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[test]
 #[should_panic]
@@ -149,19 +164,23 @@ fn panics() { panic!(); }
 #[should_panic(expected = "exact substring")]
 fn panics_specifically() { panic!("exact substring here"); }
 ```
+::
 
 ## `#[ignore]`
 
+::code-wrapper{language="rust"}
 ```rust
 #[test]
 #[ignore = "slow, run manually"]
 fn slow_test() { /* ... */ }
 ```
+::
 
 Skipped unless `--ignored` is passed.
 
 ## Asynchronous Tests
 
+::code-wrapper{language="rust"}
 ```rust
 #[tokio::test]
 async fn async_test() {
@@ -169,11 +188,13 @@ async fn async_test() {
     assert_eq!(v, 5);
 }
 ```
+::
 
 Use the runtime's test attribute (`tokio::test`, `async_std::test`).
 
 ## Benchmark Tests (unstable)
 
+::code-wrapper{language="rust"}
 ```rust
 // requires nightly or use the `criterion` crate
 #![feature(test)]
@@ -185,6 +206,7 @@ fn bench_add(b: &mut Bencher) {
     b.iter(|| add(test::black_box(2), test::black_box(2)));
 }
 ```
+::
 
 `criterion` is the de facto stable benchmarking tool.
 
@@ -192,6 +214,7 @@ fn bench_add(b: &mut Bencher) {
 
 Use `proptest` or `quickcheck`:
 
+::code-wrapper{language="rust"}
 ```rust
 proptest! {
     #[test]
@@ -200,11 +223,13 @@ proptest! {
     }
 }
 ```
+::
 
 ## Snapshot Testing
 
 Use `insta`:
 
+::code-wrapper{language="rust"}
 ```rust
 #[test]
 fn snapshot() {
@@ -212,6 +237,7 @@ fn snapshot() {
     insta::assert_snapshot!(v);
 }
 ```
+::
 
 ## Test Organization Tips
 
@@ -233,10 +259,12 @@ fn snapshot() {
 
 ## Coverage
 
+::code-wrapper{language="bash"}
 ```bash
 cargo install cargo-tarpaulin
 cargo tarpaulin
 ```
+::
 
 Or `cargo-llvm-cov` for source-based coverage.
 
@@ -244,12 +272,14 @@ Or `cargo-llvm-cov` for source-based coverage.
 
 Use `cargo-fuzz` (libFuzzer-based) for finding panics/UB:
 
+::code-wrapper{language="bash"}
 ```bash
 cargo install cargo-fuzz
 cargo fuzz add parse_target
 # edit fuzz/fuzz_targets/parse_target.rs
 cargo fuzz run parse_target
 ```
+::
 
 ## `Test Traits`: `Debug` for `assert_eq!`
 

@@ -8,11 +8,13 @@ Most languages have subtyping via inheritance (Cat : Animal). Rust's subtyping i
 
 `'static` is a subtype of `'a` for any `'a`: a `&'static str` can be used where `&'a str` is expected.
 
+::code-wrapper{language="rust"}
 ```rust
 fn takes_str<'a>(s: &'a str) { /* ... */ }
 let s: &'static str = "hi";
 takes_str(s);    // OK: 'static <: 'a
 ```
+::
 
 ## Variance
 
@@ -39,6 +41,7 @@ Variance describes how subtyping of parameters affects subtyping of the construc
 ### Why does variance matter?
 
 If `&'a mut T` were covariant in `T`:
+::code-wrapper{language="rust"}
 ```rust
 let mut s = String::from("hi");
 let r: &mut &'static str = &mut s;    // would-be covariance
@@ -46,6 +49,7 @@ let short = String::from("bye");
 *r = &short;                          // writes &'short str into a &'static slot
 println!("{}", s);                    // s dangling!
 ```
+::
 Invariance in `T` for `&mut T` is what prevents this. The compiler rejects the first assignment.
 
 ### Practical Implication
@@ -54,23 +58,27 @@ When you get a weird lifetime error, invariance is often the cause. The fix is u
 
 ## Higher-Rank Trait Bounds (HRTBs)
 
+::code-wrapper{language="rust"}
 ```rust
 fn foo<F>(f: F) where F: for<'a> Fn(&'a str) { /* ... */ }
 ```
+::
 
 `for<'a>` means "for all possible lifetimes `'a`". The function `f` must accept any borrowed `&str`, not just one with a specific lifetime.
 
 ### Where HRTBs Appear
 
 - Closures that take references without explicit lifetimes:
-  ```rust
+  ::code-wrapper{language="rust"}
+```rust
   let f: impl for<'a> Fn(&'a str) = |s| println!("{s}");
   ```
 - `Fn`/`FnMut`/`FnOnce` implicitly use HRTB on their arguments.
 
 ### Common Pattern
 
-```rust
+```
+::rust
 fn apply_any(f: impl for<'a> Fn(&'a [u8])) {
     let buf = [0u8; 16];
     f(&buf);
@@ -79,6 +87,7 @@ fn apply_any(f: impl for<'a> Fn(&'a [u8])) {
 
 ## Associated Types vs Generics
 
+::code-wrapper{language="rust"}
 ```rust
 // Associated type — impl picks:
 trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; }
@@ -86,6 +95,7 @@ trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; }
 // Generic — caller picks:
 trait From<T> { fn from(value: T) -> Self; }
 ```
+::
 
 Use associated types when each impl has *one* natural type. Use generics when multiple impls can coexist (`From<&str>`, `From<String>`).
 
@@ -119,10 +129,12 @@ Workarounds for non-object-safe traits:
 
 `Send`, `Sync`, `Unpin`, `Sized` are auto traits — the compiler auto-implements them based on constituent types.
 
+::code-wrapper{language="rust"}
 ```rust
 struct MyType(Rc<u8>);   // not Send, not Sync because Rc isn't
 struct MyType2(Arc<u8>); // Send + Sync
 ```
+::
 
 You can opt out or opt in via `unsafe impl`/`impl !Send` (negative impls are unstable).
 
@@ -133,13 +145,16 @@ Most types are `Sized` (known size at compile time). Exceptions are `?Sized` typ
 
 Generic parameters default to `Sized`; relax with `T: ?Sized`:
 
+::code-wrapper{language="rust"}
 ```rust
 fn first_byte(s: &str) -> u8 { /* str is !Sized but you can take &str */ }
 fn foo<T: ?Sized>(x: &T) { /* works for unsized T */ }
 ```
+::
 
 ## `PhantomData<T>` — Marker for Unused Type Params
 
+::code-wrapper{language="rust"}
 ```rust
 use std::marker::PhantomData;
 
@@ -148,6 +163,7 @@ struct Tagged<Tag, T> {
     _tag: PhantomData<Tag>,
 }
 ```
+::
 
 `PhantomData` is zero-sized but tells the compiler about ownership/variance:
 - `PhantomData<T>` makes your type behave like it owns a `T` for drop-checking and variance.
@@ -159,12 +175,14 @@ Picking the right `PhantomData` variant is critical for unsafe collections.
 
 ## Newtype Pattern
 
+::code-wrapper{language="rust"}
 ```rust
 struct Meters(f64);
 struct Miles(f64);
 
 impl Meters { fn to_miles(self) -> Miles { Miles(self.0 / 1609.344) } }
 ```
+::
 
 - Zero-cost wrapper for type safety.
 - No accidental mixing: `Meters(5.0) + Miles(1.0)` is a type error.
@@ -174,6 +192,7 @@ impl Meters { fn to_miles(self) -> Miles { Miles(self.0 / 1609.344) } }
 
 With traits and associated types:
 
+::code-wrapper{language="rust"}
 ```rust
 trait Peano { type Next; }
 struct Zero;
@@ -185,11 +204,13 @@ impl<T: Peano> Peano for Succ<T> { type Next = Succ<Succ<T>>; }
 type One = <Zero as Peano>::Next;
 type Two = <One as Peano>::Next;
 ```
+::
 
 Practical for `typenum` (compile-time integers), dimension tracking (`uom`), and `frunk`'s HList.
 
 ## Const Generics (Deep)
 
+::code-wrapper{language="rust"}
 ```rust
 struct Arr<const N: usize> { data: [u8; N] }
 
@@ -199,6 +220,7 @@ impl<const N: usize> Arr<N> {
 
 fn sum<const N: usize>(arr: &[i32; N]) -> i32 { arr.iter().sum() }
 ```
+::
 
 ### Limits
 
@@ -210,12 +232,14 @@ fn sum<const N: usize>(arr: &[i32; N]) -> i32 { arr.iter().sum() }
 
 Specialization lets you provide a more specific impl overriding a general one:
 
+::code-wrapper{language="rust"}
 ```rust
 #![feature(min_specialization)]
 trait Pick { fn pick(&self); }
 impl<T> Pick for T { default fn pick(&self) { println!("default"); } }
 impl Pick for String { fn pick(&self) { println!("string"); } }  // specialized
 ```
+::
 
 Unstable. Avoid in production. Workarounds: macros, separate traits, or `auto impl`-style delegation.
 
@@ -230,30 +254,36 @@ The lack of HKTs limits abstracting over `Option`, `Vec`, `Result` uniformly. Mo
 
 ## GATs (Generic Associated Types)
 
+::code-wrapper{language="rust"}
 ```rust
 trait LendingIterator {
     type Item<'a> where Self: 'a;
     fn next(&mut self) -> Option<Self::Item<'_>>;
 }
 ```
+::
 
 Associated types that themselves have generic params (lifetimes/types). Stable since 1.65. Lets you express borrowing iterators, async traits, etc.
 
 ## Subtyping and `Cow`
 
+::code-wrapper{language="rust"}
 ```rust
 fn process<'a>(s: Cow<'a, str>) { /* ... */ }
 process("static".into());      // Cow::Borrowed(&'static str)
 process(String::from("x").into());   // Cow::Owned
 ```
+::
 
 `Cow<'a, B>` is variant in `'a` (covariant), so `Cow<'static, str>` is a subtype of `Cow<'a, str>`.
 
 ## Negative Trait Impls
 
+::code-wrapper{language="rust"}
 ```rust
 impl !Send for MyType {}
 ```
+::
 
 Unstable; you can opt out of auto traits today via `PhantomData<*const ()>` or `Rc<()>`.
 

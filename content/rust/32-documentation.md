@@ -4,6 +4,7 @@ Documentation is part of the Rust culture. `rustdoc` produces HTML docs from `//
 
 ## Doc Comments
 
+::code-wrapper{language="rust"}
 ```rust
 /// Adds two integers.
 ///
@@ -21,15 +22,18 @@ Documentation is part of the Rust culture. `rustdoc` produces HTML docs from `//
 /// Panics if `a + b` overflows in debug mode.
 pub fn add(a: i32, b: i32) -> i32 { a + b }
 ```
+::
 
 - `///` for items (functions, types, modules).
 - `//!` for the enclosing item (crate root, module — used for top-level docs).
 
+::code-wrapper{language="rust"}
 ```rust
 //! # My Crate
 //!
 //! This crate provides wonderful things.
 ```
+::
 
 ## Standard Sections
 
@@ -47,21 +51,26 @@ The order convention: Examples, Panics, Errors, Safety.
 
 ## Cross-References
 
+::code-wrapper{language="rust"}
 ```rust
 /// See [`std::fs::read`] for reading a file.
 /// Uses [`OtherType::method`] internally.
 /// Implements [`MyTrait`].
 ```
+::
 
 Backticks create hyperlinks. rustdoc resolves intra-doc links.
 
+::code-wrapper{language="rust"}
 ```rust
 /// [`OtherType`] is in scope.
 /// [`crate::sub::Thing`]
 ```
+::
 
 ## Building Docs
 
+::code-wrapper{language="bash"}
 ```bash
 cargo doc                  # generate for the crate
 cargo doc --open           # generate and open in browser
@@ -69,17 +78,20 @@ cargo doc --no-deps        # skip dependencies
 cargo doc --workspace      # all crates in workspace
 cargo doc --document-private-items  # include private items (rare)
 ```
+::
 
 Output goes to `target/doc/`.
 
 ## Doc Tests (Recap)
 
+::code-wrapper{language="rust"}
 ```rust
 /// ```
 /// use my_crate::add;
 /// assert_eq!(add(2, 2), 4);
 /// ```
 ```
+::
 
 - `cargo test` runs them.
 - `no_run`: compile but don't execute.
@@ -88,15 +100,18 @@ Output goes to `target/doc/`.
 - `rust,edition2018`: pin edition.
 - `# use ...` lines are hidden in rendered docs but executed in tests.
 
+::code-wrapper{language="rust"}
 ```rust
 /// ```
 /// # use my_crate::add;
 /// assert_eq!(add(2, 2), 4);
 /// ```
 ```
+::
 
 ## Doc Attributes
 
+::code-wrapper{language="rust"}
 ```rust
 #[doc(hidden)]            // hide from docs (still public)
 #[doc(alias = "another")] // search alias
@@ -105,20 +120,24 @@ Output goes to `target/doc/`.
 #[doc(no_inline)]        // don't inline
 #[doc(cfg(feature = "..."))]  // show "Available on feature only" banner
 ```
+::
 
 ## Lints
 
+::code-wrapper{language="rust"}
 ```rust
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 #![warn(rustdoc::broken_intra_doc_links)]
 #![warn(rustdoc::missing_crate_level_docs)]
 ```
+::
 
 `missing_docs` forces every public item to have docs — good for libraries.
 
 ## Crate-Level Docs
 
+::code-wrapper{language="rust"}
 ```rust
 // src/lib.rs
 //! # My Crate
@@ -130,14 +149,17 @@ Output goes to `target/doc/`.
 //! use my_crate::*;
 //! ```
 ```
+::
 
 Include a quick-start at the crate root.
 
 ## `README.md` Inclusion
 
+::code-wrapper{language="rust"}
 ```rust
 #![doc = include_str!("../README.md")]
 ```
+::
 
 Treats the README as crate-level docs. Common for projects that want one source of truth.
 
@@ -155,6 +177,7 @@ Treats the README as crate-level docs. Common for projects that want one source 
 
 ### Good
 
+::code-wrapper{language="rust"}
 ```rust
 /// Computes the Fibonacci number at position `n`.
 ///
@@ -173,16 +196,20 @@ Treats the README as crate-level docs. Common for projects that want one source 
 /// Panics if `n` is large enough to overflow `u64`.
 pub fn fib(n: u64) -> u64 { /* ... */ 0 }
 ```
+::
 
 ### Bad
 
+::code-wrapper{language="rust"}
 ```rust
 /// fib function
 pub fn fib(n: u64) -> u64 { 0 }
 ```
+::
 
 ## Hidden Examples for Complex Setup
 
+::code-wrapper{language="rust"}
 ```rust
 /// ```
 /// # use std::sync::Arc;
@@ -191,6 +218,7 @@ pub fn fib(n: u64) -> u64 { 0 }
 /// let _v = state.lock().unwrap();
 /// ```
 ```
+::
 
 Setup lines prefixed with `#` are hidden in the rendered doc but executed.
 
@@ -206,11 +234,13 @@ Setup lines prefixed with `#` are hidden in the rendered doc but executed.
 
 For guides/books, `mdbook` is the standard tool:
 
+::code-wrapper{language="bash"}
 ```bash
 cargo install mdbook
 mdbook init docs
 mdbook serve docs
 ```
+::
 
 Many major Rust projects (`rust-lang/rust`, `tokio`, `bevy`) have mdbook guides alongside rustdoc.
 
@@ -218,22 +248,26 @@ Many major Rust projects (`rust-lang/rust`, `tokio`, `bevy`) have mdbook guides 
 
 - **docs.rs**: auto-builds and hosts docs for crates published to crates.io. Configure with `[package.metadata.docs.rs]`:
 
+::code-wrapper{language="toml"}
 ```toml
 [package.metadata.docs.rs]
 features = ["full", "all-feature-flags"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 ```
+::
 
 - **GitHub Pages**: deploy `target/doc/` via Actions.
 - **`cargo-docs-rs`**: preview docs.rs rendering locally.
 
 ## Cross-Crate Doc Links
 
+::code-wrapper{language="rust"}
 ```rust
 /// See the [`serde`] crate for serialization.
 /// See [`tokio::sync::mpsc`] for channels.
 ```
+::
 
 rustdoc can resolve links to external crates if they're in your `Cargo.toml`.
 

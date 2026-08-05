@@ -92,10 +92,62 @@
 .md-prose code {
   font-family: var(--font-mono);
   @apply px-1.5 py-0.5 text-[0.85em] font-medium text-c-fg;
+  font-size: 1.2rem;
 }
 
 .md-prose pre {
   @apply mb-6;
+}
+
+.md-prose pre.shiki {
+  overflow-x: auto;
+  border: 1px solid var(--c-fg);
+  padding: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.md-prose .code-wrapper pre.shiki {
+  border: none;
+  border-top: 0;
+  margin: 0;
+}
+
+.md-prose pre.shiki code {
+  font-family: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.md-prose pre.shiki .line {
+  display: block;
+}
+
+.md-prose pre.shiki span {
+  background: transparent;
+}
+
+.md-prose pre.shiki span {
+  color: var(--shiki-default) !important;
+}
+
+html.dark .md-prose pre.shiki span {
+  color: var(--shiki-github-dark) !important;
+}
+
+html.warm .md-prose pre.shiki span {
+  color: var(--shiki-default) !important;
+}
+
+.md-prose pre.shiki {
+  background: var(--c-bg);
+}
+
+html.dark .md-prose pre.shiki {
+  background: var(--c-bg);
 }
 
 .md-prose a code {

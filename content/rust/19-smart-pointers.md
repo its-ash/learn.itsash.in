@@ -4,10 +4,12 @@ Smart pointers own data and provide extra behavior beyond references. They're th
 
 ## `Box<T>` — Heap Allocation
 
+::code-wrapper{language="rust"}
 ```rust
 let b = Box::new(5);
 let s = Box::new(String::from("hi"));
 ```
+::
 
 - Allocates on the heap; owned.
 - Single owner; dropped when out of scope.
@@ -20,23 +22,28 @@ let s = Box::new(String::from("hi"));
 - Trait objects (`Box<dyn Trait>`) — unsized types need a wide pointer.
 - Sending owned data to a thread (`Box::new` makes it `'static`).
 
+::code-wrapper{language="rust"}
 ```rust
 enum List {
     Cons(i32, Box<List>),   // recursive — needs Box
     Nil,
 }
 ```
+::
 
 ### `Box::leak` — Permanent Reference
 
+::code-wrapper{language="rust"}
 ```rust
 let leaked: &'static mut [u8] = Box::leak(vec![1, 2, 3].into_boxed_slice());
 ```
+::
 
 Leaks forever; useful for one-time configs but a real memory leak.
 
 ## `Rc<T>` — Reference Counted (single-threaded)
 
+::code-wrapper{language="rust"}
 ```rust
 use std::rc::Rc;
 let a = Rc::new(String::from("hi"));
@@ -44,6 +51,7 @@ let b = Rc::clone(&a);    // increments refcount, doesn't copy
 let c = a.clone();         // same
 // a, b, c all share the same String
 ```
+::
 
 - Multiple owners in a **single thread**.
 - Atomic increment/decrement of a refcount.
@@ -55,30 +63,36 @@ let c = a.clone();         // same
 
 `Rc<T>` gives shared read access. To mutate shared state, wrap in `RefCell`:
 
+::code-wrapper{language="rust"}
 ```rust
 let shared = Rc::new(RefCell::new(vec![1, 2, 3]));
 shared.borrow_mut().push(4);
 ```
+::
 
 ### Weak References
 
+::code-wrapper{language="rust"}
 ```rust
 use std::rc::{Rc, Weak};
 let strong = Rc::new(5);
 let weak: Weak<i32> = Rc::downgrade(&strong);
 if let Some(v) = weak.upgrade() { /* ... */ }
 ```
+::
 
 `Weak` doesn't count toward ownership; avoids cycles. Crucial for parent/child links (e.g., GUI trees, linked structures).
 
 ## `Arc<T>` — Atomic Reference Counted (thread-safe)
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::Arc;
 let a = Arc::new(vec![1, 2, 3]);
 let b = Arc::clone(&a);
 std::thread::spawn(move || println!("{:?}", b));
 ```
+::
 
 - Thread-safe version of `Rc` (atomic ops, slower).
 - `Send` and `Sync` if `T: Send + Sync`.
@@ -92,12 +106,14 @@ std::thread::spawn(move || println!("{:?}", b));
 
 ## Cycles and Memory Leaks
 
+::code-wrapper{language="rust"}
 ```rust
 let a = Rc::new(RefCell::new(None));
 let b = Rc::new(RefCell::new(None));
 *a.borrow_mut() = Some(Rc::clone(&b));
 *b.borrow_mut() = Some(Rc::clone(&a));    // CYCLE: refcount never hits 0
 ```
+::
 
 `Rc`/`Arc` cycles leak. Use `Weak` for back-references. Rust can't prevent this; design matters.
 
@@ -105,6 +121,7 @@ let b = Rc::new(RefCell::new(None));
 
 `Rc`/`Arc` give shared ownership but no mutation. Wrap the inner in `RefCell`/`Mutex`:
 
+::code-wrapper{language="rust"}
 ```rust
 // single-threaded
 let shared = Rc::new(RefCell::new(0));
@@ -114,15 +131,18 @@ let shared = Rc::new(RefCell::new(0));
 let shared = Arc::new(Mutex::new(0));
 *shared.lock().unwrap() += 1;
 ```
+::
 
 ## `Cell<T>` — Copy-Type Interior Mutability
 
+::code-wrapper{language="rust"}
 ```rust
 use std::cell::Cell;
 let c = Cell::new(5);
 c.set(10);
 let v = c.get();          // requires T: Copy
 ```
+::
 
 - Zero-cost interior mutability for `Copy` types.
 - No borrow checking (just stores the value).
@@ -131,6 +151,7 @@ let v = c.get();          // requires T: Copy
 
 ## `RefCell<T>` — Borrow-Checked Interior Mutability
 
+::code-wrapper{language="rust"}
 ```rust
 use std::cell::RefCell;
 let c = RefCell::new(vec![1, 2, 3]);
@@ -138,6 +159,7 @@ c.borrow_mut().push(4);
 let r = c.borrow();      // immutable borrow
 println!("{:?}", r);
 ```
+::
 
 - Moves borrow checking to **runtime**: `borrow()` and `borrow_mut()` track active borrows.
 - Multiple `borrow()` OK; one `borrow_mut()` exclusive.
@@ -149,6 +171,7 @@ Non-panicking variants returning `Result`. Useful when you might encounter a bor
 
 ## `Mutex<T>` and `RwLock<T>`
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::Mutex;
 let m = Mutex::new(0);
@@ -167,6 +190,7 @@ let rw = RwLock::new(0);
     *w += 1;
 }
 ```
+::
 
 - `Mutex`: one accessor at a time.
 - `RwLock`: many readers or one writer.
@@ -179,6 +203,7 @@ If a thread panics while holding a lock, the lock becomes "poisoned"; subsequent
 
 ## `Once`, `OnceLock`, `LazyLock` — Initialization
 
+::code-wrapper{language="rust"}
 ```rust
 use std::sync::OnceLock;
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -189,11 +214,13 @@ use std::sync::LazyLock;
 static DB: LazyLock<Db> = LazyLock::new(|| Db::open());
 let _ = &*DB;     // initialized on first access
 ```
+::
 
 Pre-`LazyLock` you'd use the `once_cell` or `lazy_static` crates. Modern std has you covered.
 
 ## `Cow<T>` — Clone-on-Write
 
+::code-wrapper{language="rust"}
 ```rust
 use std::borrow::Cow;
 fn greet(name: Cow<str>) {
@@ -202,22 +229,27 @@ fn greet(name: Cow<str>) {
 greet("literal".into());           // borrowed
 greet(String::from("owned").into()); // owned
 ```
+::
 
 `Cow<'a, B>` is either borrowed or owned — lets you write APIs that accept either, deferring the clone until mutation.
 
+::code-wrapper{language="rust"}
 ```rust
 let mut c: Cow<str> = Cow::Borrowed("hi");
 c.to_mut().push('!');     // clones once, now owned
 ```
+::
 
 ## `Pin<T>` — Pinned Pointers
 
 `Pin` guarantees a value won't be moved in memory after pinning. Essential for self-referential data (e.g., async futures holding references across `.await` points):
 
+::code-wrapper{language="rust"}
 ```rust
 let mut fut = async { 5 };
 let pinned = Pin::new(&mut fut);
 ```
+::
 
 You usually don't write `Pin` by hand — async/await generates it. The Pin chapter (Async) covers the details.
 
@@ -243,11 +275,13 @@ Raw pointers, no automatic lifetime tracking; only usable in `unsafe` blocks. `N
 
 Smart pointers implement `Deref`/`DerefMut` to enable `&`-coercions and method forwarding:
 
+::code-wrapper{language="rust"}
 ```rust
 let b = Box::new(String::from("hi"));
 b.push('!');              // Box<String> derefs to String, which derefs to str
 let s: &str = &b;          // &Box<String> -> &String -> &str
 ```
+::
 
 ## Drop Order for Smart Pointers
 
