@@ -1,0 +1,299 @@
+<!DOCTYPE html><html  lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>10 — Testing with ScalaTest — Learn</title><link rel="preconnect" href="https://fonts.googleapis.com" crossorigin><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><script type="importmap">{"imports":{"#entry":"/_nuxt/ByB7Eegr.js"}}</script><script async src="https://www.googletagmanager.com/gtag/js?id=G-J1LB55YZY2"></script><script>window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-J1LB55YZY2');</script><link rel="stylesheet" href="/_nuxt/entry.B1EmKqjo.css" crossorigin><link rel="stylesheet" href="/_nuxt/CodeWrapper.CtX4JLUi.css" crossorigin><link rel="stylesheet" href="/_nuxt/ProsePre.D5orA6B_.css" crossorigin><style>:where(.i-material-symbols\:light-mode-outline){display:inline-block;width:1em;height:1em;background-color:currentColor;-webkit-mask-image:var(--svg);mask-image:var(--svg);-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:100% 100%;mask-size:100% 100%;--svg:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='24' height='24'%3E%3Cpath fill='black' d='M14.125 14.125Q15 13.25 15 12t-.875-2.125T12 9t-2.125.875T9 12t.875 2.125T12 15t2.125-.875m-5.663 1.413Q7 14.075 7 12t1.463-3.537T12 7t3.538 1.463T17 12t-1.463 3.538T12 17t-3.537-1.463M5 13H1v-2h4zm18 0h-4v-2h4zM11 5V1h2v4zm0 18v-4h2v4zM6.4 7.75L3.875 5.325L5.3 3.85l2.4 2.5zm12.3 12.4l-2.425-2.525L17.6 16.25l2.525 2.425zM16.25 6.4l2.425-2.525L20.15 5.3l-2.5 2.4zM3.85 18.7l2.525-2.425L7.75 17.6l-2.425 2.525zM12 12'/%3E%3C/svg%3E")}</style><link rel="preload" as="fetch" crossorigin="anonymous" href="/scala/10-testing/_payload.json?_b=2e2b903c-a59c-43c3-8e0c-ded6496d3c99"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/ByB7Eegr.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/hePW80VL.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Dl-0GgfV.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Bb_8IrLa.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/rxhDcyfF.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/GmAe7iNg.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/BW3xJdEx.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Dl07uGq1.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Dj9Ffqu2.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Boc3X24Q.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/csQ1Jce7.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/DYzJ_FNB.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Cdm2qg1r.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/BDNMzG2s.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/C2EcC6np.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/B9FVq7Wi.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/D17Q2wsV.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/BZl-xGfe.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/B-aoOHdt.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/Bk-7bA6Q2.js"><link rel="modulepreload" as="script" crossorigin href="/_nuxt/dNlhpL-a.js"><script type="module" src="/_nuxt/ByB7Eegr.js" crossorigin></script><link rel="dns-prefetch" href="https://fonts.googleapis.com"><link rel="prefetch" as="script" crossorigin href="/_nuxt/BWW_-YKF.js"><link rel="prefetch" as="script" crossorigin href="/_nuxt/CrUBerrd2.js"><meta name="theme-color" content="#000000"><meta name="charset" content="utf-8"><meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"><meta name="author" content="Learn"><meta name="format-detection" content="telephone=no"><meta http-equiv="X-UA-Compatible" content="IE=edge"><link rel="canonical" href="https://learn.itsash.in/scala/10-testing"><link rel="icon" type="image/png" href="/favicon.png"><link rel="manifest" href="/site.webmanifest"><link rel="apple-touch-icon" href="/favicon.png"><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"Learn","url":"https://learn.itsash.in","description":"A personal reading space built with Nuxt Content — Rust curriculum, programming guides, and technical documentation.","potentialAction":{"@type":"SearchAction","target":"https://learn.itsash.in/browse?q={search_term_string}","query-input":"required name=search_term_string"}}</script><meta property="og:site_name" content="Learn"><meta property="og:type" content="article"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:site" content="@learn"><meta name="description" content><meta property="og:title" content="10 — Testing with ScalaTest"><meta property="og:description" content><meta property="og:url" content="https://learn.itsash.in/scala/10-testing"><meta name="twitter:title" content="10 — Testing with ScalaTest"><meta name="twitter:description" content><meta property="article:author" content="Learn"><meta property="article:section" content="Scala"><meta property="article:tag" content="Home, Scala, Testing"><meta property="article:modified_time" content="2026-08-07T18:11:32.434Z"><meta property="article:published_time" content="2026-08-07T18:11:32.434Z"><script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"10 — Testing with ScalaTest","description":"","url":"https://learn.itsash.in/scala/10-testing","author":{"@type":"Organization","name":"Learn"},"publisher":{"@type":"Organization","name":"Learn"},"datePublished":"2026-08-07T18:11:32.434Z","dateModified":"2026-08-07T18:11:32.434Z","mainEntityOfPage":{"@type":"WebPage","@id":"https://learn.itsash.in/scala/10-testing"},"breadcrumb":{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://learn.itsash.in/"},{"@type":"ListItem","position":2,"name":"Scala","item":"https://learn.itsash.in/scala"},{"@type":"ListItem","position":3,"name":"Testing","item":"https://learn.itsash.in/scala/10-testing"}]}}</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://learn.itsash.in/"},{"@type":"ListItem","position":2,"name":"Scala","item":"https://learn.itsash.in/scala"},{"@type":"ListItem","position":3,"name":"Testing","item":"https://learn.itsash.in/scala/10-testing"}]}</script></head><body><div id="__nuxt"><div class="min-h-screen font-sans antialiased"><header class="sticky top-0 z-50 border-b border-c-fg bg-c-bg/95 backdrop-blur-sm"><div class="mx-auto flex h-16 max-w-6xl items-center justify-between px-6 md:px-8 lg:px-12"><a href="/" class="font-serif text-2xl font-black tracking-tighter transition-opacity duration-100 hover:opacity-60"> LEARN </a><nav class="flex items-center gap-2 md:gap-6"><button type="button" aria-label="Theme: light" class="flex h-10 w-10 items-center justify-center border border-c-fg transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-3"><span class="iconify i-material-symbols:light-mode-outline" aria-hidden="true" style="font-size:20px;" stroke-width="1.5"></span></button></nav></div></header><main class="relative z-10"><section class="relative z-10 py-12 md:py-16"><div aria-hidden="true" class="fixed inset-x-0 top-0 z-[60] h-0.5 bg-transparent"><div class="h-full bg-c-fg transition-[width] duration-100 ease-out" style="width:0%;"></div></div><div class="mx-auto max-w-6xl px-6 md:px-8 lg:px-12"><nav aria-label="Breadcrumb" itemscope itemtype="https://schema.org/BreadcrumbList" class="mb-10 flex flex-wrap items-center gap-1.5 font-mono text-xs uppercase tracking-widest text-c-muted-fg"><!--[--><!--[--><meta itemprop="position" content="1"><a href="/" class="py-1 transition-opacity duration-100 hover:opacity-60" itemprop="item"><span itemprop="name">Home</span></a><span class="text-c-fg" aria-hidden="true">/</span><!--]--><!--[--><meta itemprop="position" content="2"><a href="/scala" class="py-1 transition-opacity duration-100 hover:opacity-60" itemprop="item"><span itemprop="name">Scala</span></a><span class="text-c-fg" aria-hidden="true">/</span><!--]--><!--[--><meta itemprop="position" content="3"><a aria-current="page" href="/scala/10-testing" class="router-link-active router-link-exact-active py-1 transition-opacity duration-100 hover:opacity-60 text-c-fg" itemprop="item"><span itemprop="name">Testing</span></a><!----><!--]--><!--]--></nav><article class="md-prose" itemscope itemtype="https://schema.org/Article"><meta itemprop="author" content="Learn"><meta itemprop="publisher" content="Learn"><meta itemprop="wordCount" content="1"><div class="not-prose mb-12 flex items-center justify-between gap-4 border-b-[2px] border-c-fg pb-6"><button type="button" class="group inline-flex items-center gap-2 border-2 border-c-fg px-5 py-2.5 font-mono text-xs font-medium uppercase tracking-widest text-c-fg transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-3"><span>←</span><span>Back</span></button><span class="inline-flex items-center gap-2 border border-c-fg px-3 py-1.5 font-mono text-xs font-medium uppercase tracking-widest text-c-fg"> Article · 1 min read </span></div><div><h1 id="_10-testing-with-scalatest"><!--[-->10 — Testing with ScalaTest<!--]--></h1><h2 id="scalatest-basics"><a href="#scalatest-basics"><!--[-->ScalaTest Basics<!--]--></a></h2><p><!--[-->ScalaTest is a flexible testing framework for Scala:<!--]--></p><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class CalculatorTest extends AnyFunSuite {
+</span></span><span class="line" line="4"><span>  test(&quot;addition&quot;) {
+</span></span><span class="line" line="5"><span>    assert(2 + 2 == 4)
+</span></span><span class="line" line="6"><span>  }
+</span></span><span class="line" line="7"><span>  
+</span></span><span class="line" line="8"><span>  test(&quot;subtraction&quot;) {
+</span></span><span class="line" line="9"><span>    assert(5 - 3 == 2)
+</span></span><span class="line" line="10"><span>  }
+</span></span><span class="line" line="11"><span>  
+</span></span><span class="line" line="12"><span>  test(&quot;division by zero&quot;) {
+</span></span><span class="line" line="13"><span>    assertThrows[ArithmeticException] {
+</span></span><span class="line" line="14"><span>      10 / 0
+</span></span><span class="line" line="15"><span>    }
+</span></span><span class="line" line="16"><span>  }
+</span></span><span class="line" line="17"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><p><!--[-->Run tests:<!--]--></p><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>bash</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-bash shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span class="sIsaT">sbt</span><span class="sJ6F3"> test
+</span></span><span class="line" line="2"><span class="sIsaT">sbt</span><span class="sJ6F3"> testOnly</span><span class="sJ6F3"> CalculatorTest
+</span></span><span class="line" line="3"><span class="sIsaT">sbt</span><span class="sJ6F3"> &quot;testOnly CalculatorTest -- -z addition&quot;</span><span class="sdCPZ">  # run specific test
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="assertion-styles"><a href="#assertion-styles"><!--[-->Assertion Styles<!--]--></a></h2><h3 id="anyfunsuite-function-style"><a href="#anyfunsuite-function-style"><!--[-->AnyFunSuite (Function style)<!--]--></a></h3><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class MyTest extends AnyFunSuite {
+</span></span><span class="line" line="4"><span>  test(&quot;example&quot;) {
+</span></span><span class="line" line="5"><span>    assert(true)
+</span></span><span class="line" line="6"><span>  }
+</span></span><span class="line" line="7"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h3 id="funspec-spec-style"><a href="#funspec-spec-style"><!--[-->FunSpec (Spec style)<!--]--></a></h3><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funspec.AnyFunSpec
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class CalculatorSpec extends AnyFunSpec {
+</span></span><span class="line" line="4"><span>  describe(&quot;Calculator&quot;) {
+</span></span><span class="line" line="5"><span>    it(&quot;should add two numbers&quot;) {
+</span></span><span class="line" line="6"><span>      assert(2 + 2 == 4)
+</span></span><span class="line" line="7"><span>    }
+</span></span><span class="line" line="8"><span>    
+</span></span><span class="line" line="9"><span>    it(&quot;should multiply&quot;) {
+</span></span><span class="line" line="10"><span>      assert(3 * 4 == 12)
+</span></span><span class="line" line="11"><span>    }
+</span></span><span class="line" line="12"><span>  }
+</span></span><span class="line" line="13"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h3 id="wordspec-bdd-style"><a href="#wordspec-bdd-style"><!--[-->WordSpec (BDD style)<!--]--></a></h3><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.wordspec.AnyWordSpec
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class CalculatorWordSpec extends AnyWordSpec {
+</span></span><span class="line" line="4"><span>  &quot;Calculator&quot; when {
+</span></span><span class="line" line="5"><span>    &quot;adding numbers&quot; should {
+</span></span><span class="line" line="6"><span>      &quot;return sum&quot; in {
+</span></span><span class="line" line="7"><span>        assert(2 + 2 == 4)
+</span></span><span class="line" line="8"><span>      }
+</span></span><span class="line" line="9"><span>    }
+</span></span><span class="line" line="10"><span>  }
+</span></span><span class="line" line="11"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="assertions-and-matchers"><a href="#assertions-and-matchers"><!--[-->Assertions and Matchers<!--]--></a></h2><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest._
+</span></span><span class="line" line="2"><span>import org.scalatest.matchers.should.Matchers._
+</span></span><span class="line" line="3"><span emptylineplaceholder="true">
+</span></span><span class="line" line="4"><span>class MyTest extends AnyFunSuite {
+</span></span><span class="line" line="5"><span>  test(&quot;equality&quot;) {
+</span></span><span class="line" line="6"><span>    2 + 2 should equal(4)
+</span></span><span class="line" line="7"><span>    2 + 2 shouldBe 4
+</span></span><span class="line" line="8"><span>    2 + 2 == 4 shouldBe true
+</span></span><span class="line" line="9"><span>  }
+</span></span><span class="line" line="10"><span>  
+</span></span><span class="line" line="11"><span>  test(&quot;comparison&quot;) {
+</span></span><span class="line" line="12"><span>    5 should be &gt; 3
+</span></span><span class="line" line="13"><span>    5 should be &gt;= 5
+</span></span><span class="line" line="14"><span>    3 should be &lt; 5
+</span></span><span class="line" line="15"><span>  }
+</span></span><span class="line" line="16"><span>  
+</span></span><span class="line" line="17"><span>  test(&quot;container&quot;) {
+</span></span><span class="line" line="18"><span>    List(1, 2, 3) should contain(2)
+</span></span><span class="line" line="19"><span>    List(1, 2, 3) should have length 3
+</span></span><span class="line" line="20"><span>    List(1, 2, 3) should not contain 4
+</span></span><span class="line" line="21"><span>  }
+</span></span><span class="line" line="22"><span>  
+</span></span><span class="line" line="23"><span>  test(&quot;string matching&quot;) {
+</span></span><span class="line" line="24"><span>    &quot;hello world&quot; should include(&quot;world&quot;)
+</span></span><span class="line" line="25"><span>    &quot;hello world&quot; should startWith(&quot;hello&quot;)
+</span></span><span class="line" line="26"><span>    &quot;hello world&quot; should endWith(&quot;world&quot;)
+</span></span><span class="line" line="27"><span>  }
+</span></span><span class="line" line="28"><span>  
+</span></span><span class="line" line="29"><span>  test(&quot;option&quot;) {
+</span></span><span class="line" line="30"><span>    Some(42) should be(defined)
+</span></span><span class="line" line="31"><span>    Some(42).value should equal(42)
+</span></span><span class="line" line="32"><span>    None should be(empty)
+</span></span><span class="line" line="33"><span>  }
+</span></span><span class="line" line="34"><span>  
+</span></span><span class="line" line="35"><span>  test(&quot;exception&quot;) {
+</span></span><span class="line" line="36"><span>    an[ArithmeticException] should be thrownBy { 10 / 0 }
+</span></span><span class="line" line="37"><span>  }
+</span></span><span class="line" line="38"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="setup-and-teardown"><a href="#setup-and-teardown"><!--[-->Setup and Teardown<!--]--></a></h2><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class DatabaseTest extends AnyFunSuite {
+</span></span><span class="line" line="4"><span>  var db: Database = _
+</span></span><span class="line" line="5"><span>  
+</span></span><span class="line" line="6"><span>  override def beforeEach(): Unit = {
+</span></span><span class="line" line="7"><span>    db = new Database()
+</span></span><span class="line" line="8"><span>    db.connect()
+</span></span><span class="line" line="9"><span>  }
+</span></span><span class="line" line="10"><span>  
+</span></span><span class="line" line="11"><span>  override def afterEach(): Unit = {
+</span></span><span class="line" line="12"><span>    db.close()
+</span></span><span class="line" line="13"><span>  }
+</span></span><span class="line" line="14"><span>  
+</span></span><span class="line" line="15"><span>  test(&quot;query&quot;) {
+</span></span><span class="line" line="16"><span>    val result = db.query(&quot;SELECT *&quot;)
+</span></span><span class="line" line="17"><span>    assert(result.nonEmpty)
+</span></span><span class="line" line="18"><span>  }
+</span></span><span class="line" line="19"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="fixtures"><a href="#fixtures"><!--[-->Fixtures<!--]--></a></h2><p><!--[-->Reusable test data:<!--]--></p><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class UserTest extends AnyFunSuite {
+</span></span><span class="line" line="4"><span>  def fixture = new {
+</span></span><span class="line" line="5"><span>    val user = User(&quot;Alice&quot;, 30)
+</span></span><span class="line" line="6"><span>    val admin = User(&quot;Admin&quot;, 50)
+</span></span><span class="line" line="7"><span>  }
+</span></span><span class="line" line="8"><span>  
+</span></span><span class="line" line="9"><span>  test(&quot;user name&quot;) {
+</span></span><span class="line" line="10"><span>    val f = fixture
+</span></span><span class="line" line="11"><span>    assert(f.user.name == &quot;Alice&quot;)
+</span></span><span class="line" line="12"><span>  }
+</span></span><span class="line" line="13"><span>  
+</span></span><span class="line" line="14"><span>  test(&quot;admin privileges&quot;) {
+</span></span><span class="line" line="15"><span>    val f = fixture
+</span></span><span class="line" line="16"><span>    assert(f.admin.isAdmin)
+</span></span><span class="line" line="17"><span>  }
+</span></span><span class="line" line="18"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="property-based-testing-scalacheck"><a href="#property-based-testing-scalacheck"><!--[-->Property-Based Testing (ScalaCheck)<!--]--></a></h2><p><!--[-->Test with generated random data:<!--]--></p><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.propspec.AnyPropSpec
+</span></span><span class="line" line="2"><span>import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+</span></span><span class="line" line="3"><span emptylineplaceholder="true">
+</span></span><span class="line" line="4"><span>class ListSpec extends AnyPropSpec with ScalaCheckPropertyChecks {
+</span></span><span class="line" line="5"><span>  property(&quot;reverse of reverse is identity&quot;) {
+</span></span><span class="line" line="6"><span>    forAll { (list: List[Int]) =&gt;
+</span></span><span class="line" line="7"><span>      list.reverse.reverse shouldBe list
+</span></span><span class="line" line="8"><span>    }
+</span></span><span class="line" line="9"><span>  }
+</span></span><span class="line" line="10"><span>  
+</span></span><span class="line" line="11"><span>  property(&quot;length preserved after reverse&quot;) {
+</span></span><span class="line" line="12"><span>    forAll { (list: List[Int]) =&gt;
+</span></span><span class="line" line="13"><span>      list.reverse.length shouldBe list.length
+</span></span><span class="line" line="14"><span>    }
+</span></span><span class="line" line="15"><span>  }
+</span></span><span class="line" line="16"><span>  
+</span></span><span class="line" line="17"><span>  property(&quot;append then take&quot;) {
+</span></span><span class="line" line="18"><span>    forAll { (list: List[Int], n: Int) =&gt;
+</span></span><span class="line" line="19"><span>      val positive = math.abs(n) + 1
+</span></span><span class="line" line="20"><span>      (list ++ list).take(positive) shouldBe list.take(positive)
+</span></span><span class="line" line="21"><span>    }
+</span></span><span class="line" line="22"><span>  }
+</span></span><span class="line" line="23"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="test-organization"><a href="#test-organization"><!--[-->Test Organization<!--]--></a></h2><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>// src/test/scala/com/example/CalculatorTest.scala
+</span></span><span class="line" line="2"><span>package com.example
+</span></span><span class="line" line="3"><span emptylineplaceholder="true">
+</span></span><span class="line" line="4"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="5"><span emptylineplaceholder="true">
+</span></span><span class="line" line="6"><span>class CalculatorTest extends AnyFunSuite {
+</span></span><span class="line" line="7"><span>  // tests here
+</span></span><span class="line" line="8"><span>}
+</span></span><span class="line" line="9"><span emptylineplaceholder="true">
+</span></span><span class="line" line="10"><span>// Run: sbt test
+</span></span><span class="line" line="11"><span>// Typical structure:
+</span></span><span class="line" line="12"><span>// src/test/scala/
+</span></span><span class="line" line="13"><span>//   ├── com/example/
+</span></span><span class="line" line="14"><span>//   │   ├── CalculatorTest.scala
+</span></span><span class="line" line="15"><span>//   │   ├── UserTest.scala
+</span></span><span class="line" line="16"><span>//   │   └── IntegrationTest.scala
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="integration-testing"><a href="#integration-testing"><!--[-->Integration Testing<!--]--></a></h2><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span emptylineplaceholder="true">
+</span></span><span class="line" line="3"><span>class IntegrationTest extends AnyFunSuite {
+</span></span><span class="line" line="4"><span>  // Expensive setup
+</span></span><span class="line" line="5"><span>  private val db = new TestDatabase()
+</span></span><span class="line" line="6"><span>  private val api = new TestAPI()
+</span></span><span class="line" line="7"><span>  
+</span></span><span class="line" line="8"><span>  override def beforeAll(): Unit = {
+</span></span><span class="line" line="9"><span>    db.setup()
+</span></span><span class="line" line="10"><span>    api.start()
+</span></span><span class="line" line="11"><span>  }
+</span></span><span class="line" line="12"><span>  
+</span></span><span class="line" line="13"><span>  override def afterAll(): Unit = {
+</span></span><span class="line" line="14"><span>    api.stop()
+</span></span><span class="line" line="15"><span>    db.teardown()
+</span></span><span class="line" line="16"><span>  }
+</span></span><span class="line" line="17"><span>  
+</span></span><span class="line" line="18"><span>  test(&quot;full flow&quot;) {
+</span></span><span class="line" line="19"><span>    val user = api.createUser(&quot;Alice&quot;)
+</span></span><span class="line" line="20"><span>    db.getUser(user.id) shouldBe defined
+</span></span><span class="line" line="21"><span>  }
+</span></span><span class="line" line="22"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="test-tagging"><a href="#test-tagging"><!--[-->Test Tagging<!--]--></a></h2><p><!--[-->Organize tests for selective execution:<!--]--></p><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span>import org.scalatest.Tag
+</span></span><span class="line" line="3"><span emptylineplaceholder="true">
+</span></span><span class="line" line="4"><span>object Database extends Tag(&quot;database&quot;)
+</span></span><span class="line" line="5"><span>object Slow extends Tag(&quot;slow&quot;)
+</span></span><span class="line" line="6"><span>object Expensive extends Tag(&quot;expensive&quot;)
+</span></span><span class="line" line="7"><span emptylineplaceholder="true">
+</span></span><span class="line" line="8"><span>class MyTest extends AnyFunSuite {
+</span></span><span class="line" line="9"><span>  test(&quot;quick unit test&quot;, Slow) {
+</span></span><span class="line" line="10"><span>    // runs with -n Slow or -N Slow (excludes)
+</span></span><span class="line" line="11"><span>  }
+</span></span><span class="line" line="12"><span>  
+</span></span><span class="line" line="13"><span>  test(&quot;database test&quot;, Database) {
+</span></span><span class="line" line="14"><span>    // integration test
+</span></span><span class="line" line="15"><span>  }
+</span></span><span class="line" line="16"><span>  
+</span></span><span class="line" line="17"><span>  test(&quot;expensive operation&quot;, Expensive, Slow) {
+</span></span><span class="line" line="18"><span>    // can have multiple tags
+</span></span><span class="line" line="19"><span>  }
+</span></span><span class="line" line="20"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><p><!--[-->Run with tags:<!--]--></p><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>bash</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-bash shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span class="sIsaT">sbt</span><span class="sJ6F3"> &quot;test -- -n Slow&quot;</span><span class="sdCPZ">        # run only Slow tests
+</span></span><span class="line" line="2"><span class="sIsaT">sbt</span><span class="sJ6F3"> &quot;test -- -N Slow&quot;</span><span class="sdCPZ">        # exclude Slow tests
+</span></span><span class="line" line="3"><span class="sIsaT">sbt</span><span class="sJ6F3"> &quot;test -- -l Database&quot;</span><span class="sdCPZ">    # exclude Database tests
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="mocking-with-scalatest"><a href="#mocking-with-scalatest"><!--[-->Mocking (with ScalaTest)<!--]--></a></h2><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>import org.scalatest.funsuite.AnyFunSuite
+</span></span><span class="line" line="2"><span>import org.scalamock.scalatest.MockFactory
+</span></span><span class="line" line="3"><span emptylineplaceholder="true">
+</span></span><span class="line" line="4"><span>class UserServiceTest extends AnyFunSuite with MockFactory {
+</span></span><span class="line" line="5"><span>  test(&quot;get user from repository&quot;) {
+</span></span><span class="line" line="6"><span>    val mockRepo = mock[UserRepository]
+</span></span><span class="line" line="7"><span>    val user = User(1, &quot;Alice&quot;)
+</span></span><span class="line" line="8"><span>    
+</span></span><span class="line" line="9"><span>    (mockRepo.getUser _).expects(1).returning(Some(user))
+</span></span><span class="line" line="10"><span>    
+</span></span><span class="line" line="11"><span>    val service = new UserService(mockRepo)
+</span></span><span class="line" line="12"><span>    val result = service.getUser(1)
+</span></span><span class="line" line="13"><span>    
+</span></span><span class="line" line="14"><span>    assert(result == Some(user))
+</span></span><span class="line" line="15"><span>  }
+</span></span><span class="line" line="16"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="best-practices"><a href="#best-practices"><!--[-->Best Practices<!--]--></a></h2><div class="code-wrapper-parent p-4" data-v-b796204c><div class="code-wrapper" data-v-b796204c><div class="code-header" data-v-b796204c><div class="flex items-center gap-2" data-v-b796204c><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span><span class="code-dot" data-v-b796204c></span></div><div class="flex items-center gap-3" data-v-b796204c><span class="code-lang" data-v-b796204c>scala</span><button data-html2canvas-ignore="true" type="button" class="code-download" title="Download as image" data-v-b796204c><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-v-b796204c><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" data-v-b796204c></path><polyline points="7 10 12 15 17 10" data-v-b796204c></polyline><line x1="12" y1="15" x2="12" y2="3" data-v-b796204c></line></svg></button></div></div><!--[--><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>class BestPracticesTest extends AnyFunSuite {
+</span></span><span class="line" line="2"><span>  // ✅ Good: descriptive names
+</span></span><span class="line" line="3"><span>  test(&quot;should return sum of two numbers&quot;) {
+</span></span><span class="line" line="4"><span>    assert(add(2, 3) == 5)
+</span></span><span class="line" line="5"><span>  }
+</span></span><span class="line" line="6"><span>  
+</span></span><span class="line" line="7"><span>  // ✅ Good: one assertion per test (or related assertions)
+</span></span><span class="line" line="8"><span>  test(&quot;user creation&quot;) {
+</span></span><span class="line" line="9"><span>    val user = User(&quot;Alice&quot;, 30)
+</span></span><span class="line" line="10"><span>    assert(user.name == &quot;Alice&quot;)
+</span></span><span class="line" line="11"><span>    assert(user.age == 30)
+</span></span><span class="line" line="12"><span>  }
+</span></span><span class="line" line="13"><span>  
+</span></span><span class="line" line="14"><span>  // ✅ Good: use matchers
+</span></span><span class="line" line="15"><span>  test(&quot;list operations&quot;) {
+</span></span><span class="line" line="16"><span>    List(1, 2, 3) should contain(2)
+</span></span><span class="line" line="17"><span>    List(1, 2, 3) should have length 3
+</span></span><span class="line" line="18"><span>  }
+</span></span><span class="line" line="19"><span>  
+</span></span><span class="line" line="20"><span>  // ❌ Bad: multiple unrelated assertions
+</span></span><span class="line" line="21"><span>  // test(&quot;everything&quot;) { ... many different things ... }
+</span></span><span class="line" line="22"><span>  
+</span></span><span class="line" line="23"><span>  // ❌ Bad: vague test names
+</span></span><span class="line" line="24"><span>  // test(&quot;test&quot;) { ... }
+</span></span><span class="line" line="25"><span>  
+</span></span><span class="line" line="26"><span>  // ❌ Bad: side effects in test data
+</span></span><span class="line" line="27"><span>  var globalCounter = 0
+</span></span><span class="line" line="28"><span>  test(&quot;uses global state&quot;) {
+</span></span><span class="line" line="29"><span>    globalCounter += 1  // don&#39;t do this
+</span></span><span class="line" line="30"><span>  }
+</span></span><span class="line" line="31"><span>}
+</span></span></code><!--]--></pre><!--]--></div></div><h2 id="tips-tricks"><a href="#tips-tricks"><!--[-->💡 Tips &amp; Tricks<!--]--></a></h2><p><!--[--><strong><!--[-->Use descriptive test names<!--]--></strong>: &quot;should return sum&quot; is better than &quot;test1&quot;.<!--]--></p><p><!--[--><strong><!--[-->Arrange-Act-Assert pattern<!--]--></strong>: Organize test into setup, action, verification.<!--]--></p><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>test(&quot;add function&quot;) {
+</span></span><span class="line" line="2"><span>  // Arrange
+</span></span><span class="line" line="3"><span>  val calc = Calculator()
+</span></span><span class="line" line="4"><span>  
+</span></span><span class="line" line="5"><span>  // Act
+</span></span><span class="line" line="6"><span>  val result = calc.add(2, 3)
+</span></span><span class="line" line="7"><span>  
+</span></span><span class="line" line="8"><span>  // Assert
+</span></span><span class="line" line="9"><span>  result shouldBe 5
+</span></span><span class="line" line="10"><span>}
+</span></span></code><!--]--></pre><p><!--[--><strong><!--[-->Run tests during development<!--]--></strong>: <code><!--[-->sbt ~test<!--]--></code> for continuous testing.<!--]--></p><p><!--[--><strong><!--[-->Use beforeEach/afterEach for isolation<!--]--></strong>: Each test starts fresh.<!--]--></p><h2 id="️-edge-cases-gotchas"><a href="#️-edge-cases-gotchas"><!--[-->⚠️ Edge Cases &amp; Gotchas<!--]--></a></h2><p><!--[--><strong><!--[-->Tests can run in any order<!--]--></strong>: Don&#39;t assume execution order. Tests should be independent.<!--]--></p><p><!--[--><strong><!--[-->Shared mutable state is problematic<!--]--></strong>: Use beforeEach/afterEach to reset state.<!--]--></p><p><!--[--><strong><!--[-->Mocking can hide bugs<!--]--></strong>: Real tests should use real dependencies when possible.<!--]--></p><p><!--[--><strong><!--[-->Flaky tests are testing problems<!--]--></strong>: If test passes/fails randomly, it&#39;s revealing a concurrency bug.<!--]--></p><p><!--[--><strong><!--[-->Expensive setup slows CI<!--]--></strong>: Use fast unit tests in main test suite; relegate integration tests to separate job.<!--]--></p><h2 id="spot-the-bug"><a href="#spot-the-bug"><!--[-->🧠 Spot the Bug<!--]--></a></h2><p><!--[-->What&#39;s wrong with this test?<!--]--></p><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>class MyTest extends AnyFunSuite {
+</span></span><span class="line" line="2"><span>  var counter = 0
+</span></span><span class="line" line="3"><span>  
+</span></span><span class="line" line="4"><span>  test(&quot;increments counter&quot;) {
+</span></span><span class="line" line="5"><span>    counter += 1
+</span></span><span class="line" line="6"><span>    assert(counter == 1)
+</span></span><span class="line" line="7"><span>  }
+</span></span><span class="line" line="8"><span>  
+</span></span><span class="line" line="9"><span>  test(&quot;counter is 1&quot;) {
+</span></span><span class="line" line="10"><span>    assert(counter == 1)
+</span></span><span class="line" line="11"><span>  }
+</span></span><span class="line" line="12"><span>}
+</span></span></code><!--]--></pre><details><summary>Answer</summary><p><!--[-->Tests share state. If first test runs, counter is 1. If second test runs first, counter is 0 and assertion fails.<!--]--></p><p><!--[-->Tests should not depend on execution order. Use <code><!--[-->beforeEach<!--]--></code> to reset state:<!--]--></p><pre class="language-scala shiki shiki-themes github-light github-dark" style=""><!--[--><code><span class="line" line="1"><span>class MyTest extends AnyFunSuite {
+</span></span><span class="line" line="2"><span>  var counter = 0
+</span></span><span class="line" line="3"><span>  
+</span></span><span class="line" line="4"><span>  override def beforeEach(): Unit = {
+</span></span><span class="line" line="5"><span>    counter = 0
+</span></span><span class="line" line="6"><span>  }
+</span></span><span class="line" line="7"><span>  
+</span></span><span class="line" line="8"><span>  test(&quot;increments counter&quot;) {
+</span></span><span class="line" line="9"><span>    counter += 1
+</span></span><span class="line" line="10"><span>    assert(counter == 1)
+</span></span><span class="line" line="11"><span>  }
+</span></span><span class="line" line="12"><span>  
+</span></span><span class="line" line="13"><span>  test(&quot;counter starts at zero&quot;) {
+</span></span><span class="line" line="14"><span>    assert(counter == 0)
+</span></span><span class="line" line="15"><span>  }
+</span></span><span class="line" line="16"><span>}
+</span></span></code><!--]--></pre></details><h2 id="key-takeaways"><a href="#key-takeaways"><!--[-->Key Takeaways<!--]--></a></h2><ul><!--[--><li><!--[-->ScalaTest offers multiple testing styles (FunSuite, FunSpec, WordSpec).<!--]--></li><li><!--[-->Use matchers for readable assertions: <code><!--[-->x shouldBe y<!--]--></code>.<!--]--></li><li><!--[-->Setup/teardown with <code><!--[-->beforeEach<!--]--></code>/<code><!--[-->afterEach<!--]--></code>.<!--]--></li><li><!--[-->Property-based testing with ScalaCheck for random data.<!--]--></li><li><!--[-->Tag tests for selective execution.<!--]--></li><li><!--[-->Mock dependencies with ScalaTest + ScalaMock.<!--]--></li><li><!--[-->Arrange-Act-Assert pattern for clarity.<!--]--></li><li><!--[-->Keep tests independent; don&#39;t share state.<!--]--></li><li><!--[-->Run tests continuously during development.<!--]--></li><!--]--></ul><style>html .default .shiki span {color: var(--shiki-default);background: var(--shiki-default-bg);font-style: var(--shiki-default-font-style);font-weight: var(--shiki-default-font-weight);text-decoration: var(--shiki-default-text-decoration);}html .shiki span {color: var(--shiki-default);background: var(--shiki-default-bg);font-style: var(--shiki-default-font-style);font-weight: var(--shiki-default-font-weight);text-decoration: var(--shiki-default-text-decoration);}html .github-dark .shiki span {color: var(--shiki-github-dark);background: var(--shiki-github-dark-bg);font-style: var(--shiki-github-dark-font-style);font-weight: var(--shiki-github-dark-font-weight);text-decoration: var(--shiki-github-dark-text-decoration);}html.github-dark .shiki span {color: var(--shiki-github-dark);background: var(--shiki-github-dark-bg);font-style: var(--shiki-github-dark-font-style);font-weight: var(--shiki-github-dark-font-weight);text-decoration: var(--shiki-github-dark-text-decoration);}html pre.shiki code .sIsaT, html code.shiki .sIsaT{--shiki-default:#6F42C1;--shiki-github-dark:#B392F0}html pre.shiki code .sJ6F3, html code.shiki .sJ6F3{--shiki-default:#032F62;--shiki-github-dark:#9ECBFF}html pre.shiki code .sdCPZ, html code.shiki .sdCPZ{--shiki-default:#6A737D;--shiki-github-dark:#6A737D}</style></div><div class="not-prose mt-16 flex items-center justify-between gap-4 border-t-[2px] border-c-fg pt-6"><button type="button" class="group inline-flex items-center gap-2 border-2 border-c-fg px-5 py-2.5 font-mono text-xs font-medium uppercase tracking-widest text-c-fg transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-3"><span>←</span><span>Go back</span></button></div></article></div></section></main><footer class="relative z-10 mt-24 border-t-[4px] border-c-fg py-12"><div class="mx-auto flex max-w-6xl flex-col items-center gap-3 px-6 md:px-8 lg:px-12"><p class="font-serif text-xl font-bold tracking-tight">LEARN</p><p class="font-mono text-xs uppercase tracking-widest text-c-muted-fg">2026 · Minimalist Monochrome </p></div></footer></div></div><div id="teleports"></div><script>window.__NUXT__={};window.__NUXT__.config={public:{"nuxt-scripts":{version:"",prefix:"/_scripts",defaultScriptOptions:{trigger:"onNuxtReady"},googleStaticMapsProxy:"",endpoints:{}},mdc:{components:{prose:true,map:{},customElements:[]},headings:{anchorLinks:{h1:false,h2:true,h3:true,h4:true,h5:false,h6:false}},highlight:{noApiRoute:true,theme:{default:"github-light","github-dark":"github-dark"},langs:["rust","python","javascript","typescript","bash","json","yaml","markdown","sql","ini","xml","css","shell","dockerfile"],highlighter:"shiki",shikiEngine:"oniguruma"}},content:{wsUrl:""}},app:{baseURL:"/",buildId:"2e2b903c-a59c-43c3-8e0c-ded6496d3c99",buildAssetsDir:"/_nuxt/",cdnURL:""}}</script><script type="application/json" data-nuxt-data="nuxt-app" data-ssr="true" id="__NUXT_DATA__" data-src="/scala/10-testing/_payload.json?_b=2e2b903c-a59c-43c3-8e0c-ded6496d3c99">[{"state":1,"once":3,"_errors":4,"serverRendered":6,"path":7,"prerenderedAt":8},["Reactive",2],{},["Set"],["ShallowReactive",5],{"page-\u002Fscala\u002F10-testing":-1},true,"\u002Fscala\u002F10-testing",1786126292249]</script></body></html>
