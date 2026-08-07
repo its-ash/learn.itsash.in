@@ -251,6 +251,73 @@ std::thread::spawn(move || {
 
 Without `move`, you'd borrow `data`, which doesn't satisfy `'static`. `move` + `'static + Send` is the recipe for thread closures.
 
+## Closure Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use move with Copy types to avoid borrows
+let x = 5;
+let f = move || println!("{x}"); // x is copied, not moved (Copy type)
+
+// Trick: closure that captures self to create mutable callback
+struct Handler {
+    state: i32,
+}
+impl Handler {
+    fn on_event<F: Fn(&mut Handler)>(&mut self, handler: F) {
+        handler(self);
+    }
+}
+
+// Trick: use ? operator in closures with Result return type
+let parse = |s: &str| -> Result<i32, _> { Ok(s.parse()?) };
+
+// Trick: returning different closures with dynamic dispatch
+fn get_multiplier(n: i32) -> Box<dyn Fn(i32) -> i32> {
+    if n > 0 {
+        Box::new(move |x| x * n)
+    } else {
+        Box::new(move |x| x / (-n))
+    }
+}
+
+// Trick: closure once combinator for FnOnce
+fn call_once<F: FnOnce()>(f: F) { f(); }
+
+// Trick: use RefCell for interior mutability in Fn
+let counter = std::cell::RefCell::new(0);
+let increment = || {
+    *counter.borrow_mut() += 1;
+};
+increment(); // Fn that mutates through RefCell
+```
+::
+
+## Closure Capture Deep Dive
+
+::code-wrapper{language="rust"}
+```rust
+// Capture modes by default (least restrictive first):
+let mut v = vec![1, 2, 3];
+
+// 1. Immutable borrow (Fn)
+let f1 = || println!("{:?}", v); // borrows v immutably
+
+// 2. Mutable borrow (FnMut)
+let mut f2 = || v.push(4); // borrows v mutably
+
+// 3. Move (FnOnce)
+let f3 = move || drop(v); // moves v
+
+// Disjoint field capture (2021 edition):
+struct Data { x: i32, y: i32 }
+let mut d = Data { x: 1, y: 2 };
+let use_x = || { d.x += 1; }; // only captures d.x, not d.y
+let use_y = || { d.y += 1; }; // can also borrow d.y
+// Both closures can coexist because they capture different fields
+```
+::
+
 ## Summary
 
 Closures capture by ref (`Fn`), mut ref (`FnMut`), or value (`FnOnce`). `move` forces by-value. Use `impl Fn(...)`/`FnMut`/`FnOnce` for generic APIs. Closures are essential for iterator combinators and async. Returning closures requires `impl Fn` (single type) or `Box<dyn Fn>` (heterogeneous).

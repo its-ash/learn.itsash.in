@@ -182,6 +182,14 @@ Useful for FFI and callbacks passed to C libraries.
 - **Lifetime elision in fn signatures**: `fn first(s: &str) -> &str` has elided lifetimes; the compiler infers one input lifetime → output lifetime.
 - **Recursion + generics**: monomorphized per type — code bloat risk.
 - **`#[inline]`**: a hint; `#[inline(always)]` can bloat code; usually trust the compiler.
+- **Implicit `&T` in parameter patterns**: `fn print_pair((a, b): (i32, i32))` moves the tuple, but `fn print_pair((a, b): &(i32, i32))` borrows. If the parameter is a reference, the pattern items become references too.
+- **Early returns and cleanup**: if you return before a value is bound, that value is never allocated. Use this to avoid setup costs for early exits.
+- **Function pointers vs closures in traits**: `fn(T) -> U` doesn't implement `Fn`, `FnMut`, `FnOnce` (different trait hierarchy); use `impl Fn` to accept both.
+- **Generic monomorphization explosion**: `fn sort<T: Ord>(v: &mut [T])` instantiated for 50 different types = 50 code copies. Sometimes use trait objects to reduce binary size.
+- **Self-consuming functions**: `fn consume(self) -> T` is often misunderstood — this consumes the receiver and is idiomatic for builder chains (e.g., `Builder::new().with_x(5).build()`).
+- **Attribute positions in fn**: `#[must_use]` on a function warns if the return is ignored; useful for error-prone computations.
+- **Default parameters via function overloading**: Rust has no function overloading; use builder pattern or separate functions: `new()`, `with_capacity()`, `from()`, etc.
+- **Const vs const fn**: `const X: i32 = 5;` is a value; `const fn f() -> i32 { 5 }` is a function. Both are evaluated at compile time but have different purposes.
 
 ## Summary
 

@@ -276,8 +276,74 @@ Concise one-arm matcher returning `bool`.
 - `if let` and `while let` accept refutable patterns.
 - `let-else` bridges: `let Some(x) = opt else { return; };`.
 
+## Pattern Matching Tricks & Idioms
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use if let for single-pattern matching
+if let Some(x) = opt { println!("{x}"); }
+
+// Trick: use while let for pattern-based looping
+let mut it = vec![1, 2, 3].into_iter();
+while let Some(x) = it.next() { println!("{x}"); }
+
+// Trick: destructure in for loops
+for (i, v) in vec.iter().enumerate() { }
+for (k, v) in &map { }
+
+// Trick: use patterns in function arguments
+fn print_pair((a, b): (i32, i32)) { println!("{a}, {b}"); }
+
+// Trick: or-patterns with multiple variants
+match e {
+    Color::Red | Color::Green | Color::Blue => "primary",
+    _ => "other",
+}
+
+// Trick: binding in or-patterns (2021+)
+let (Ok(n) | Err(n)) = result.map(|x| x).map_err(|_| 0);
+
+// Trick: use @ to bind and check
+match n {
+    x @ 0..=9 => println!("digit: {x}"),
+    x @ 10..=99 => println!("two-digit: {x}"),
+    _ => println!("big"),
+}
+
+// Trick: slice patterns for destructuring
+match v.as_slice() {
+    [] => println!("empty"),
+    [first] => println!("one: {first}"),
+    [first, .., last] => println!("{first}..{last}"),
+    _ => println!("multiple"),
+}
+
+// Trick: use nested patterns for complex data
+match opt {
+    Some((Ok(x), Some(y))) => println!("{x}, {y}"),
+    _ => println!("nope"),
+}
+
+// Trick: guard with additional conditions
+match x {
+    n if n > 0 && n < 10 => "positive digit",
+    n if n == 0 => "zero",
+    _ => "other",
+}
+
+// Trick: use ref patterns for borrowing
+match &Some("hello") {
+    Some(ref s) => println!("{s}"), // s: &str
+    None => {}
+}
+
+// Trick: matches! macro for one-liner boolean checks
+if matches!(opt, Some(0)) { }
+```
+::
+
 ## Summary
 
-Patterns are structural, support literals, ranges, or-patterns, destructuring, `@` bindings, and guards. The 2021 binding modes reduced noise. Exhaustiveness is enforced. `ref`/`ref mut` are escape hatches for older patterns. `matches!` is a tiny match for booleans.
+Patterns are structural, support literals, ranges, or-patterns, destructuring, `@` bindings, and guards. The 2021 binding modes reduced noise. Exhaustiveness is enforced. `ref`/`ref mut` are escape hatches for older patterns. `matches!` is a tiny match for booleans. Use patterns everywhere: function parameters, for loops, let declarations, match arms, and conditionals.
 
 Next: Collections (`Vec`, `String`, `HashMap`, etc.).

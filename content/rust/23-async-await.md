@@ -305,12 +305,114 @@ Spawn N futures, await results as they complete (unordered).
 - **`tokio::main` flavor**: `#[tokio::main(flavor = "current_thread")]` is single-threaded (less overhead). Default is multi-threaded.
 - **`Drop` cancels futures**: a future dropped mid-`await` is silently canceled; resources are cleaned up via `Drop`.
 
+## Async/Await Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use select! for racing futures
+tokio::select! {
+    Some(msg) = rx.recv() => println!("got message: {msg}"),
+    _ = tokio::time::sleep(Duration::from_secs(5)) => println!("timeout"),
+}
+
+// Trick: biased select for ordering
+tokio::select! {
+    biased;
+    x = first_future() => { },
+    y = second_future() => { },
+}
+
+// Trick: use Box::pin for trait objects
+let fut: Box<dyn std::future::Future<Output = i32>> = Box::pin(async { 42 });
+
+// Trick: pinning with pin_mut! for efficiency
+use std::pin::pin;
+let mut fut = async { 42 };
+let mut fut = pin!(fut);
+
+// Trick: use join! for running multiple futures concurrently
+let (a, b, c) = tokio::join!(future_a(), future_b(), future_c());
+
+// Trick: try_join! for early exit on error
+let (a, b) = tokio::try_join!(res_future_a(), res_future_b())?;
+
+// Trick: stream-based iteration with tokio_stream
+use tokio_stream::StreamExt;
+let mut interval = tokio::time::interval(Duration::from_millis(100));
+while let Some(_) = interval.tick().await { }
+
+// Trick: timeout with select!
+tokio::select! {
+    result = long_running_task() => result,
+    _ = tokio::time::sleep(Duration::from_secs(30)) => Err("timeout"),
+}
+
+// Trick: spawn_blocking for sync code in async context
+let result = tokio::task::spawn_blocking(|| {
+    blocking_operation()
+}).await?;
+
+// Trick: use FuturesUnordered for dynamic task spawning
+use futures::stream::FuturesUnordered;
+let mut futs = FuturesUnordered::new();
+futs.push(tokio::spawn(async { 1 }));
+futs.push(tokio::spawn(async { 2 }));
+while let Some(Ok(val)) = futs.next().await { println!("{val}"); }
+```
+::
+
 ## When to Use Async
 
 - Many concurrent I/O-bound tasks (HTTP servers, proxies, scrapers).
 - Latency-sensitive workloads with lots of waiting.
 - Avoid for CPU-bound work — use threads or `rayon`.
 - Avoid in `no_std`/embedded unless using a `no_std`-friendly runtime (`embassy`).
+
+## Async Edge Cases & Gotchas
+
+::code-wrapper{language="rust"}
+```rust
+// Gotcha: async functions are lazy — they don't run until awaited
+let fut = async_fn(); // nothing happens yet
+fut.await; // now it runs
+
+// Gotcha: forgetting to await returns a future, not the value
+let result = async_fn(); // result is a Future, not the output
+let value = async_fn().await; // value is the actual output
+
+// Gotcha: holding std::sync::Mutex across await can deadlock
+let guard = mutex.lock().unwrap();
+async_op().await; // DANGER: holding the guard
+// Solution: drop the guard before await
+let val = { let g = mutex.lock().unwrap(); g.clone() };
+async_op().await;
+
+// Gotcha: !Send futures can't be spawned
+let non_send = std::rc::Rc::new(5);
+tokio::spawn(async { println!("{}", non_send); }); // ERROR
+
+// Gotcha: tasks are dropped on cancellation
+let fut = long_task();
+tokio::select! {
+    result = fut => println!("{result}"),
+    _ = timeout() => {} // fut is dropped here without completing
+}
+
+// Trick: use pin! for re-borrowing futures across select!
+let mut fut = some_future();
+loop {
+    tokio::select! {
+        result = &mut fut => {
+            println!("{result}");
+            break;
+        },
+        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+            println!("still waiting...");
+        }
+    }
+}
+```
+::
 
 ## Summary
 

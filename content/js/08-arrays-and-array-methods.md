@@ -280,6 +280,57 @@ const removeWhere = (arr, predicate) => arr.filter(x => !predicate(x))
 ```
 ::
 
+## 💡 Tips & Tricks
+
+**Use `findIndex` before `splice`** — `const i = arr.findIndex(x => x.id === 5); if (i >= 0) arr.splice(i, 1)` is cleaner than nested loops.
+
+**`flatMap` removes holes** — `[1, , 3].flatMap(x => x)` returns `[1, 3]` (holes removed), but `[1, , 3].map(x => x)` returns `[1, empty, 3]`. Use `flatMap` to clean sparse arrays.
+
+**`reduce` for transforming shape** — Not just sums. `users.reduce((acc, u) => { acc[u.id] = u; return acc }, {})` is a map-by-id in one line.
+
+**`Array.from` with mapping** — `Array.from({length: 5}, (_, i) => i * 2)` creates `[0, 2, 4, 6, 8]`. Avoid `new Array(5).map()` which skips holes.
+
+**Short-circuit with `some`/`every`** — These stop early when condition is met. `array.some(x => expensive(x))` is faster than `.find()` if you only need boolean.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Array holes cause `.map()` to skip** — `[1, , 3].map(x => x * 2)` is `[2, empty, 6]`. Holes are not undefined; they're skipped. Create with `Array(5)` and you get holes. Use `Array.from({length: 5})` or `[...Array(5)]` to fill with undefined.
+
+**`.sort()` mutates and sorts as strings** — `[10, 2, 1].sort()` is `[1, 10, 2]` (string comparison). Missing comparator is a classic bug. Always pass `(a, b) => a - b`.
+
+**`.reduce()` without initial value fails on empty arrays** — `[].reduce((a, x) => a + x)` throws TypeError. Always provide initial value: `[].reduce((a, x) => a + x, 0)` → `0`.
+
+**`includes` vs `indexOf` with NaN** — `[NaN].includes(NaN)` is true; `[NaN].indexOf(NaN)` is -1. Use `includes` if you need to find NaN.
+
+**Spread copies are shallow** — `[...arr]` copies the array, but nested objects are still references. Deep copy with `JSON.parse(JSON.stringify(arr))` (loses functions) or use a library.
+
+**`.splice()` is confusing** — `arr.splice(2, 1, 'x')` removes 1 item at index 2 and inserts 'x'. It **mutates** the original. Use `.slice()` for non-mutating extracts.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const arr = [1, 2, 3]
+const sorted = arr.sort((a, b) => b - a)
+const mapped = arr.map(x => x * 2)
+
+console.log(sorted, mapped)
+console.log(arr)
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `[3, 2, 1] [6, 4, 2]` then `[3, 2, 1]`. Here's why:
+- `.sort()` **mutates** the original array
+- `arr` is now `[3, 2, 1]`, so `.map()` operates on the sorted array
+- Final `arr` is still `[3, 2, 1]` (mutated)
+
+**The lesson**: `.sort()` and `.splice()` mutate. Use `.toSorted()` (ES2023) for immutability.
+
+</details>
+
 ## Key Takeaways
 
 - `map`/`filter`/`reduce` are the core of functional array processing.

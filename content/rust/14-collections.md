@@ -311,8 +311,60 @@ h.push(std::cmp::Reverse(5));
 | Small, known max size | `ArrayVec` / `SmallVec` |
 | Often-cloned byte buffer | `bytes::Bytes` |
 
+## Collection Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: entry API for efficient insert-or-modify
+let mut m = HashMap::new();
+*m.entry("key").or_insert(0) += 1;
+
+// Trick: retain for in-place filtering
+let mut v = vec![1, 2, 3, 4, 5];
+v.retain(|x| *x % 2 == 0); // keeps 2, 4
+
+// Trick: drain for partial consumption
+let mut v = vec![1, 2, 3, 4, 5];
+let removed: Vec<_> = v.drain(1..4).collect(); // removes 2, 3, 4
+assert_eq!(v, vec![1, 5]);
+
+// Trick: swap_remove for O(1) removal (unordered)
+let mut v = vec![1, 2, 3];
+v.swap_remove(1); // removes 2, shifts 3 to position 1
+assert_eq!(v, vec![1, 3]);
+
+// Trick: use with_capacity to avoid reallocations
+let mut v = Vec::with_capacity(1000);
+for i in 0..1000 { v.push(i); } // no reallocations
+
+// Trick: String::with_capacity for building strings
+let mut s = String::with_capacity(100);
+for item in items { s.push_str(&item); }
+
+// Trick: collect into different types
+let nums: Vec<i32> = "1 2 3".split_whitespace()
+    .filter_map(|s| s.parse().ok())
+    .collect();
+
+// Trick: BTreeMap for ordered keys
+let mut m = std::collections::BTreeMap::new();
+m.insert(3, "c");
+m.insert(1, "a");
+for (k, v) in &m { println!("{k}: {v}"); } // prints 1, 3
+
+// Trick: Use FxHashMap for non-crypto hashing
+use rustc_hash::FxHashMap;
+let m: FxHashMap<_, _> = vec![(1, "a"), (2, "b")].into_iter().collect();
+
+// Trick: LinkedList::append for O(1) concatenation (rare case)
+let mut l1 = std::collections::LinkedList::new();
+let mut l2 = std::collections::LinkedList::new();
+l1.append(&mut l2); // l2 is now empty, l1 has all elements
+```
+::
+
 ## Summary
 
-`Vec` is the workhorse — understand its memory model (capacity doubling, amortized O(1)). `String` is UTF-8-aware; never confuse bytes with chars. `HashMap`/`BTreeMap` are the map workhorses; the `entry` API is idiomatic. Pick the right collection for the access pattern.
+`Vec` is the workhorse — understand its memory model (capacity doubling, amortized O(1)). `String` is UTF-8-aware; never confuse bytes with chars. `HashMap`/`BTreeMap` are the map workhorses; the `entry` API is idiomatic. Pick the right collection for the access pattern. Use `Vec::with_capacity` and `String::with_capacity` to avoid reallocations; use `retain` and `drain` for efficient in-place operations.
 
 Next: Iterators and combinators — the functional side of Rust.

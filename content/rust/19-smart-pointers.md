@@ -298,6 +298,59 @@ let s: &str = &b;          // &Box<String> -> &String -> &str
 - **`Weak::upgrade` returns `Option`**: handle the case where the value was dropped.
 - **`RefCell::borrow_mut` panic**: can happen in complex call graphs; structure borrows to release before re-borrowing.
 - **`Mutex::lock().unwrap()`**: panics on poison. Consider graceful recovery.
+- **`Arc` contention in hot loops**: every `Arc::clone` does an atomic increment; avoid in inner loops.
+- **`Box` vs `Vec` for variable-size data**: `Box<[T]>` is fixed-size after construction; `Vec<T>` can grow.
+
+## Smart Pointer Tricks
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use Option<Box<T>> to avoid leaks in recursive structures
+struct Node {
+    data: i32,
+    next: Option<Box<Node>>,
+}
+
+// Trick: convert Box<T> to Box<dyn Trait>
+let b: Box<i32> = Box::new(5);
+let t: Box<dyn std::fmt::Debug> = b; // only if T: Trait
+
+// Trick: use Arc::clone explicitly to show intention
+let data = Arc::new(vec![1, 2, 3]);
+let data_clone = Arc::clone(&data); // clearer than data.clone()
+
+// Trick: use Weak to break cycles
+struct Parent {
+    child: Option<Box<Child>>,
+}
+struct Child {
+    parent: Option<std::rc::Weak<Parent>>, // breaks cycle
+}
+
+// Trick: RefCell for shared mutable state in single thread
+let shared = std::rc::Rc::new(std::cell::RefCell::new(0));
+*shared.borrow_mut() += 1;
+
+// Trick: Arc<RwLock<T>> for read-heavy workloads
+let data = std::sync::Arc::new(std::sync::RwLock::new(vec![1, 2, 3]));
+{
+    let readers = vec![
+        std::thread::spawn({ let d = Arc::clone(&data); move || { let r = d.read().unwrap(); r[0] } }),
+        std::thread::spawn({ let d = Arc::clone(&data); move || { let r = d.read().unwrap(); r[1] } }),
+    ];
+}
+
+// Trick: use mem::take to avoid cloning
+let mut data = vec![1, 2, 3];
+let moved = std::mem::take(&mut data); // data is now empty vec, moved has the old data
+
+// Trick: Cow to defer allocation
+use std::borrow::Cow;
+let s: Cow<str> = Cow::Borrowed("hello");
+let s2: Cow<str> = Cow::Owned(String::from("world"));
+// Both can be used the same way, but allocated differently
+```
+::
 
 ## Memory Layout of Smart Pointers
 

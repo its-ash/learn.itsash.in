@@ -276,8 +276,59 @@ impl Builder<Configured> {
 
 Calling `build` on an `Unconfigured` builder is a compile-time error. Encode invariants in the type system.
 
+## Enum Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use matches! for quick boolean checks
+enum Status { Active, Inactive, Paused }
+if matches!(status, Status::Active) { }
+
+// Trick: if let Some/Ok for single-arm matches
+let opt: Option<i32> = Some(5);
+if let Some(x) = opt { println!("{x}"); }
+
+// Trick: use enum variants as function pointers
+enum Message { Write(String), Quit }
+let f: fn(String) -> Message = Message::Write;
+
+// Trick: derive Default on enums for certain patterns
+#[derive(Default)]
+enum State {
+    #[default]
+    Idle,
+    Running,
+}
+
+// Trick: use enums for type-safe state machines
+enum Connection {
+    Disconnected,
+    Connecting { addr: String, start_time: std::time::Instant },
+    Connected { addr: String, stream: std::io::Stdout }, // would be real stream
+    Error(String),
+}
+
+// Trick: manual implementation of is_* methods
+impl Status {
+    fn is_active(&self) -> bool { matches!(self, Status::Active) }
+}
+
+// Trick: map variants with map_err for error propagation
+let res: Result<i32, String> = Err("error".to_string());
+res.map_err(|e| format!("wrapped: {}", e))?;
+
+// Trick: use Option::flatten for nested Options
+let nested: Option<Option<i32>> = Some(Some(5));
+let flat: Option<i32> = nested.flatten(); // Some(5)
+
+// Trick: use Result::transpose to invert Result<Option<T>>
+let res: Result<Option<i32>, String> = Ok(Some(5));
+let opt: Option<Result<i32, String>> = res.transpose();
+```
+::
+
 ## Summary
 
-Enums are sum types: each value is one variant (with optional data). Combined with `match`, they form Rust's modeling backbone. `Option`/`Result` are the canonical examples. Niche optimization makes them memory-efficient. Pattern matching with guards, or-patterns, `@`-bindings, and `matches!` give you expressive dispatch.
+Enums are sum types: each value is one variant (with optional data). Combined with `match`, they form Rust's modeling backbone. `Option`/`Result` are the canonical examples. Niche optimization makes them memory-efficient. Pattern matching with guards, or-patterns, `@`-bindings, and `matches!` give you expressive dispatch. Use enums for type-safe state machines; use `matches!` for quick checks; use variants as function pointers for higher-order code.
 
 Next: Pattern Matching — a deep dive.

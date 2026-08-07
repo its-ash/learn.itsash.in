@@ -388,8 +388,99 @@ cfg_if::cfg_if! {
 
 Cleaner than stacked `#[cfg]` attributes.
 
+## Attributes Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use cfg_attr to conditionally apply attributes
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+struct Data {
+    x: i32,
+}
+
+// Trick: use doc(hidden) to hide internal items from docs
+#[doc(hidden)]
+pub fn internal_only() { }
+
+// Trick: use must_use on Result-like types
+#[must_use = "this operation can fail; use ? or unwrap_or"]
+pub fn risky_operation() -> Option<i32> { None }
+
+// Trick: use deprecated to guide users to new APIs
+#[deprecated(since = "1.2", replacement = "new_function")]
+pub fn old_function() { }
+
+// Trick: use allow/deny/forbid to enforce patterns
+#![deny(unsafe_code)]      // no unsafe anywhere
+#![deny(missing_docs)]      // all public items must have docs
+
+// Trick: use track_caller for better error messages
+#[track_caller]
+fn assert_valid(x: i32) {
+    assert!(x > 0, "at {}", std::panic::Location::caller());
+}
+
+// Trick: use target_feature for platform-specific code
+#[target_feature(enable = "avx2")]
+#[cfg(target_arch = "x86_64")]
+unsafe fn simd_add(a: &[f32], b: &[f32]) -> f32 {
+    // AVX2 code here
+    0.0
+}
+
+// Trick: use repr(transparent) for newtype zero-cost wrappers
+#[repr(transparent)]
+struct Wrapper(u32);
+
+// Trick: use non_exhaustive for future API changes
+#[non_exhaustive]
+pub enum Status {
+    Active,
+    Inactive,
+}
+
+// Trick: use doc attributes for custom documentation
+#![doc = "Custom crate documentation"]
+#![doc = include_str!("../README.md")]  // include from file
+```
+::
+
+## Conditional Compilation Tips
+
+::code-wrapper{language="rust"}
+```rust
+// Check multiple conditions
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_only() { }
+
+// Platform families
+#[cfg(target_family = "unix")]
+fn posix() { }
+
+#[cfg(target_family = "wasm")]
+fn wasm_only() { }
+
+// Debug vs Release
+#[cfg(debug_assertions)]
+fn debug_only() {
+    println!("debugging enabled");
+}
+
+#[cfg(not(debug_assertions))]
+fn release_only() { }
+
+// Testing
+#[cfg(test)]
+mod tests { }
+
+// Feature-gated code
+#[cfg(feature = "unsafe_mode")]
+unsafe fn experimental() { }
+```
+::
+
 ## Summary
 
-`#[cfg]` controls what compiles; `#[derive]` auto-implements traits; `#[allow]`/`#[deny]`/`#[forbid]` tune lints; `#[non_exhaustive]` future-proofs APIs; `#[must_use]`/`#[deprecated]` drive correctness; `#[repr(C)]` controls layout; `#[global_allocator]`/`#[panic_handler]` customize the runtime.
+`#[cfg]` controls what compiles; `#[derive]` auto-implements traits; `#[allow]`/`#[deny]`/`#[forbid]` tune lints; `#[non_exhaustive]` future-proofs APIs; `#[must_use]`/`#[deprecated]` drive correctness; `#[repr(C)]` controls layout; `#[global_allocator]`/`#[panic_handler]` customize the runtime. Use `#[track_caller]` for better debugging; use `#[cfg_attr]` for conditional attributes; use platform-specific `#[cfg]` for cross-platform code.
 
 Next: Cargo features and release engineering.

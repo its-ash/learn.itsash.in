@@ -356,8 +356,88 @@ Allocations must be aligned to `Layout::align`. Mismatched alignment is UB. `Box
 - Bounded channels for backpressure (vs unbounded that grow).
 - `current_thread` runtime for single-threaded apps.
 
+## Performance Tricks & Anti-Patterns to Avoid
+
+::code-wrapper{language="rust"}
+```rust
+// AVOID: copying large structs repeatedly
+fn expensive_copy(data: LargeStruct) { /* ... */ } // makes a copy
+// FIX: take a reference
+fn efficient(data: &LargeStruct) { /* ... */ }
+
+// AVOID: String concatenation in a loop
+let mut result = String::new();
+for s in strings {
+    result.push_str(&s); // multiple reallocations
+}
+// FIX: use with_capacity or join
+let result = strings.join("");
+// OR: use a Vec as a buffer
+let mut buf = String::with_capacity(1000);
+for s in strings { buf.push_str(&s); }
+
+// AVOID: Vec::push in a loop without pre-allocation
+let mut v = Vec::new();
+for _ in 0..1_000_000 { v.push(1); } // many reallocations
+// FIX: pre-allocate
+let mut v = Vec::with_capacity(1_000_000);
+for _ in 0..1_000_000 { v.push(1); }
+
+// AVOID: HashMap operations without entry API
+if !map.contains_key(&k) {
+    map.insert(k, v);
+}
+// FIX: use entry for single hash lookup
+map.entry(k).or_insert(v);
+
+// AVOID: sorting with default comparator when you can compare faster
+// Some types have cheaper comparisons via Eq than via Ord
+
+// AVOID: calling expensive functions with short-circuit operations
+if expensive() && cheap() { } // expensive runs first, wasting time
+if cheap() && expensive() { } // better: cheap exits early
+
+// TRICK: use inline assembly for critical sections (rare)
+#[inline(always)]
+fn critical() { }
+
+// TRICK: use repr(transparent) for zero-cost newtypes
+#[repr(transparent)]
+struct Meters(f64); // exactly the same layout as f64
+```
+::
+
+## Performance Optimization Checklist
+
+1. **Profile first**: Use `criterion`, `flamegraph`, or `perf`.
+2. **Measure baseline**: Get numbers before and after any change.
+3. **Identify hot spots**: Focus on code that runs often.
+4. **Reduce allocations**: Use `Vec::with_capacity`, `String::with_capacity`.
+5. **Avoid copies**: Take references, use `Cow`.
+6. **Use iterators**: Chain adaptors compile to tight loops.
+7. **Inline judiciously**: Small functions benefit; large functions don't.
+8. **Lock granularity**: Keep critical sections small.
+9. **Cache results**: Avoid recomputing expensive values.
+10. **Use SIMD**: For vectorizable operations.
+11. **Profile again**: Verify the improvement.
+
+## Release Profile Optimization
+
+::code-wrapper{language="toml"}
+[profile.release]
+opt-level = 3
+lto = "fat"           # link-time optimization
+codegen-units = 1     # better optimization, slower compile
+panic = "abort"       # no unwinding, smaller binary
+strip = true          # remove debug symbols
+
+[profile.bench]
+inherits = "release"
+```
+::
+
 ## Summary
 
-Profile with `criterion`, `flamegraph`, `samply`, `cargo bloat`. Optimize hot paths: avoid allocation, use slices, generic over `dyn`, `with_capacity`, lock granularity, SIMD. Use `release` profile + `lto = "fat"` + `codegen-units = 1` for final binaries. Don't trust intuition; measure. Iterate.
+Profile with `criterion`, `flamegraph`, `samply`, `cargo bloat`. Optimize hot paths: avoid allocation, use slices, generic over `dyn`, `with_capacity`, lock granularity, SIMD. Use `release` profile + `lto = "fat"` + `codegen-units = 1` for final binaries. Don't trust intuition; measure. Iterate. Avoid common anti-patterns like repeated string concatenation, unsafe HashMap operations, and premature `Box<dyn>` usage.
 
 Next: Documentation.

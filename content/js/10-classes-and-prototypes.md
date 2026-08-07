@@ -323,6 +323,69 @@ user.validate()   // true
 
 ::
 
+## 💡 Tips & Tricks
+
+**Static factory methods** — `static create(name) { return new this(name) }` is cleaner than constructors with many branches. Encapsulates object creation logic.
+
+**Private fields for real encapsulation** — `#field` can't be accessed even with `Object.getOwnPropertyNames()`. Better than `_convention` which is just a promise.
+
+**Getters to avoid `.get()` / `.set()` methods** — `get id() { return this.#id }` is cleaner than `getId()` and reads like a property.
+
+**Mixins with `Object.assign`** — Add shared methods to classes without deep inheritance hierarchies: `Object.assign(MyClass.prototype, SharedMethods)`.
+
+**Check inheritance with `instanceof`** — Don't check with typeof or `constructor` — always use `obj instanceof Class`.
+
+## ⚠️ Edge Cases & Gotchas
+
+**`super()` must be first in constructor** — Can't use `this` before calling `super()` in a subclass. It seems illogical but it's required. Accessing `this` before `super()` throws ReferenceError.
+
+**Private fields create separate namespaces** — `class A { #x = 1 }` and `class B { #x = 2 }` can both have `#x` and they don't conflict. But they can't be accessed cross-class even in same inheritance chain.
+
+**Static methods aren't inherited through `new`** — `MyClass.create()` works, but instance methods don't call statics automatically. You need to reference the class explicitly.
+
+**Prototype pollution risks** — `Object.prototype.admin = true` affects ALL objects. Modern frameworks guard against this, but in old code, modifying prototypes is dangerous.
+
+**`instanceof` is fragile across realms** — Different iframes/windows have different `Object` constructors. `x instanceof Array` fails if `x` comes from another frame. Use `Array.isArray()` instead.
+
+**Class fields are per-instance, not shared** — `class C { x = [] }` creates a new array for EACH instance, not shared. This is actually good (prevents bugs), but different from prototype methods.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+class Animal {
+  constructor(name) {
+    this.name = name
+  }
+
+  static greet() { return 'Hi' }
+  speak() { return `${this.name} says hi` }
+}
+
+class Dog extends Animal {
+  constructor(name, breed) {
+    super(name)
+    this.breed = breed
+  }
+}
+
+const dog = new Dog('Rex', 'Lab')
+console.log(dog.speak(), Dog.greet(), dog.greet?.())
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `Rex says hi Hi undefined`. Here's why:
+- `dog.speak()` works — inherited instance method
+- `Dog.greet()` works — static method called on class
+- `dog.greet?.()` returns `undefined` — instance doesn't inherit static methods
+
+**The lesson**: Static methods are on the class, not instances. You need to call them on the class, not the instance.
+
+</details>
+
 ## Key Takeaways
 
 - `class` is syntactic sugar over prototypal inheritance — `extends` sets up prototype chain.

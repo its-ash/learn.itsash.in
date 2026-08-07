@@ -144,7 +144,7 @@ const inserted = [...arr.slice(0, 2), 'new', ...arr.slice(2)]
 const fromString = [...'hello']    // ['h','e','l','l','o']
 const fromSet = [...new Set([1,2,2,3])]  // [1, 2, 3]
 const fromMap = [...new Map([['a',1]])]  // [['a', 1]]
-``
+```
 ::
 
 ## Spread in Objects
@@ -275,6 +275,57 @@ for (const [key, value] of myMap) {
 }
 ```
 ::
+
+## 💡 Tips & Tricks
+
+**Destructure in function params for cleaner code** — Instead of `function f(user) { const { name, age } = user }`, just `function f({ name, age })` at the signature level.
+
+**Swap variables with destructuring** — `[a, b] = [b, a]` is cleaner than temp variables. Works with any iterable.
+
+**Omit multiple fields with rest** — `const { password, ssn, ...safe } = user` collects everything except sensitive fields. Great for logging or API responses.
+
+**Destructure in for...of loops** — `for (const [key, value] of Object.entries(obj))` is cleaner than `.forEach()`.
+
+**Default values with computed expressions** — `const { timeout = Date.now() + 5000 } = config` evaluates lazily only if needed.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Destructuring null/undefined throws** — `const { x } = null` throws TypeError. Always provide a fallback: `const { x } = obj ?? {}`.
+
+**Shallow merge only** — `{ ...defaults, ...overrides }` only merges top level. Nested objects are replaced entirely, not merged. For deep merge, use a library.
+
+**Rest must be last** — `const [a, ...rest, b] = arr` is a SyntaxError. Rest collects everything remaining, so it can't have items after it.
+
+**Renaming during destructuring is verbose** — `const { user: { name: fullName } } = data` is confusing. Consider extracting in steps for readability.
+
+**Order matters in array destructuring** — `const [, , third] = arr` skips first two elements by position, not by name. Easy to break when array structure changes.
+
+**Spread doesn't deep-freeze** — `{ ...Object.freeze(obj) }` creates a new object that's NOT frozen. Each level must be frozen separately.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const obj = { a: 1, b: { c: 2 } }
+const copy = { ...obj }
+copy.b.c = 99
+
+const [x = 5, , y = 10] = [1, undefined]
+
+console.log(obj.b.c, copy.b.c, x, y)
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `99 99 1 10`. Here's why:
+- Spread is shallow. `copy.b` is the same reference as `obj.b`, so mutating it affects both
+- `[x = 5, , y = 10] = [1, undefined]` skips index 1 entirely. `x` is 1, index 1 is ignored, index 2 is `undefined`, so `y = 10` (default applied)
+
+**The lesson**: Spread doesn't deep-copy. `undefined` triggers defaults, but skipped positions don't.
+
+</details>
 
 ## Key Takeaways
 

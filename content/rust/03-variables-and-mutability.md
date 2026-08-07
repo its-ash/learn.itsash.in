@@ -140,6 +140,11 @@ A `&mut T` requires the underlying binding to be `mut` too (you can't take a mut
 - **Initialization required**: Rust has no "uninitialized variable" UB like C. `let x: i32;` followed by a read before any assignment is a compile error.
 - **`let` chains (unstable)**: `let Some(x) = opt && x > 0` — not stable; use explicit checks.
 - **Tuples and unit**: `let () = some_fn();` pattern-matches that the function returns unit; useful for "I expect this to return nothing."
+- **Shadowing can change type but not `mut`**: `let x = 5; let x = "hello";` works (different types), but `let mut x = 5; let x = "hello";` still needs explicit `let` to shadow, not reassignment.
+- **Mutable binding ≠ mutable reference**: `let mut x = 5; x = 6;` works, but `let x = 5; x = 6;` is a compile error. A `&mut` reference lets you mutate if the underlying binding is `mut`.
+- **Drop order with shadowing**: `let x = String::from("a"); let x = String::from("b");` — the first `String` is dropped at the end of its scope, not at the statement boundary.
+- **Partial moves and shadowing**: `let s = String::from("hi"); let s = &s;` is a rebind (not move), `s` is now a reference. But `let (a, b) = (String::from("hi"), 5); let a = 10;` shadows `a` only, `b` still holds the `String`.
+- **`static mut` requires `unsafe` to read/write**: Even reading a `static mut` is undefined behavior without synchronization; use `std::sync::atomic` for thread-safe access.
 
 ## `let`-else (1.65+)
 

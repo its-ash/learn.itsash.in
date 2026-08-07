@@ -335,6 +335,47 @@ let max = v.iter().max_by_key(|x| x.score);
 - **Closure captures**: `it.map(|x| x + offset)` borrows `offset` for the iterator's lifetime; can surprise you with borrow errors.
 - **`flatten` on `Iterator<Item = Option<T>>`**: this is a special impl — `Option` impls `IntoIterator`. Same for `Result<T, E>` (only the `Ok` cases flatten).
 - **`Iterator::size_hint`**: returns `(lower, Option<upper>)`; useful for algorithms that need a size estimate.
+- **Lazy evaluation gotcha**: `let v = vec![1,2,3]; let iter = v.iter().map(|x| x+1); drop(v);` — the iterator still holds a borrowed reference, dropping `v` is an error.
+- **Multiple `.rev()` calls**: `.rev().rev()` works and cancels out, but at runtime cost (two reversals). Don't do it idomatically; keep one `.rev()` where needed.
+- **`Peekable` and consuming after peek**: `.peek()` returns `Option<&Item>`, then `.next()` still consumes the peeked item. No double-consumption.
+- **`.take(n)` beyond iterator end**: safe — stops naturally when iterator is exhausted.
+- **Combining iterators with different types**: `vec![Some(1), None, Some(2)].into_iter().flatten()` works (Option's IntoIterator), but `vec![Ok(1), Err("e")].into_iter().flatten()` only flattens `Ok` values; errors are silently dropped. Use `.collect::<Result<Vec<_>, _>>()` to preserve errors.
+- **Using `.by_ref()` to split iteration**: `let mut it = v.iter(); for x in it.by_ref().take(3) { } for y in it { }` — `by_ref()` borrows the iterator so partial consumption is safe.
+- **Finding the index of an element**: `v.iter().position(|x| x == &target)` returns `Option<usize>`, not the element.
+- **Iterator adapters don't consume until collected or iterated**: `v.iter().map(|x| expensive(x))` does nothing until you `collect()` or `for x in`.
+- **Chaining empty iterators**: `std::iter::empty::<i32>().chain(v.iter())` is valid and useful for conditional chains.
+
+## Iterator Tricks
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: collect into tuple of vecs
+let (evens, odds): (Vec<_>, Vec<_>) = (1..10).partition(|x| x % 2 == 0);
+
+// Trick: fold to accumulate with closure state
+let counts = vec!["a", "a", "b", "c", "c", "c"];
+let result = counts.iter().fold(HashMap::new(), |mut map, word| {
+    *map.entry(word).or_insert(0) += 1;
+    map
+});
+
+// Trick: skip the first N items, process rest
+let v = vec![0, 1, 2, 3, 4, 5];
+for x in v.iter().skip(2) { println!("{x}"); } // prints 2, 3, 4, 5
+
+// Trick: group consecutive items with tuple windows
+for [a, b] in v.iter().collect::<Vec<_>>().windows(2) { }
+
+// Trick: use scan for stateful mapping
+let v = vec![1, 2, 3];
+let running_sum: Vec<_> = v.iter().scan(0, |acc, x| { *acc += x; Some(*acc) }).collect();
+// running_sum = [1, 3, 6]
+
+// Trick: unzip to split a Vec of tuples
+let pairs = vec![(1, 'a'), (2, 'b'), (3, 'c')];
+let (nums, chars): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+```
+::
 
 ## Summary
 

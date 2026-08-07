@@ -205,6 +205,37 @@ The variable itself must be `mut` to allow `&mut`.
 
 Fix by reordering so the immutable borrow ends before the mutable borrow (NLL), or by cloning, or by restructuring.
 
+## Borrowing Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: borrow-through-method calling doesn't hold the borrow across statements
+let mut v = vec![1, 2, 3];
+v.push(v[0]); // ERROR: can't borrow v immutably while mutably borrowed (push)
+let x = v[0]; // Solution: capture value first
+v.push(x);    // OK
+
+// Trick: reborrow to shorten a mutable borrow
+let mut x = String::from("hi");
+let r = &mut x;
+let r2 = &mut *r; // reborrow r; original r is now inactive
+r2.push('!');
+// r is still held, but we can use r
+
+// Trick: borrow through method calls can auto-deref
+let s = String::from("hello");
+println!("{}", s.len()); // String derefs to str, then calls str::len
+
+// Trick: field splitting for non-overlapping borrows
+struct Data { x: u32, y: u32 }
+let mut d = Data { x: 1, y: 2 };
+let rx = &mut d.x;
+let ry = &mut d.y; // OK: different fields
+*rx += 1;
+*ry += 2;
+```
+::
+
 ## `Ref` and `RefMut` (Interior Mutability)
 
 `std::cell::RefCell` provides *runtime-checked* borrow rules (single mutable xor multiple immutable), enabling interior mutability behind an immutable reference. Covered in Interior Mutability chapter.

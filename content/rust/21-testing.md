@@ -285,8 +285,77 @@ cargo fuzz run parse_target
 
 `assert_eq!` requires `T: PartialEq + Debug`. If you see "the trait Debug is not implemented," derive it.
 
+## Testing Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use a helper function to reduce boilerplate
+fn assert_contains(s: &str, substr: &str) {
+    assert!(s.contains(substr), "expected '{}' to contain '{}'", s, substr);
+}
+
+// Trick: test fixtures with setup/teardown
+struct TestDir {
+    path: std::path::PathBuf,
+}
+impl TestDir {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!("test_{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        TestDir { path }
+    }
+}
+impl Drop for TestDir {
+    fn drop(&mut self) { std::fs::remove_dir_all(&self.path).unwrap(); }
+}
+
+// Trick: use assert_matches! for pattern matching in tests
+#[test]
+fn test_result() {
+    use assert_matches::assert_matches;
+    let res = some_fn();
+    assert_matches!(res, Ok(x) if x > 0);
+}
+
+// Trick: use temp directory for each test
+use std::sync::Mutex;
+thread_local! {
+    static TEMP_DIR_COUNT: Mutex<usize> = Mutex::new(0);
+}
+
+// Trick: skip tests conditionally
+#[test]
+#[cfg_attr(target_arch = "wasm32", ignore)]
+fn test_not_on_wasm() { }
+
+// Trick: use a custom assertion function
+fn assert_approx_eq(a: f64, b: f64, epsilon: f64) {
+    assert!((a - b).abs() < epsilon, "expected {}, got {}", a, b);
+}
+
+// Trick: prop-based testing with proptest
+#[cfg(test)]
+mod tests {
+    use proptest::proptest;
+    proptest! {
+        #[test]
+        fn test_commutative(a in 0i32..100, b in 0i32..100) {
+            prop_assert_eq!(a + b, b + a);
+        }
+    }
+}
+
+// Trick: insta snapshots for complex outputs
+#[test]
+fn test_render() {
+    let output = render_template("data");
+    insta::assert_snapshot!(output);
+}
+```
+::
+
 ## Summary
 
-Tests live alongside code (`#[cfg(test)]`), in `tests/` for integration, and in doc comments for doc tests. Use `assert!`/`assert_eq!`/`should_panic`/`#[ignore]`. Run with `cargo test`. Use `tokio::test` for async. Use `proptest`/`insta`/`criterion`/`cargo-fuzz` for advanced testing.
+Tests live alongside code (`#[cfg(test)]`), in `tests/` for integration, and in doc comments for doc tests. Use `assert!`/`assert_eq!`/`should_panic`/`#[ignore]`. Run with `cargo test`. Use `tokio::test` for async. Use `proptest`/`insta`/`criterion`/`cargo-fuzz` for advanced testing. Use helper functions to reduce boilerplate; use fixtures for setup/teardown; use snapshot testing for complex outputs.
 
 Next: Concurrency, threads, and the message-passing vs shared-state story.

@@ -203,6 +203,74 @@ let leaked: &'static mut [u8] = Box::leak(vec![1, 2, 3].into_boxed_slice());
 - **`self`-referential structs** are famously hard in safe Rust; use `ouroboros` crate or restructure. The borrow checker can't express "this field borrows from that field of the same struct".
 - **Async functions** desugar to state machines that hold references across `.await` points — lifetimes get complex; usually you must own the data instead of borrowing.
 
+## Lifetime Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use bound lifetime parameters for closures
+fn apply<F>(f: F) where F: for<'a> Fn(&'a str) {
+    f("hello");
+    f("world");
+}
+
+// Trick: constrain output lifetime with input
+fn first_or<'a, 'b>(a: &'a str, b: &'b str) -> &'a str
+where
+    'b: 'a, // requires b's lifetime to outlive a's
+{
+    if a.is_empty() { b } else { a }
+}
+
+// Trick: use PhantomData for lifetime ownership
+use std::marker::PhantomData;
+struct Borrowed<'a> {
+    data: *const u8,
+    _marker: PhantomData<&'a u8>,
+}
+
+// Trick: covariance/contravariance with function pointers
+fn accept_fn<F>(_: F) where F: for<'a> Fn(&'a str) {}
+accept_fn(|_| {}); // works
+
+// Trick: use 'static to enforce no borrowed data
+fn spawn_thread<F>(f: F) where F: FnOnce() + 'static + Send {
+    std::thread::spawn(f);
+}
+
+// Trick: lower and higher-ranked trait bounds
+fn takes_closure<F>(f: F) where F: for<'a> Fn(&'a str) -> &'a str {
+    let _ = f("test");
+}
+```
+::
+
+## Lifetime Edge Cases
+
+::code-wrapper{language="rust"}
+```rust
+// Edge case: lifetime elision with multiple references
+fn longest<'a>(x: &'a str, y: &str) -> &'a str { x } // y's lifetime is different!
+
+// Edge case: lifetime of borrowed field in struct
+struct Excerpt<'a> {
+    text: &'a str,
+}
+// Excerpt can't outlive text's lifetime
+
+// Edge case: 'static doesn't mean "forever," it means "known at compile time"
+let s: &'static str = "hello"; // string literal, embedded in binary
+
+// Edge case: lifetime bound on trait objects
+let v: Vec<Box<dyn std::fmt::Debug + 'static>> = vec![Box::new(5)];
+// objects can't have borrowed references inside
+
+// Edge case: variance affects lifetime subtyping
+fn accept<'a>(_: &'a str) {} // 'a is covariant
+let s: &'static str = "hi";
+accept(s); // 'static <: 'a works
+```
+::
+
 ## Summary
 
 Lifetimes are how Rust makes references safe. They:
@@ -210,5 +278,7 @@ Lifetimes are how Rust makes references safe. They:
 - Get elided in common cases.
 - Enforce that no reference outlives its referent.
 - Sometimes need explicit annotation when multiple inputs feed an output.
+- Use bound lifetime parameters (`for<'a>`) for maximum flexibility in closures.
+- Use trait objects with `'static` to avoid lifetime complications.
 
 Next: Structs and enums — the algebraic data types at the heart of Rust modeling.

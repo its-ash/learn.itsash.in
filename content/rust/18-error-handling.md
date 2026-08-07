@@ -330,6 +330,45 @@ The error chain shows: "read config" → original `io::Error`.
 - **`Result<T, E>` where `T == E`**: the compiler can't infer which arm you mean — annotate or use `.map_err`.
 - **Custom error type without `Debug`**: required by `Error` trait; derive it.
 
+## Error Handling Tricks
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use ok_or to convert Option to Result
+let value: Option<i32> = Some(5);
+let result: Result<i32, String> = value.ok_or("not found".to_string());
+
+// Trick: use map_err to convert error types
+"not_a_number".parse::<i32>()
+    .map_err(|e| format!("parse failed: {}", e))
+
+// Trick: chain errors with .context() from anyhow
+use anyhow::Context;
+std::fs::read_to_string("file.txt")
+    .context("failed to read file")
+    .context("during initialization")?;
+
+// Trick: use unwrap_or_else to lazily compute default
+let v = opt.unwrap_or_else(|| expensive_default());
+
+// Trick: tap into errors without propagating
+let result = dangerous_op()
+    .map_err(|e| { eprintln!("warning: {}", e); e })
+    .ok(); // convert to Option
+
+// Trick: collect error results
+let results: Vec<_> = items.iter().map(|x| risky(x)).collect();
+let (oks, errs): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
+
+// Trick: zip errors for parallel error accumulation
+use itertools::Itertools;
+items.iter()
+    .zip_eq(other_items.iter()) // panics if lengths differ
+    .map(|(a, b)| process(a, b))
+    .collect::<Result<Vec<_>, _>>()?
+```
+::
+
 ## Idioms Cheat Sheet
 
 - Use `?` to propagate.
@@ -339,6 +378,10 @@ The error chain shows: "read config" → original `io::Error`.
 - Use `Option` only when absence is normal, not "operation failed".
 - `panic!` for invariants, never for input validation in public APIs.
 - `assert!` for tests; `debug_assert!` for invariants you don't want in release.
+- Avoid `unwrap()` in library code; prefer `?` or returning `Result`.
+- Use `unwrap_or_default()` when you have a sensible zero-value.
+- Use `.ok()?` to convert `Result` to `Option` and propagate `None`.
+- Use `.ok_or()` to give context when converting `Option` to `Result`.
 
 ## Summary
 

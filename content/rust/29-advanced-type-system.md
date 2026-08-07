@@ -297,8 +297,88 @@ Unstable; you can opt out of auto traits today via `PhantomData<*const ()>` or `
 - **`Sized` default**: `fn foo<T>()` requires `T: Sized`; unsized locals and parameters are unstable.
 - **Trait objects and `Send`**: `Box<dyn Trait>` isn't `Send` unless you write `Box<dyn Trait + Send>`.
 
+## Advanced Type System Tricks
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use associated types for cleaner APIs
+trait Container {
+    type Item; // caller doesn't pick; impl does
+    fn push(&mut self, item: Self::Item);
+}
+
+// Trick: use GATs for lending iterators
+trait LendingIterator {
+    type Item<'a> where Self: 'a;
+    fn next(&mut self) -> Option<Self::Item<'_>>;
+}
+
+// Trick: newtype pattern for type safety
+struct UserId(u64);
+struct PostId(u64);
+fn get_post(user: UserId, post: PostId) { } // can't accidentally swap types
+
+// Trick: use PhantomData for type-level reasoning
+use std::marker::PhantomData;
+struct Contains<T> {
+    _p: PhantomData<T>,
+}
+// Now the struct "owns" a T for variance purposes, even without storing it
+
+// Trick: use marker traits to categorize types
+trait Recoverable: std::error::Error + Send + Sync {}
+fn safe_to_send<E: Recoverable>(e: E) { } // only Recoverable errors
+
+// Trick: higher-rank trait bounds for flexibility
+fn apply_to_strings<F>(f: F) where F: for<'a> Fn(&'a str) -> &'a str {
+    println!("{}", f("hello"));
+}
+
+// Trick: sized/unsized trait bounds
+fn foo<T: ?Sized>(x: &T) {} // accepts &T where T might not be Sized
+
+// Trick: use where clauses to express complex bounds
+fn complex<T>(x: T) where T: Clone + std::fmt::Debug, <T as Clone>::Output: Default {
+    // T can be cloned and debugged, and its Output implements Default
+}
+```
+::
+
+## Type-Level Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Pattern: typestate for compile-time state validation
+struct Builder<State>(std::marker::PhantomData<State>);
+struct Empty;
+struct Configured;
+
+impl Builder<Empty> {
+    fn configure(self) -> Builder<Configured> { Builder(std::marker::PhantomData) }
+}
+
+impl Builder<Configured> {
+    fn build(self) -> String { String::from("built") }
+}
+
+// Usage: build() only works on Builder<Configured>, not Builder<Empty>
+// let b = Builder::<Empty>(std::marker::PhantomData);
+// b.build(); // compile error!
+
+// Pattern: sealed traits to prevent external implementations
+mod sealed {
+    pub trait Sealed {}
+    pub struct SealedType;
+    impl Sealed for SealedType {}
+}
+pub trait Public: sealed::Sealed {}
+impl Public for sealed::SealedType {}
+// external types can't impl Public because Sealed is private
+```
+::
+
 ## Summary
 
-Variance governs subtype relationships and is mostly about lifetimes (and `&mut`'s invariance in `T`). HRTBs express "for all lifetimes." Associated types vs generics: one natural type vs caller-supplied. Object safety limits trait objects. GATs (1.65+) enable borrowing in associated types. Const generics (1.51+) parameterize by integers/bools. PhantomData tunes variance and drop behavior. Newtype pattern is the idiomatic type-distinctness tool.
+Variance governs subtype relationships and is mostly about lifetimes (and `&mut`'s invariance in `T`). HRTBs express "for all lifetimes." Associated types vs generics: one natural type vs caller-supplied. Object safety limits trait objects. GATs (1.65+) enable borrowing in associated types. Const generics (1.51+) parameterize by integers/bools. PhantomData tunes variance and drop behavior. Newtype pattern is the idiomatic type-distinctness tool. Use typestate pattern for compile-time validation; use sealed traits to prevent external implementations.
 
 Next: Common design patterns and idiomatic Rust.

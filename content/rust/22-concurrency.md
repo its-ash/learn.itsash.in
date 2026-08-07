@@ -283,6 +283,45 @@ let sum: i32 = v.par_iter().map(|x| x * 2).sum();
 - **Atomic orderings are subtle**: wrong ordering causes bugs that don't show on x86 (which is strongly ordered). Test on weak architectures (ARM).
 - **`Mutex::lock()` returns `Result`**: poison is the failure mode. Don't `unwrap` blindly in production code paths.
 
+## Concurrency Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: scoped threads to borrow from main thread
+use std::thread;
+let data = vec![1, 2, 3];
+thread::scope(|s| {
+    s.spawn(|| println!("{:?}", data)); // borrows data safely
+});
+
+// Trick: spawn_blocking for long-running blocking work in async
+#[tokio::main]
+async fn main() {
+    let result = tokio::task::spawn_blocking(|| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        42
+    }).await.unwrap();
+}
+
+// Trick: use once_cell for lazy initialization
+use std::sync::OnceLock;
+fn get_config() -> &'static Config {
+    static CONFIG: OnceLock<Config> = OnceLock::new();
+    CONFIG.get_or_init(Config::load)
+}
+
+// Trick: use parking_lot for faster mutexes
+// parking_lot::Mutex is often faster than std::sync::Mutex
+let mutex = parking_lot::Mutex::new(0);
+*mutex.lock() += 1; // no .unwrap() needed
+
+// Trick: crossbeam for powerful channels
+let (tx, rx) = crossbeam_channel::unbounded();
+tx.send(1)?;
+let val = rx.recv()?; // simpler API than std::mpsc
+```
+::
+
 ## Patterns
 
 - **Work queue**: `mpsc` channels + worker pool.
@@ -290,6 +329,9 @@ let sum: i32 = v.par_iter().map(|x| x * 2).sum();
 - **Producer-consumer**: bounded `sync_channel` for backpressure.
 - **Read-mostly cache**: `RwLock<HashMap<...>>` or `arc-swap` for atomic replacement.
 - **Sharded locks**: split data into N shards each with its own lock (reduces contention).
+- **Scoped threads**: use `thread::scope` to borrow from main thread safely (avoids `'static` requirement).
+- **Thread-local storage**: `thread_local!` for per-thread state without synchronization.
+- **Atomic spinning**: `std::sync::atomic::AtomicBool` with `.store()` for simple signaling (avoid in tight loops).
 
 ## Thread Pool
 

@@ -78,7 +78,7 @@ Object.getOwnPropertyDescriptor(obj, 'hidden')
 ```javascript
 // Object.freeze — shallow, makes all properties non-writable + non-configurable
 const config = Object.freeze({ apiUrl: 'https://api.example.com', timeout: 5000 })
-config.timeout = 1000  // fails silently (strict mode: TypeError)
+config.timeout = 1000  // fails silently in non-strict, TypeError in strict mode
 
 // Object.seal — can modify existing values but can't add/remove properties
 const sealed = Object.seal({ a: 1 })
@@ -139,7 +139,7 @@ for (const [key, value] of Object.entries(obj)) {
 
 // fromEntries — reverse of entries
 Object.fromEntries([['a', 1], ['b', 2]])  // { a: 1, b: 2 }
-``
+```
 ::
 
 ### Spread and Merge
@@ -241,6 +241,55 @@ const handlers = {
 handlers.onClick()
 ```
 ::
+
+## 💡 Tips & Tricks
+
+**Getters for lazy initialization** — Use getters to delay expensive computations: `get data() { return this._data ??= expensiveFetch() }`. Only computed when accessed.
+
+**Symbols for truly private keys** — `const id = Symbol('id')` creates unique keys not enumerable in `Object.keys()`. Useful for hiding metadata from JSON serialization.
+
+**`structuredClone` for deep copies** — Modern alternative to JSON round-trip: `structuredClone(obj)` handles most cases except functions and symbols.
+
+**Property descriptors for constants** — `Object.defineProperty(obj, 'MAX_SIZE', { value: 100, writable: false })` creates immutable constants.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Spread creates shallow copies** — `{...obj}` is not a deep copy. Nested objects are still shared references. Modify `obj.nested.prop` and the copy is affected too.
+
+**Getters can be called accidentally** — `Object.keys(obj)` doesn't call getters, but `JSON.stringify(obj)` does. If a getter has side effects, be careful.
+
+**`in` operator includes inherited** — `'toString' in {}` is `true` (inherited from Object.prototype). Use `Object.hasOwn()` or `hasOwnProperty()` to check only own properties.
+
+**Property descriptors default to false** — When you define a property with `Object.defineProperty()` without specifying flags, `writable`, `enumerable`, and `configurable` all default to `false`. Easy to accidentally create read-only properties.
+
+**Frozen objects can't be unfrozen** — `Object.freeze()` is permanent. You can't call `Object.freeze()` on a frozen object to "unfreeze" it. You have to create a new copy.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const user = { name: 'Alice' }
+const copy = { ...user }
+copy.name = 'Bob'
+
+const profile = Object.create(user)
+profile.age = 30
+
+console.log(user.name, copy.name, profile.name, Object.keys(profile))
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `Alice Bob Alice ['age']`. Here's why:
+- `copy` is a shallow copy; changing `copy.name` doesn't affect `user`
+- `profile` uses `Object.create(user)`, so it inherits `name` from the prototype
+- `Object.keys(profile)` only returns own properties, not inherited ones
+
+**The lesson**: Spread copies the object structure but not prototypes. `Object.create()` sets up inheritance, not copying.
+
+</details>
 
 ## Key Takeaways
 

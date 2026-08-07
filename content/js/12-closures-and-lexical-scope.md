@@ -207,6 +207,61 @@ function setupBetter() {
 
 ::
 
+## 💡 Tips & Tricks
+
+**Closures for private fields** — Before ES2022 `#` fields, closures were the way: `function User() { let private = {}; this.getPrimary = () => private }`. Still valid for methods-only access.
+
+**Currying for partial application** — `const add = a => b => a + b` lets you do `add(5)(3)` or `const add5 = add(5); add5(3)`. Useful for functional pipelines.
+
+**Memoization for expensive functions** — Cache results of pure functions. But watch your cache size; memoize only functions you'll call frequently with the same args.
+
+**Immediately Invoked Generators** — `(function* gen() { ... })()` creates a IIFE that yields. Rare but powerful for lazy evaluation.
+
+## ⚠️ Edge Cases & Gotchas
+
+**The loop variable closure trap** — `for (var i = 0; i < 3; i++) { setTimeout(() => console.log(i), 0) }` logs `3, 3, 3`. ALL closures share the SAME `i`. Use `let` to fix: each iteration gets a new `i`.
+
+**Closures capture by reference, not value** — A closure captures the variable, not its value at capture time. Modify the variable later, and the closure sees the new value. This confuses newcomers.
+
+**Memory leaks from closures** — Large objects captured by closures never get garbage collected as long as the closure exists. `const fn = (() => { const huge = new Array(1e9); return () => {} })()` keeps `huge` in memory forever. Be careful.
+
+**Circular closures can leak** — `element.onclick = () => { doSomething(element); }` — the closure captures `element`, which has a reference to the closure. Breaks reference cycles by nulling the handler when done.
+
+**Closure scope chain is read-only from closure perspective** — You CAN mutate objects in outer scope, but you CAN'T rebind outer variables from inside. `let x; (() => { x = 5 })()` mutates the binding (works). But `let y; (() => { let y = 5 })()` creates a new `y` inside.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const fns = []
+for (var i = 0; i < 3; i++) {
+  fns.push(() => i)
+}
+
+console.log(fns[0](), fns[1](), fns[2]())
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `3 3 3`. Here's why:
+- All three arrow functions capture the SAME `i` variable (var is function-scoped)
+- By the time any closure runs, the loop has finished and `i` is 3
+
+**Fix**: Use `let` instead of `var`. Each iteration gets a fresh binding.
+
+```javascript
+const fns = []
+for (let i = 0; i < 3; i++) {
+  fns.push(() => i)
+}
+
+console.log(fns[0](), fns[1](), fns[2]())  // 0 1 2
+```
+
+</details>
+
 ## Key Takeaways
 
 - Closures capture variables from their **lexical** (surrounding) scope, not call-time scope.

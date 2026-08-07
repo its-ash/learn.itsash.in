@@ -303,6 +303,54 @@ function* concatGen(...gens) {
 ```
 ::
 
+## 💡 Tips & Tricks
+
+**Arrow functions for short callbacks** — Use arrows for `.map()`, `.filter()`, etc. But use regular functions for object methods where you need `this`. Rule of thumb: if you need `this` or need to use `new`, use regular functions.
+
+**Default parameters are lazy** — `function log(msg = expensiveFn())` only calls `expensiveFn()` if you omit the argument. This is useful for expensive operations that shouldn't run every call.
+
+**Rest parameters are real arrays** — `...args` gives you a real Array, not the `arguments` object. This means `.map()`, `.filter()`, etc. all work. No need to convert with `Array.from()`.
+
+**Generator functions for iterators** — `function* gen() { yield 1; yield 2; }` creates lazy sequences. Useful for infinite sequences without memory overhead.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Arrow functions can't be constructors** — `new (() => {})()` throws. Arrow functions have no `prototype`, no `new.target`, no `super`. Use regular functions or classes for constructors.
+
+**Hoisting creates TDZ (Temporal Dead Zone)** — Accessing `x` before `let x = 5` throws ReferenceError, not `undefined`. The variable exists but is uninitialized. This is safer than `var` hoisting but confuses beginners.
+
+**Default parameters can't reference later params** — `function f(a = b, b = 1)` throws ReferenceError because `b` isn't defined yet when `a` is evaluated. Parameters are evaluated left-to-right.
+
+**Returning object literals from arrows is tricky** — `const f = () => { x: 1 }` returns `undefined` (parsed as a block). Use `() => ({ x: 1 })` with parens to return the object.
+
+**Functions are closures by default** — Every function captures its enclosing scope. This is powerful for data privacy but can cause memory leaks if not careful (huge captured objects aren't garbage collected).
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const obj = {
+  name: 'Alice',
+  greet: () => console.log(this.name),
+  greetRegular() { console.log(this.name) }
+}
+
+obj.greet()
+obj.greetRegular()
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `undefined` then `Alice`. Here's why:
+- Arrow function `greet` has lexical `this` from the global scope (or undefined in strict mode), not from `obj`
+- Regular function `greetRegular` has `this` bound to `obj` (the caller)
+
+**The lesson**: Never use arrow functions as object methods if you need `this`. Arrows are for callbacks, not methods.
+
+</details>
+
 ## Key Takeaways
 
 - Function declarations are hoisted; expressions are not — only the variable is hoisted.

@@ -105,7 +105,6 @@ s.padStart(20, '*')   // "*********Hello World"
 s.padEnd(20, '-')     // "Hello World---------"
 s.replace('o', '0')   // "Hell0 World" (only first match)
 s.replaceAll('o', '0')// "Hell0 W0rld" (all matches — ES2021)
-``
 ```
 ::
 
@@ -239,6 +238,53 @@ truncate('Short', 10)             // "Short"
 truncate('Hello World', 8, '…')   // "Hello…"
 ```
 ::
+
+## 💡 Tips & Tricks
+
+**Backticks for all strings** — Modern style is to use backticks for all strings (even without interpolation). It's consistent and avoids escaping quotes. Linters like Prettier enforce this.
+
+**Regex `.replace()` with `$1`, `$2`** — `"hello world".replace(/(\w+)\s(\w+)/, '$2 $1')` swaps words using capture groups. `$1` is group 1, `$2` is group 2, etc. Powerful for reformatting.
+
+**String padding for alignment** — `'42'.padStart(5, ' ')` creates `'   42'`. Useful for columnar output: `nums.map(n => String(n).padStart(3, '0')).join('\n')`.
+
+**Template literals in objects** — Computed keys work: `{ [`${key}_id`]: value }`. Useful for dynamic object construction.
+
+## ⚠️ Edge Cases & Gotchas
+
+**`.length` is UTF-16 code units, not characters** — Emoji are 2+ units each. `'😀'.length` is 2, not 1. Use `[...'😀'].length` or `Array.from()` to count actual characters. This breaks in databases too.
+
+**`.substring()` swaps arguments if start > end** — `"hello".substring(3, 1)` is `"el"` (swaps to 1,3). `.slice()` doesn't; it returns `""`. Always use `.slice()` for predictable behavior.
+
+**`.replace()` only replaces first match** — `"aaa".replace('a', 'b')` is `"baa"`, not `"bbb"`. Use `.replaceAll()` (ES2021) or `/g` regex. This trips up beginners constantly.
+
+**Regex state persists with `/g` flag** — `const re = /a/g; re.test('a'); re.test('a')` — the second test is `false` because `.lastIndex` moves. Reset with `re.lastIndex = 0` or create a new regex each time.
+
+**Unicode normalization matters for comparison** — `'é' === 'é'` might be false if one is NFC and one is NFD. Always normalize: `str1.normalize() === str2.normalize()`. Critical for database comparisons.
+
+## 🧠 Spot the Bug
+
+What's the output?
+
+```javascript
+const text = 'hello world'
+const result1 = text.replace(/l/g, 'L')
+const result2 = text.replace(/l/, 'L')
+const result3 = '  trim me  '.trim().split(' ')
+
+console.log(result1, result2, result3.length)
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `heLLo worLd heLo world 2`. Here's why:
+- `.replace(/l/g, 'L')` — `/g` flag replaces ALL → `"heLLo worLd"`
+- `.replace(/l/, 'L')` — no `/g` flag, only first match → `"heLo world"`
+- `'  trim me  '.trim().split(' ')` → `["trim", "me"]` (length 2)
+
+**The lesson**: The `/g` flag is required for `.replace()` to replace all. Easy to forget, common bug.
+
+</details>
 
 ## Key Takeaways
 

@@ -186,6 +186,16 @@ fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
 - **`#[non_exhaustive]`** on an enum forces downstream code to include a `_` arm even if all current variants are matched (future-proofing).
 - **Short-circuit evaluation**: `&&`, `||` short-circuit. `&` and `|` are bitwise and don't.
 - **No ternary `?:`**: use `if`/`else` expressions, or `.then()`/`.unwrap_or()` on bools.
+- **`if` condition must be `bool`**: `if x { }` where `x: u32` is an error; Rust has no truthy values. Use `if x != 0` or `if x > 0` explicitly.
+- **Unreachable arms in `match`**: the compiler warns about unreachable patterns (e.g., `Some(_)` after `Some(5..=10)`). Use `_` for truly "rest".
+- **Pattern guards and exhaustiveness**: `match x { n if n > 10 => ... }` may not be exhaustive (guard can fail); the compiler requires a fallback `_`.
+- **Loop labels with value returns**: `'outer: loop { ... break 'outer value; }` works, but forgetting the label makes `break value` apply to the immediate loop.
+- **`for` early `break` or `return`**: stopping a `for` loop doesn't implicitly return anything; you must capture the result externally.
+- **Mutable iteration with `for x in &mut v`**: the mutable borrow prevents pushing/popping during iteration.
+- **Match on references and deref coercion**: `match &opt { Some(x) => ... }` doesn't auto-deref; you need `match opt.as_ref() { Some(x) => ... }` for references inside the pattern.
+- **Binding in guards**: `if let Some(x) = opt { if x > 10 { } }` vs `if let Some(x) = opt, x > 10 { }` (let chains, unstable) — use explicit if/else for clarity.
+- **`match` with or-patterns and different captures**: `Some(x) | None => ...` captures `x` only if the first arm matches; `None` arm can't use `x`.
+- **Empty `loop { }` vs `while true { }`**: both are infinite, but `loop` is idiomatic and slightly more efficient (compiler recognizes it as an infinite loop). Use `loop { ... break; }` for controlled early exits.
 
 ## `if let` chains (unstable) / `let-else`
 

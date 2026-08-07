@@ -216,8 +216,76 @@ Reconstruct with `..` if needed.
 
 - Reorder fields for minimal padding — the compiler does this by default (repr optimization). Use `#[repr(C)]` to force C-compatible layout (FFI). Use `#[repr(transparent)]` for newtype wrappers (same layout as inner). Use `#[repr(packed)]` to disable padding (careful with alignment → unaligned reads are UB).
 
+## Struct Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: builder pattern for structs with many optional fields
+struct Config {
+    host: String,
+    port: u16,
+    timeout: u32,
+}
+struct ConfigBuilder {
+    host: Option<String>,
+    port: Option<u16>,
+    timeout: Option<u32>,
+}
+impl ConfigBuilder {
+    fn new() -> Self { ConfigBuilder { host: None, port: None, timeout: None } }
+    fn host(mut self, h: String) -> Self { self.host = Some(h); self }
+    fn port(mut self, p: u16) -> Self { self.port = Some(p); self }
+    fn build(self) -> Config {
+        Config {
+            host: self.host.unwrap_or_default(),
+            port: self.port.unwrap_or(8080),
+            timeout: self.timeout.unwrap_or(30),
+        }
+    }
+}
+
+// Trick: use field-level visibility with pub(super)
+struct Private {
+    pub(super) field1: i32, // visible in parent module
+    field2: i32, // private
+}
+
+// Trick: phantom type parameter for type-level info
+use std::marker::PhantomData;
+struct Celsius(f64);
+struct Fahrenheit(f64);
+struct Temperature<T> {
+    value: f64,
+    _unit: PhantomData<T>,
+}
+impl Temperature<Celsius> {
+    fn to_fahrenheit(self) -> Temperature<Fahrenheit> {
+        Temperature { value: self.value * 9.0 / 5.0 + 32.0, _unit: PhantomData }
+    }
+}
+
+// Trick: use newtype pattern to wrap scalar types
+struct UserId(u64);
+struct Email(String);
+// Now you can't accidentally mix UserId and Email
+
+// Trick: const methods for compile-time computations
+#[derive(Default)]
+struct Point { x: i32, y: i32 }
+impl Point {
+    const fn origin() -> Self { Point { x: 0, y: 0 } }
+}
+const ZERO: Point = Point::origin();
+
+// Trick: Default + .. pattern for partial updates
+#[derive(Default)]
+struct Config { a: i32, b: String, c: bool }
+let c1 = Config { a: 1, ..Default::default() };
+```
+::
+
 ## Summary
 
-Structs come in named, tuple, and unit forms. Methods live in `impl` blocks. Derive macros give you common traits for free. Const generics, generics, and lifetimes parametrize them. Memory layout can be controlled with `repr` attributes.
+Structs come in named, tuple, and unit forms. Methods live in `impl` blocks. Derive macros give you common traits for free. Const generics, generics, and lifetimes parametrize them. Memory layout can be controlled with `repr` attributes. Use builder pattern for complex initialization; use phantom types for type-level reasoning.
 
 Next: Enums — Rust's algebraic data types.

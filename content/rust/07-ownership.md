@@ -166,11 +166,55 @@ let prev = mem::replace(&mut s, "bye".into());  // s = "bye", prev = ""
 
 These let you extract values from behind a mutable reference without invalidating the container.
 
+## Ownership Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use mem::replace for state swaps without drop
+let mut state = State::Init;
+state = mem::replace(&mut state, State::Done); // old state is extracted
+
+// Trick: into() for cheap ownership transfers
+fn take_owned(v: Vec<i32>) { }
+let v = vec![1, 2, 3];
+take_owned(v.into()); // or just take_owned(v)
+
+// Trick: std::mem::take for default swap
+let mut s = String::from("hello");
+let taken = mem::take(&mut s); // s is now empty String
+assert_eq!(s, "");
+assert_eq!(taken, "hello");
+
+// Trick: move out of collections
+let mut v = vec![String::from("a"), String::from("b")];
+let first = v.remove(0); // moves ownership
+let first = v.into_iter().next(); // consumes vec, yields Option
+
+// Trick: into_iter() for consuming ownership
+for s in vec![String::from("a"), String::from("b")].into_iter() {
+    println!("{}", s); // s is owned by loop, dropped after each iteration
+}
+
+// Trick: use Rc for multiple readers
+use std::rc::Rc;
+let data = Rc::new(String::from("shared"));
+let r1 = Rc::clone(&data);
+let r2 = Rc::clone(&data);
+// data is accessible from r1, r2, and the original
+
+// Trick: Box for move-only cleanup
+let b = Box::new(String::from("owned"));
+let owned = *b; // unbox (moves String out)
+```
+::
+
 ## Summary
 
 - Each value has one owner; scope-end drops it.
 - Non-`Copy` types move on assignment/pass; `Copy` types duplicate.
 - `Drop` is a destructor; can't be combined with `Copy`.
 - Partial moves, `mem::take`, `mem::replace` let you surgically move things around.
+- Use `Rc` for shared read-only ownership; use channels for moving data between threads.
+- Understand the difference between moving and borrowing — most APIs should borrow.
 
 Next: References and Borrowing — *using* a value without owning it.

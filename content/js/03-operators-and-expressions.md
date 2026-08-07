@@ -209,6 +209,49 @@ const [first, ...rest] = [1, 2, 3, 4]   // first=1, rest=[2,3,4]
 ```
 ::
 
+## 💡 Tips & Tricks
+
+**Truthy checks without coercion** — Instead of `if (arr.length > 0)`, just `if (arr.length)` (0 is falsy). But for booleans, be explicit: `if (isActive === true)` vs `if (isActive)` prevents bugs when someone passes `1` or `"yes"`.
+
+**Object.is for Sets/Maps** — Use `Object.is` when deduplicating with Sets: `new Set([0, -0, NaN, NaN]).size` is 3 (because `===` sees `0 === -0` and `NaN !== NaN`), but with custom Sets using `Object.is`, you can fix edge cases.
+
+**Chaining `??` and `||`** — `a ?? b || c` is a trap: if `a` is `null`, `??` returns `b`, then `||` evaluates `b || c`. Use explicit grouping: `(a ?? b) || c`.
+
+**Bitwise for fast checks** — `value & 1` checks odd; `(value >> 1) << 1 === value` checks even. Fast, but less readable — only in hot loops.
+
+## ⚠️ Edge Cases & Gotchas
+
+**The modulo sign trap** — JavaScript's `%` is remainder, not modulo. `-7 % 3` is `-1` (not `2`). If you need true modulo, use: `((n % m) + m) % m`. This bites floor-based grid systems.
+
+**Optional chaining silently returns undefined** — `obj?.prop?.method?.()` returns `undefined` if any link is null. Don't chain too deep without explicit null checks — you lose debugging info.
+
+**Spread doesn't deep-clone** — `{...obj}` creates shallow copies. Nested objects are still shared references. For deep clone: `JSON.parse(JSON.stringify(obj))` (but loses functions/symbols) or use a library.
+
+**Ternary readability cliff** — `a ? b : c ? d : e` chains are confusing. The parser reads right-to-left: `a ? b : (c ? d : e)`. Always use parentheses for clarity. If >3 levels, use `if` statements instead.
+
+## 🧠 Spot the Bug
+
+What's the output?
+
+```javascript
+const obj = { x: 1 }
+const result = obj?.x ?? 2
+const value = undefined ?? 0 || 5
+console.log(result, value)
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `1 5`. Here's why:
+- `obj?.x ?? 2` → `1` (obj.x is 1, not null/undefined)
+- `undefined ?? 0` → `0` (0 is not null/undefined, so `??` returns it)
+- `0 || 5` → `5` (0 is falsy, so `||` returns 5)
+
+**The lesson**: Chaining `??` with `||` causes the second half to flip falsy 0 back to truthy. Use one operator or parentheses.
+
+</details>
+
 ## Key Takeaways
 
 - Always use `===` / `!==` — never `==` / `!=`.

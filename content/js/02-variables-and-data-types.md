@@ -338,6 +338,48 @@ for (const v of iterable) console.log(v)  // 0, 1, 2
 ```
 ::
 
+## 💡 Tips & Tricks
+
+**const by default** — Use `const` for 95% of code. It's not "more restrictive," it's "clearer intent": readers know the binding won't change. Switch to `let` only when reassignment is necessary — it's a signal to future readers.
+
+**Object.seal vs Object.freeze** — `Object.freeze()` is complete immutability; `Object.seal()` allows mutation of existing properties but blocks adds/deletes. Use `seal` for schemas that shouldn't grow.
+
+**BigInt in JSON** — `JSON.stringify()` throws on BigInt. Use a custom replacer: `JSON.stringify(obj, (k, v) => typeof v === 'bigint' ? v.toString() : v)`.
+
+**Comparing with null** — In most codebases, `x == null` is actually safer than `x === null || x === undefined` because it catches the most common case (truthy falsy confusion). But strict mode + explicit checks is the professional standard.
+
+## ⚠️ Edge Cases & Gotchas
+
+**The `const` + mutation trap** — Beginners think `const x = { a: 1 }; x.a = 2` is illegal. It's not; `const` only locks the *binding*, not the object. To truly freeze: `Object.freeze()` after construction. Deep freeze is tedious — consider immutable libraries for large objects.
+
+**Number precision in arrays** — Storing money as `[12.50, 25.00]` then summing causes the classic `0.1 + 0.2` bug. Store as cents (integers) instead: `[1250, 2500]`, then divide by 100 for display.
+
+**Symbol keys vanish in JSON** — Symbol-keyed properties are silently dropped by `JSON.stringify()`. If you use Symbols for private fields, they won't round-trip. Use `#` private fields in classes for truly private data.
+
+**`isNaN` vs `Number.isNaN` bite** — `isNaN('hello')` returns `true` (coerces first); `Number.isNaN('hello')` returns `false`. The difference: coercion catches typos early. Always use `Number.isNaN()` in strict mode.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const x = 0
+const y = x ?? 10
+const z = y || 20
+console.log(z)
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `20`. Here's why:
+- `x ?? 10` → `0` (0 is not null/undefined, so `??` returns the left side)
+- `0 || 20` → `20` (0 is falsy, so `||` returns the right side)
+
+**The lesson**: `??` and `||` are not interchangeable. Use `??` when zero is a valid value.
+
+</details>
+
 ## Key Takeaways
 
 - Prefer `const`, use `let` when needed, avoid `var` entirely.

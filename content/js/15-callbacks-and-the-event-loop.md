@@ -137,6 +137,68 @@ setTimeout(() => {
 
 ::
 
+## 💡 Tips & Tricks
+
+**Microtasks run between macrotasks** — If you queue a microtask from a macrotask, it runs before the next macrotask. Useful for batching DOM updates: `queueMicrotask(() => render())`.
+
+**setTimeout(fn, 0) is not "immediate"** — It's "after all microtasks." There's always a delay. Use `Promise.resolve().then()` if you need to defer without delay.
+
+**Inspect microtask vs macrotask timing** — Put `console.time`/`console.timeEnd` around code to see actual delays. Helps diagnose event loop issues.
+
+**Promises in loops serialize** — `promises.map(p => p.then(...))` is fine, but `promises.forEach(p => await p)` is slow (sequential). Use `Promise.all()` for parallelism.
+
+## ⚠️ Edge Cases & Gotchas
+
+**setTimeout with small delays don't work** — `setTimeout(fn, 0)` is clamped to 4ms minimum in browsers (1ms in some). Actual delay can be much longer if event loop is busy.
+
+**Blocking the event loop hangs the browser** — Long loops, crypto operations, or heavy parsing freeze the UI. Move work to Web Workers or break into chunks with `setTimeout`.
+
+**Callbacks aren't truly concurrent** — They're interleaved on a single thread. If callback A takes 10ms, callback B waits. This isn't "parallel" like threads; it's "cooperative concurrency."
+
+**Promise and setTimeout interleaving is confusing** — Microtasks queue differently than macrotasks. `setTimeout` -> run one -> check microtasks -> `setTimeout` -> ... . Hard to reason about without drawing diagrams.
+
+**Forgotten callbacks leak memory** — If a callback captures huge data and is never called, the data is kept alive. Subscriptions without unsubscribe are a common leak source.
+
+**Mixing Promise and callback styles is error-prone** — `asyncFn().then().catch()` and `.catch((err) => callback(err))` style can cause double-handling or missed errors. Use one style consistently.
+
+## 🧠 Spot the Bug
+
+What's the output order?
+
+```javascript
+console.log('1')
+
+setTimeout(() => console.log('2'), 0)
+
+Promise.resolve()
+  .then(() => {
+    console.log('3')
+    return new Promise(resolve => {
+      resolve()
+      console.log('4')
+    })
+  })
+  .then(() => console.log('5'))
+
+queueMicrotask(() => console.log('6'))
+
+console.log('7')
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs: `1 7 3 4 6 5 2`. Here's why:
+- `1`, `7` — synchronous code runs first
+- `3`, `4` — first promise `.then()` runs (microtask), `4` logs before resolve returns
+- `6` — `queueMicrotask` is another microtask
+- `5` — second `.then()` runs (chained microtask)
+- `2` — `setTimeout` is a macrotask (runs last)
+
+**The lesson**: Microtasks run before macrotasks, even if queued later. Promise construction runs synchronously; the `.then()` is microtask.
+
+</details>
+
 ## Key Takeaways
 
 - JS is single-threaded — async operations go to the event loop, not new threads.

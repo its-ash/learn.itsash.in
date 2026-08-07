@@ -136,6 +136,55 @@ console.log(obj1.name)      // "Alice" (bind was ignored)
 
 ::
 
+## 💡 Tips & Tricks
+
+**Bind in constructor** — Store bound handlers early: `this.onClick = this.onClick.bind(this)` in constructor to avoid re-binding every render in React.
+
+**Use `call` to borrow methods** — `Array.prototype.slice.call(arrayLike)` borrows Array's method. Less common now (use `Array.from()` instead), but useful for debugging.
+
+**Partial application with `bind`** — `const add5 = add.bind(null, 5)` creates a function with first arg pre-filled. Less common than closures, but valid pattern.
+
+**Check `this` in production** — Use `console.log(this)` in methods during debugging. In strict mode it's `undefined` if not bound. In non-strict, it's the global object.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Methods lose `this` when extracted** — `const greet = obj.greet; greet()` loses the context. The function doesn't "know" it was a method. Bind at call site: `setTimeout(obj.greet.bind(obj), 0)`.
+
+**Arrow functions in object literals don't get `this`** — `{ method: () => this.value }` has `this` from outer scope, not the object. Always use regular functions for methods.
+
+**`new` with bound functions is confusing** — `const Foo = Bar.bind(ctx); new Foo()` creates a new instance, but `this` inside is the new instance, NOT the bound context. `new` always wins.
+
+**`call`/`apply` in constructors** — Rarely useful. `Child.call(this, args)` in a child constructor calls parent code but doesn't set up the prototype chain. Use `super` in classes instead.
+
+**Implicit binding is fragile** — `obj.method()` works until someone does `const m = obj.method; m()`. Real code often has this pattern. Always use arrow functions in callbacks or bind explicitly.
+
+## 🧠 Spot the Bug
+
+What does this log?
+
+```javascript
+const obj = {
+  name: 'Alice',
+  greet() { console.log(this.name) },
+  delayedGreet() {
+    setTimeout(this.greet, 1000)  // BUG: this is lost
+  }
+}
+
+obj.delayedGreet()
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs `undefined` (or the window.name in non-strict mode). Here's why:
+- `setTimeout(this.greet, 1000)` passes the function without context
+- When `setTimeout` calls it, `this` is `undefined` (strict mode) or `window`
+
+**Fix**: Use `setTimeout(() => this.greet(), 1000)` or `setTimeout(this.greet.bind(this), 1000)`.
+
+</details>
+
 ## Key Takeaways
 
 - `this` is determined by **how the function is called**, not where it's defined.

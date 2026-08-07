@@ -192,11 +192,56 @@ s.fill(0);
 ```
 ::
 
+## Slice Tricks & Patterns
+
+::code-wrapper{language="rust"}
+```rust
+// Trick: use get() for safe indexing without panics
+let s = "hello";
+let c = s.get(0); // Option<&str>
+
+// Trick: split_at_mut for non-overlapping borrows
+let mut v = vec![1, 2, 3, 4];
+let (left, right) = v.split_at_mut(2);
+left[0] = 99;
+right[0] = 88; // both work, no conflict
+
+// Trick: as_slice() to convert collections to slices
+let v = vec![1, 2, 3];
+fn takes_slice(s: &[i32]) {}
+takes_slice(v.as_slice());
+
+// Trick: unwrap slice patterns for infallible binding
+let [a, b, c] = [1, 2, 3]; // direct binding, panics if lengths don't match
+let [x, ..] = [1, 2, 3]; // bind first, ignore rest
+
+// Trick: use windows() for sliding windows
+let v = vec![1, 2, 3, 4, 5];
+for window in v.windows(2) {
+    println!("{:?}", window); // [1,2], [2,3], [3,4], [4,5]
+}
+
+// Trick: use chunks() for non-overlapping segments
+for chunk in v.chunks(2) {
+    println!("{:?}", chunk); // [1,2], [3,4], [5]
+}
+
+// Trick: binary_search on sorted slices
+let v = vec![1, 3, 5, 7, 9];
+match v.binary_search(&5) {
+    Ok(idx) => println!("found at {}", idx),
+    Err(idx) => println!("would insert at {}", idx),
+}
+```
+::
+
 ## Summary
 
 - Slices are borrowed, fat-pointer views into contiguous data.
 - `&str` is a UTF-8 slice; `&[T]` is a generic slice.
 - Use `&[T]` / `&str` in APIs for maximum generality.
 - Split at mutable boundaries with `split_at_mut`.
+- Use `get()` for safe bounds checking; use `windows()`/`chunks()` for iteration patterns.
+- Remember: slicing on UTF-8 char boundaries can panic; use `char_indices()` for safety.
 
 Next: Lifetimes — the borrow checker's vocabulary.

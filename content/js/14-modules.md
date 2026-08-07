@@ -122,6 +122,67 @@ export const version = '1.0.0'
 
 ::
 
+## 💡 Tips & Tricks
+
+**Prefer named exports for tree-shaking** — Bundlers can eliminate unused named exports. Default exports can't be tree-shaken (bundler doesn't know what's unused).
+
+**Aggregate exports with index.js** — `export * from './module'` in `index.js` gives consumers a single import path. Cleaner than `import from './module/file.js'`.
+
+**Dynamic import for route splitting** — In SPA frameworks, lazy-load route modules: `const module = await import('./pages/About.js')`. Reduces initial bundle size.
+
+**Use "imports" in package.json** — `"#internal": "./src/internal.js"` lets consumers do `import { x } from '#internal'`. Better than relative paths like `../../../src`.
+
+**Check module.meta.url** — In ESM, `import.meta.url` is the current module's URL. Useful for dynamic paths: `const dir = new URL('.', import.meta.url).pathname`.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Circular dependencies partially work** — If A imports B and B imports A, one gets undefined values temporarily. It "works" but is fragile. Refactor to avoid.
+
+**Default and named exports can't be mixed cleanly** — `export default x` and `export { y }` from same module is confusing. Pick one style per file.
+
+**Module-level side effects** — Top-level code in modules runs when imported. If module runs expensive setup or mutates globals, every import triggers it. Be careful with side effects.
+
+**import.meta is not available in CommonJS** — If you need to detect module type, `typeof import.meta` is "undefined" in CJS. Use `typeof require !== 'undefined'` instead.
+
+**Dynamic import strings can't be bundled** — `await import(userInput)` can't be pre-analyzed by bundlers. Use dynamic import sparingly or with explicit strings.
+
+**Re-exports don't re-execute** — `export * from './module'` doesn't run `./module`'s side effects twice. But `import './module'; export * from './module'` does run it once (implicitly imported).
+
+## 🧠 Spot the Bug
+
+What happens?
+
+```javascript
+// moduleA.js
+import { func } from './moduleB.js'
+console.log('A loaded')
+export const a = func()
+
+// moduleB.js
+import { a } from './moduleA.js'
+console.log('B loaded')
+export const func = () => 'result'
+
+// main.js
+import { a } from './moduleA.js'
+console.log(a)
+```
+
+<details>
+<summary>Answer</summary>
+
+Logs: "B loaded", "A loaded", undefined
+
+Here's why:
+- A imports B, which imports A
+- B loads first (cyclic dependency)
+- When B tries to import `a` from A, A isn't finished yet, so `a` is undefined
+- B finishes, A finishes, but `a` was already set to `func()` when func wasn't defined
+
+**The lesson**: Circular dependencies cause partial initialization. Refactor to avoid them.
+
+</details>
+
 ## Key Takeaways
 
 - ES modules use `import`/`export` — static, hoisted, supports tree-shaking.
