@@ -43,7 +43,7 @@ gtag('config', 'G-J1LB55YZY2');`,
         description: 'A personal reading space built with Nuxt Content — Rust curriculum, programming guides, and technical documentation.',
         potentialAction: {
           '@type': 'SearchAction',
-          target: 'https://learn.itsash.in/browse?q={search_term_string}',
+          target: 'https://learn.itsash.in/?q={search_term_string}',
           'query-input': 'required name=search_term_string',
         },
       }),

@@ -53,12 +53,6 @@ export default defineNuxtConfig({
   css: ["~/assets/css/tailwind.css", "~/assets/css/main.css"],
   vite: {
     plugins: [tailwindcssVite()],
-    optimizeDeps: {
-      include: ['html2canvas'],
-    },
-    ssr: {
-      noExternal: ['html2canvas'],
-    },
   },
   nitro: {
     output: {
@@ -66,7 +60,7 @@ export default defineNuxtConfig({
     },
     prerender: {
       crawlLinks: true,
-      routes: ["/", ...contentRoutes, "/404.html"],
+      routes: ["/", "/sitemap.xml", ...contentRoutes, "/404.html"],
       failOnError: false,
     },
   },

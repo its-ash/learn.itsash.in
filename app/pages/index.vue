@@ -1,5 +1,6 @@
 <script setup lang="ts">
-const search = ref('')
+const route = useRoute()
+const search = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const isFocused = ref(false)
 
 const { data: pages } = await useAsyncData('all-pages', () =>

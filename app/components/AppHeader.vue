@@ -4,7 +4,7 @@ const route = useRoute()
 
 const links = [
     { label: 'Home', to: '/' },
-    { label: 'Index', to: '/browse' },
+    { label: 'Index', to: '/' },
     { label: 'Rust', to: '/rust' },
 ]
 
