@@ -2,13 +2,16 @@
 const route = useRoute()
 const router = useRouter()
 
+const normalizePath = (p: string) => (p.replace(/\/+$/, '') || '/')
+
 const { data: page, pending } = await useAsyncData(
-  () => 'page-' + route.path,
+  () => 'page-' + normalizePath(route.path),
   async () => {
-    const found = await queryCollection('content').path(route.path).first()
+    const path = normalizePath(route.path)
+    const found = await queryCollection('content').path(path).first()
     if (found) return found
 
-    const readmePath = route.path.replace(/\/?$/, '/readme')
+    const readmePath = path === '/' ? '/readme' : path + '/readme'
     const readme = await queryCollection('content').path(readmePath).first()
     if (readme) {
       if (import.meta.server) {
@@ -23,9 +26,15 @@ const { data: page, pending } = await useAsyncData(
   { watch: [() => route.path] }
 )
 
-if (!page.value && !pending.value) {
-  throw createError({ statusCode: 404, statusMessage: 'Page not found', fatal: true })
-}
+watch(
+  [page, pending],
+  () => {
+    if (!pending.value && !page.value) {
+      throw createError({ statusCode: 404, statusMessage: 'Page not found', fatal: true })
+    }
+  },
+  { immediate: true }
+)
 
 const breadcrumbs = computed(() => {
   const segments = route.path.split('/').filter(Boolean)
