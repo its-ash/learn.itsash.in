@@ -342,6 +342,56 @@ if matches!(opt, Some(0)) { }
 ```
 ::
 
+## 💡 Tips & Tricks
+
+- **Idiom**: use `let-else` (`let Some(x) = opt else { return; };`) instead of an `if let ... else { return }` block when you want the happy-path variable available for the rest of the function without nesting.
+- **Debug**: `dbg!(&value)` right before a `match` is a quick way to confirm which arm you expect to fire, especially with reference patterns where the bound type isn't obvious from the source.
+- **Clippy**: `clippy::match_like_matches_macro` suggests collapsing a two-armed boolean `match` into `matches!`; `clippy::single_match` suggests `if let` when only one arm does anything.
+- **Performance**: exhaustive `match` on an enum compiles to a jump table (like a C `switch`) when the discriminants are dense, making it as fast as (often faster than) a chain of `if`/`else if`.
+- **Idiom**: combine `@` bindings with guards for readable range checks with a captured value: `n @ 1..=9 if n % 2 == 0 => ...` reads better than re-deriving `n` inside the guard.
+- **Debug**: when a binding-mode error says "expected `i32`, found `&i32`" inside a `match` arm, it's telling you exactly what the auto-ref inserted — read the *found* type, don't guess.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Guards re-evaluate on every check, and can have side effects**: `Some(x) if side_effecting_check(x) =>` runs `side_effecting_check` only if the pattern matches structurally first, but if multiple guarded arms share a pattern, a failing guard on one still lets the compiler try the next identical pattern — surprising if the guard isn't pure.
+- **Or-patterns with different bound types don't compile**: `Ok(n) | Err(n)` requires `n` to have the *same type* in both alternatives — `Result<i32, String>` can't or-pattern bind a single `n` across `Ok`/`Err` because `i32 != String`.
+- **`..` can only appear once per pattern level**: `[a, .., b, .., c]` is a compile error even though it looks like it should mean "match ends and any two gaps" — a single `..` must unambiguously bind a length.
+- **Range patterns silently require `PartialOrd`/step behavior**: `'a'..='z'` works char-by-char, but a range pattern like `1.5..=2.5` on floats is a hard compile error — float ranges are not allowed as match patterns because equality/step is ill-defined for `NaN`.
+- **Refutability errors point at the wrong line**: `let Some(x) = opt;` (no `else`) fails with "refutable pattern in local binding" — the fix is `let-else`, `if let`, or `.unwrap()`, but newcomers often try to "fix" the type instead of the binding form.
+- **Binding modes silently change mutability expectations**: matching `&mut Some(x)` binds `x: &mut T`, but matching `&Some(x)` where `T: Copy` binds `x: T` (a copy) — swap `&mut` for `&` in a diff and a previously-mutating arm silently becomes a no-op that still compiles.
+- **Platform-independent gotcha — non-exhaustive integer ranges**: `match byte { 0..=254 => ..., 255 => ... }` for a `u8` is exhaustive, but the same pattern on `i32` is not (many more values exist), so the identical-looking match arms compile in one case and require a wildcard in the other.
+
+## 🧠 Spot the Bug
+
+Will this compile? If so, what does `classify(5)` print?
+
+::code-wrapper{language="rust"}
+```rust
+fn classify(n: i32) -> &'static str {
+    match n {
+        x if x > 0 => "positive",
+        x if x < 0 => "negative",
+        0 => "zero",
+    }
+}
+
+fn main() {
+    println!("{}", classify(5));
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+It does **not** compile: `error[E0004]: non-exhaustive patterns`.
+
+Every arm here uses a match guard (`if x > 0`, `if x < 0`) except the last. The compiler cannot prove that `x if x > 0` and `x if x < 0` together cover "every `i32` except `0`" — guards are arbitrary boolean expressions evaluated at runtime, so exhaustiveness checking (which works on pattern *shape*, not guard logic) treats both guarded arms as only *potentially* matching. From the checker's point of view, an `i32` could in principle satisfy none of the three arms (if some future refactor changed the conditions), so a bare `_ =>` or truly irrefutable final arm is required — the literal `0` arm without a guard doesn't retroactively make the earlier guarded arms "safe" in the compiler's eyes for every input, and more importantly `0` alone still leaves the guard-covered ranges unproven exhaustive. The fix is to add a final `_ => unreachable!()` or restructure the guards into structural range patterns (`1.. => "positive"`, `..0 => "negative"`, `0 => "zero"`), which the checker *can* verify exhaustively without guards.
+
+**The lesson**: match guards are invisible to the exhaustiveness checker — always end guarded matches with an unconditional catch-all arm.
+
+</details>
+
 ## Summary
 
 Patterns are structural, support literals, ranges, or-patterns, destructuring, `@` bindings, and guards. The 2021 binding modes reduced noise. Exhaustiveness is enforced. `ref`/`ref mut` are escape hatches for older patterns. `matches!` is a tiny match for booleans. Use patterns everywhere: function parameters, for loops, let declarations, match arms, and conditionals.

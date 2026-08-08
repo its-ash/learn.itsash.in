@@ -178,7 +178,16 @@ serde = "1.0"
 
 Members then reference with `serde.workspace = true`.
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: `rustc --explain E0382` (or any error code from a compiler message) prints a detailed explanation with examples, straight from the compiler — faster than searching online for a common error code.
+- **Idiom**: use `println!("{name:?}")` (Debug) while prototyping and switch to `println!("{name}")` (Display) once a type has a hand-written `Display` impl — reaching for `{:?}` everywhere works but produces developer-facing, not user-facing, output.
+- **Idiom**: set `publish = false` in `Cargo.toml` immediately for any project that isn't meant for crates.io — it costs nothing and prevents an accidental `cargo publish` months later when you've forgotten the project was never meant to be public.
+- **Debug**: `cargo run -- --flag value` — everything after the bare `--` is passed to *your* binary's argv, not interpreted by Cargo; forgetting the `--` is a common reason "my CLI flag doesn't work" during local testing.
+- **Idiom**: pin dependencies with `"="` only when you have a specific reason (a known-broken later version, reproducibility requirements) — the default caret (`^`) requirement is usually right, since it allows patch/minor updates that are supposed to be backward compatible under semver.
+- **Performance**: `cargo new`'s default `Cargo.toml` doesn't set a release profile — for anything beyond a quick script, add `[profile.release]` tuning (`lto`, `codegen-units`, `strip`) once you're past the prototyping stage, since the untouched defaults favor compile speed over runtime performance.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Binaries from `src/bin/*.rs`**: each `.rs` file in `src/bin/` becomes a separate binary target automatically. Run with `cargo run --bin extra`.
 - **`cargo run` passes args after `--`**: `cargo run -- --flag` runs your binary with `--flag`.
@@ -190,6 +199,28 @@ Members then reference with `serde.workspace = true`.
 ## Reading Compiler Errors
 
 Rust errors are structured: the message, an `-->` pointing at the code, and often a help/note. Multi-error cascades are common — fix the first error, then re-run; later ones often vanish.
+
+## 🧠 Spot the Bug
+
+Why does `cargo build` succeed for one teammate and fail with a totally different error for another, on the exact same commit?
+
+::code-wrapper{language="toml"}
+```toml
+[dependencies]
+some_lib = "1.2"
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+The most common cause: one teammate has a `Cargo.lock` committed and checked out (or previously generated) that pins `some_lib` to, say, `1.2.3`, while the other teammate either deleted their `Cargo.lock`, is building a fresh checkout without one, or ran `cargo update` locally — resolving `"1.2"` (which means `^1.2`, i.e., `>=1.2.0, <2.0.0`) to a newer version like `1.5.0` that was published after the first teammate last locked their dependencies. Cargo.toml's version requirement is a *range*, not a pin — the actual, exact version used for any given build is determined by `Cargo.lock`, and if that file is missing, out of date, or excluded from version control, two people (or two CI runs, or a local build vs. a Docker build) can silently resolve to different concrete versions of `some_lib`, one of which may have introduced a breaking change or bug despite being "semver compatible" in theory.
+
+This is precisely why the chapter's guidance is to always commit `Cargo.lock` for binaries (and, per current official guidance, for libraries too): it's the only thing that guarantees everyone — teammates, CI, and production builds — resolves the exact same dependency graph.
+
+**The lesson**: `Cargo.toml` version requirements describe an acceptable *range*; only `Cargo.lock` pins the *exact* versions actually used — an uncommitted or stale lock file means "works on my machine" can be literally true and still not mean what you think it means.
+
+</details>
 
 ## Summary
 

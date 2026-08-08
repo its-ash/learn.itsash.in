@@ -26,7 +26,8 @@ mod ui {
 
 ## File Layout Conventions (2018+)
 
-```
+::code-wrapper{language="text"}
+```text
 src/
 ├── lib.rs            // crate root: `pub mod ...`
 ├── main.rs
@@ -34,6 +35,7 @@ src/
 └── network/
     └── server.rs     // corresponds to `mod server;` *inside* network.rs
 ```
+::
 
 The 2018 edition prefers `network.rs` over `network/mod.rs`. Don't mix the two for the same module.
 
@@ -197,7 +199,8 @@ They're exported at the crate root. Use `pub use my_macro;` to re-export.
 
 ### Library + Binaries
 
-```
+::code-wrapper{language="text"}
+```text
 my_project/
 ├── Cargo.toml
 ├── src/
@@ -206,6 +209,7 @@ my_project/
 │       ├── server.rs
 │       └── client.rs
 ```
+::
 
 ### Feature-Gated Modules
 
@@ -234,12 +238,23 @@ mod tests {
 
 Integration tests live in `tests/` as separate crate:
 
-```
+::code-wrapper{language="text"}
+```text
 tests/
 └── integration.rs
 ```
+::
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Idiom**: expose a `pub mod prelude { pub use ...; }` module for crates with many commonly-used types — it gives consumers a one-line `use my_crate::prelude::*;` without forcing a broad glob import of your entire public API.
+- **Debug**: `cargo modules generate tree` (via `cargo install cargo-modules`) prints your crate's actual module hierarchy as a tree — useful for spotting an accidental `mod.rs`/`module.rs` duplicate or a module nested deeper than intended.
+- **Idiom**: use `pub(crate)` liberally for anything shared between your own modules but not meant for external consumers — it documents intent precisely, unlike `pub` (too open) or private (too restrictive for cross-module internal use).
+- **Debug**: "private type in public interface" errors point at real API design problems, not just visibility — if a public function needs to return a private type, either make the type `pub` deliberately or restructure so the function returns a public trait/wrapper instead.
+- **Idiom**: keep re-exports (`pub use`) in one clearly-named place (often `lib.rs` or a dedicated `prelude` module) rather than scattered across many files — it gives you a single file to scan when auditing exactly what your crate's public surface looks like.
+- **Debug**: `cargo doc --open` is a fast way to sanity-check what's *actually* publicly visible from outside your crate — rustdoc only shows `pub` items reachable from the crate root, so it's an accurate mirror of what consumers see, unlike scanning source files by eye.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`pub` doesn't propagate to ancestors**: a `pub mod` is public *if its parent is also accessible*. Privacy is layered.
 - **`pub use` ambiguity**: re-exporting two items with the same name into the same scope is an error.
@@ -249,6 +264,54 @@ tests/
 - **`extern crate self as foo;`**: lets you refer to your own crate by name (rare).
 - **Hidden `mod.rs`**: still works but is discouraged; the new layout is cleaner.
 - **`pub use` for preludes**: many crates expose `pub mod prelude { pub use ...; }` for one-line imports.
+
+## 🧠 Spot the Bug
+
+Why does this fail to compile, given that `Config` is clearly used successfully inside the crate?
+
+::code-wrapper{language="rust"}
+```rust
+mod settings {
+    struct Config {
+        pub host: String,
+    }
+
+    impl Config {
+        pub fn new(host: &str) -> Self {
+            Config { host: host.to_string() }
+        }
+    }
+}
+
+pub fn load_config() -> settings::Config {
+    settings::Config::new("localhost")
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`error[E0446]: private type \`settings::Config\` in public interface`.
+
+The `Config` struct itself is declared without `pub` (`struct Config`, not `pub struct Config`) — it's private to the `settings` module, even though its `host` field and `new` associated function are marked `pub`. Marking members `pub` doesn't make the *containing type* public; visibility is checked at every level independently. The function `load_config` is declared `pub fn load_config() -> settings::Config`, which means any external crate calling it would receive a value of type `settings::Config` — but that type is private, so external code couldn't even name it, store it in a variable with an explicit type, or reference it in their own function signatures. Rust refuses to compile this contradiction: a public function cannot expose a private type in its signature, because doing so would create a type that callers can receive but can't meaningfully use or refer to.
+
+The fix is to make the struct itself `pub` (in addition to whichever fields/methods should be public):
+
+::code-wrapper{language="rust"}
+```rust
+mod settings {
+    pub struct Config {
+        pub host: String,
+    }
+    // ...
+}
+```
+::
+
+**The lesson**: `pub` on a struct's fields or methods does not make the struct type itself public — a public function cannot return (or accept) a type that is private, and each level of visibility (module, type, field, method) is checked independently.
+
+</details>
 
 ## Best Practices
 

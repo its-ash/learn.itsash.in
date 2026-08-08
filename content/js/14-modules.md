@@ -152,6 +152,7 @@ export const version = '1.0.0'
 
 What happens?
 
+::code-wrapper{language="javascript"}
 ```javascript
 // moduleA.js
 import { func } from './moduleB.js'
@@ -167,6 +168,7 @@ export const func = () => 'result'
 import { a } from './moduleA.js'
 console.log(a)
 ```
+::
 
 <details>
 <summary>Answer</summary>

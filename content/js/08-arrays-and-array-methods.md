@@ -310,6 +310,7 @@ const removeWhere = (arr, predicate) => arr.filter(x => !predicate(x))
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const arr = [1, 2, 3]
 const sorted = arr.sort((a, b) => b - a)
@@ -318,6 +319,7 @@ const mapped = arr.map(x => x * 2)
 console.log(sorted, mapped)
 console.log(arr)
 ```
+::
 
 <details>
 <summary>Answer</summary>

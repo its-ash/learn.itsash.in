@@ -537,6 +537,78 @@ Pin a MSRV; CI runs `cargo +1.75 test` to catch regressions.
 
 If you're not actually going multi-threaded, plain `Rc<RefCell<T>>` is cheaper. Match the abstraction to the actual concurrency.
 
+## 💡 Tips & Tricks
+
+- **Debug**: when the borrow checker rejects something that "should" work, try the smallest possible fix first — end the conflicting borrow earlier (add a block `{ }` or reorder statements) before reaching for `.clone()`, which just papers over the design tension.
+- **Clippy**: run `cargo clippy --all-targets -- -D warnings` in CI, not just locally — many of the pitfalls in this chapter (`&Vec<T>` params, needless `.clone()`, `unwrap()` in reachable paths) have a dedicated lint that catches them automatically.
+- **Idiom**: `cargo fix --edition-idioms` and `cargo fmt` won't fix logic pitfalls, but they eliminate an entire category of style-level nitpicks so code review can focus on the substantive issues in this chapter.
+- **Debug**: `RUST_BACKTRACE=full cargo run` on an `unwrap()` panic gives you the exact call chain — pair this with `#[track_caller]` on your own helper functions that wrap `unwrap`-like behavior, so panics report the *caller's* line, not the helper's.
+- **Idiom**: `cargo expand` on a struct with `#[derive(Default)]` plus `..Default::default()` usage shows exactly which fields get defaulted — useful for auditing whether a "smelly" global default is hiding in a builder-style construction.
+- **Performance**: `cargo bench` (via `criterion`) before and after applying any fix in this chapter — several "idiomatic" changes (like `&[T]` over `&Vec<T>`) are zero-cost by construction, but others (like switching `Rc<RefCell<T>>` to `Arc<Mutex<T>>`) have a real, measurable cost that's worth confirming is actually needed.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`&Vec<T>` and `&[T]` are not always interchangeable, despite the deref coercion**: a function taking `&[T]` accepts a `&Vec<T>` via coercion, but a function taking `&Vec<T>` does *not* accept a plain array or a slice — the "smelly" pattern in this chapter isn't just style, it's a real API restriction that only shows up when a caller tries to pass something other than an owned `Vec`.
+- **`unwrap_or_default()` silently substitutes a value that might be indistinguishable from a real result**: `s.parse::<i32>().unwrap_or_default()` returns `0` both when parsing fails *and* when the input was the literal string `"0"` — code that later checks `if result == 0` can't tell which case occurred, turning a recoverable `Err` into silent data corruption.
+- **Fixing "locking across `.await`" by using `tokio::sync::Mutex` doesn't fix a design that shouldn't need async locking at all**: reaching for the async-aware mutex is often treated as *the* fix, but if the critical section doesn't actually need to await anything internally, the real fix is scoping the `std::sync::Mutex` guard to drop before the `.await` — swapping mutex types can mask a structural problem instead of solving it.
+- **`as` casts between integer types fail differently depending on direction**: widening (`u8 as u32`) is always lossless, but narrowing (`u32 as u8`) silently truncates — the exact same `as` keyword means "always safe" in one direction and "silently dangerous" in the other, with nothing in the syntax to distinguish them.
+- **`String::from_utf8_lossy` returns a `Cow`, and forgetting that changes ownership assumptions**: code that expects an owned `String` back from "the lossy version" of `from_utf8` and tries to return or store it directly hits a type mismatch, because `from_utf8_lossy` returns `Cow<str>` (borrowed when the input was already valid UTF-8) — you need `.into_owned()` to force ownership.
+- **`match` exhaustiveness only protects against variants, not against forgetting an entire enum update elsewhere**: adding a new variant *does* force every `match` to be updated (a genuine safety net), but it does nothing for `if`/`else` chains, lookup tables, or serialization mappings elsewhere in the codebase that also needed updating for the new variant — the compiler's help is real but scoped only to actual `match` expressions.
+- **Platform-independent trap — `HashMap` iteration order differs between runs of the *same* binary**: this isn't platform-specific, it's randomized per-process by design (as a DoS mitigation) — code that happens to pass tests because iteration order was "stable enough" in a specific CI environment can fail nondeterministically elsewhere, including on a re-run of the exact same binary.
+
+## 🧠 Spot the Bug
+
+What's wrong with this "safe" refactor of a division function?
+
+::code-wrapper{language="rust"}
+```rust
+fn safe_divide(a: i32, b: i32) -> i32 {
+    if b == 0 {
+        return 0;
+    }
+    a / b
+}
+
+fn apply_discount(price: i32, discount_count: i32, total_discounts: i32) -> i32 {
+    let per_discount = safe_divide(price, total_discounts);
+    price - (per_discount * discount_count)
+}
+
+fn main() {
+    let final_price = apply_discount(100, 2, 0);
+    println!("{final_price}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Prints `100` — silently wrong, not a crash, and easy to mistake for "the discount just didn't apply."
+
+`safe_divide` "fixes" the divide-by-zero panic by returning `0` instead, but `0` is not a semantically meaningless sentinel here — it's a legitimate result that downstream code (`per_discount * discount_count`) happily multiplies and subtracts as if it were a real per-discount amount. There's no way for `apply_discount` to distinguish "there were zero discounts to divide by, so I made something up" from "the actual computed discount per unit happens to be zero." The original panic, while unpleasant, was at least loud and immediate; this refactor trades a crash for silent, incorrect business logic that produces a plausible-looking but wrong number.
+
+The idiomatic fix makes the "no discounts" case explicit instead of encoding it as a fake numeric result:
+
+::code-wrapper{language="rust"}
+```rust
+fn safe_divide(a: i32, b: i32) -> Option<i32> {
+    if b == 0 { None } else { Some(a / b) }
+}
+
+fn apply_discount(price: i32, discount_count: i32, total_discounts: i32) -> i32 {
+    match safe_divide(price, total_discounts) {
+        Some(per_discount) => price - (per_discount * discount_count),
+        None => price,
+    }
+}
+```
+::
+
+**The lesson**: replacing a panic with a made-up default value doesn't make error handling safe — it just moves the bug from "loud and immediate" to "silent and semantically wrong."
+
+</details>
+
 ## Summary
 
 - Borrow, don't clone, when you don't need ownership.

@@ -303,6 +303,7 @@ end
 
 **Log before re-raising**: Capture error context before propagating:
 
+::code-wrapper{language="lua"}
 ```lua
 local function log_and_raise(fn, context)
   local ok, result = pcall(fn)
@@ -313,6 +314,7 @@ local function log_and_raise(fn, context)
   return result
 end
 ```
+::
 
 **Use level parameter correctly**: `error("msg", 1)` reports the `error()` call; `error("msg", 2)` reports the caller.
 
@@ -334,6 +336,7 @@ end
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local function risky()
   error("failed!")
@@ -347,6 +350,7 @@ if not ok then
   error(result)
 end
 ```
+::
 
 <details>
 <summary>Answer</summary>

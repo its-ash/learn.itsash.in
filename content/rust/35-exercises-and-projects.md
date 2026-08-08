@@ -190,6 +190,15 @@ Can you confidently:
 
 If you can do all of the above without consulting docs, you're a pro Rust developer.
 
+## 💡 Tips & Tricks
+
+- **Idiom**: implement the beginner exercises twice — once reaching for `unwrap()`/simple loops to get something working, then a second pass replacing panics with `Result`/`?` and loops with iterator chains. The diff between your two versions is the fastest way to internalize idiomatic Rust.
+- **Debug**: for the harder exercises (lock-free queue, custom allocator, FFI wrapper), run `cargo miri test` on your solution before trusting it — these are exactly the categories of code where "it compiles and passes my tests" and "it's actually sound" can diverge.
+- **Idiom**: for the linked-list exercise specifically, resist the urge to look up "why is a linked list hard in Rust" until you've hit the ownership wall yourself — the struggle with `Box<Node<T>>`, `Option`, and mutable iteration is the actual lesson, not the working code at the end.
+- **Debug**: `cargo expand` on your own `proc_macro_derive` attempts shows you exactly what your macro generated — indispensable when the derive "does nothing" or produces a confusing downstream error far from the macro definition.
+- **Performance**: for the lock-free queue and custom allocator exercises, benchmark against the crate you're imitating (`crossbeam-channel`, the system allocator) with `criterion` — matching correctness is the first milestone, matching performance is a much higher bar and worth measuring honestly rather than assuming.
+- **Idiom**: when stuck on a project for more than 30 minutes, read relevant `std` or `tokio` source before searching for a tutorial — the self-check list in this chapter exists because reading real, production-grade Rust is how the concepts from earlier chapters actually cement.
+
 ## Final Words
 
 Rust has a steep learning curve but pays dividends. The compiler is strict but kind: errors are messages, not crashes. Once you internalize ownership, lifetimes, and the trait system, the rest is vocabulary.

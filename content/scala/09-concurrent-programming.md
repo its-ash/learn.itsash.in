@@ -344,6 +344,7 @@ retry(() => Future { riskyOperation() })
 
 What does this do?
 
+::code-wrapper{language="scala"}
 ```scala
 var result = 0
 
@@ -357,6 +358,7 @@ println(result)          // prints immediately
 Thread.sleep(200)
 println(result)          // prints after delay
 ```
+::
 
 <details>
 <summary>Answer</summary>

@@ -266,7 +266,8 @@ val x: Option[String] = None   // safer
 
 All Scala types inherit from `Any`:
 
-```
+::code-wrapper{language="text"}
+```text
 Any
 ├── AnyVal (value types)
 │   ├── Byte, Short, Int, Long
@@ -277,6 +278,7 @@ Any
     ├── String, List, Map
     └── Custom classes
 ```
+::
 
 `Unit` is Scala's equivalent to `void` (represents "no value").
 
@@ -295,21 +297,26 @@ def add(a: Int, b: Int): Int = a + b  // Int is explicit return type
 
 **`require` for preconditions**: Use `require(condition, "message")` instead of manual `if` checks. It throws `IllegalArgumentException` on failure and reads like a contract.
 
+::code-wrapper{language="scala"}
 ```scala
 def divide(a: Int, b: Int): Int = {
   require(b != 0, "divisor must not be zero")
   a / b
 }
 ```
+::
 
 **`ensuring` for postconditions**: Attach `.ensuring(condition)` to an expression for defensive checks.
 
+::code-wrapper{language="scala"}
 ```scala
 val result = (a + b).ensuring(_ >= 0)
 ```
+::
 
 **Pattern matching is powerful**: Use it instead of `instanceof` + casts. It's type-safe and exhaustiveness-checked.
 
+::code-wrapper{language="scala"}
 ```scala
 val x: Any = 42
 x match {
@@ -318,6 +325,7 @@ x match {
   case _ => println("other")
 }
 ```
+::
 
 **Immutable defaults**: Always start with `val` and immutable collections. Switching to `var` or mutable collections is a local optimization, not the default design.
 
@@ -325,31 +333,38 @@ x match {
 
 **`.toInt` on non-numeric String throws**: `"abc".toInt` crashes. Use `.toIntOption` to get `Option[Int]` instead.
 
+::code-wrapper{language="scala"}
 ```scala
 "abc".toInt              // throws NumberFormatException
 "abc".toIntOption        // None
 "42".toIntOption         // Some(42)
 ```
+::
 
 **Tuple access is 1-indexed**: `(1, 2)._1` is the first element (not `._0`). Confusing for developers from 0-indexed languages.
 
+::code-wrapper{language="scala"}
 ```scala
 val t = (10, 20, 30)
 t._1                     // 10 (not t._0)
 t._2                     // 20
 ```
+::
 
 **Empty List/Set/Map are still truthy**: `if (List().nonEmpty)` is false, but `if (List())` is true. Always check `.nonEmpty` or `.isEmpty`, not truthiness.
 
+::code-wrapper{language="scala"}
 ```scala
 val empty = List()
 if (empty.isEmpty) { }   // correct
 if (!empty.isEmpty) { }  // also correct
 if (empty) { }           // compile error — Scala doesn't allow this
 ```
+::
 
 **`var` is rare, but mutable binding != mutable object**: A `var String` can be reassigned, but `String` itself is immutable. A `val ArrayBuffer` is an immutable binding to a mutable collection.
 
+::code-wrapper{language="scala"}
 ```scala
 val arr = ArrayBuffer(1, 2, 3)
 arr += 4                 // OK — mutating the ArrayBuffer
@@ -358,24 +373,30 @@ arr = ArrayBuffer()      // ERROR — can't reassign val
 var list = List(1, 2, 3)
 list = list :+ 4        // OK — reassigning to new List
 ```
+::
 
 **Default arguments evaluate once, not per call**: Avoid mutable defaults; they're shared across calls (same as Python).
 
+::code-wrapper{language="scala"}
 ```scala
 def bad(items: List[Int] = scala.collection.mutable.ArrayBuffer()) { }  // WRONG
 def good(items: List[Int] = List()) { }  // RIGHT — immutable
 ```
+::
 
 **Type parameters can't be primitive at runtime**: `List[Int]` becomes `List[Object]` at runtime (type erasure). This matters for reflection and some pattern matching.
 
+::code-wrapper{language="scala"}
 ```scala
 List[Int](1, 2).isInstanceOf[List[String]]  // can't distinguish — both are List
 ```
+::
 
 ## 🧠 Spot the Bug
 
 What does this do?
 
+::code-wrapper{language="scala"}
 ```scala
 val x = 5
 val y = 10
@@ -386,6 +407,7 @@ val result = z match {
 }
 println(result)
 ```
+::
 
 <details>
 <summary>Answer</summary>

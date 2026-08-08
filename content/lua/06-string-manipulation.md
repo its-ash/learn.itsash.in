@@ -291,13 +291,16 @@ if "cat":match("cat") or "cat":match("dog") then end
 
 **Use `string.rep()` for padding**: Quick way to create repeating strings.
 
+::code-wrapper{language="lua"}
 ```lua
 string.rep("*", 10)    -- "**********"
 string.rep(" ", 20)    -- 20 spaces (padding)
 ```
+::
 
 **Concatenate in loops with table**: Appending to strings in loops is O(n²) because strings are immutable. Use a table and `table.concat()`.
 
+::code-wrapper{language="lua"}
 ```lua
 -- Bad (O(n²))
 local result = ""
@@ -312,20 +315,25 @@ for i = 1, 1000 do
 end
 local result = table.concat(parts)
 ```
+::
 
 **Use `%q` in format for safe string embedding**:
 
+::code-wrapper{language="lua"}
 ```lua
 local s = "hello 'world'"
 print(string.format("msg = %q", s))  -- msg = "hello 'world'"
 ```
+::
 
 **Escape special characters in patterns**: Use `%` prefix for `.`, `*`, `+`, etc.
 
+::code-wrapper{language="lua"}
 ```lua
 "hello.world":match("hello%.world")  -- matches literal dot
 "price: $5.00":match("$%d%.%d%d")   -- matches literal $
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -337,10 +345,12 @@ print(string.format("msg = %q", s))  -- msg = "hello 'world'"
 
 **`string.match()` returns captures only**: If you have no captures, it returns the whole match. With no matches, returns `nil` (not empty string).
 
+::code-wrapper{language="lua"}
 ```lua
 "hello":match("l+")     -- "ll" (not position)
 "hello":match("xyz")    -- nil
 ```
+::
 
 **`gsub()` modifies via callback carefully**: If callback modifies the string, behavior may be unexpected. It processes sequentially.
 
@@ -350,12 +360,14 @@ print(string.format("msg = %q", s))  -- msg = "hello 'world'"
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local text = "abc123def"
 local match = text:match("(%d+)")
 local count = select("#", text:match("(%d)(%d)(%d)"))
 print(match, count)
 ```
+::
 
 <details>
 <summary>Answer</summary>

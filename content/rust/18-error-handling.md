@@ -314,7 +314,16 @@ std::fs::read_to_string(path).context("read config")?;
 
 The error chain shows: "read config" → original `io::Error`.
 
-## Edge Cases & Pitfalls
+## 💡 Tips & Tricks
+
+- **Idiom**: `.with_context(|| format!(...))` (from `anyhow`) is preferred over `.context("...")` when the message needs to interpolate a runtime value — plain `.context("static")` avoids the closure allocation entirely for messages with no interpolation, so use whichever form actually needs the laziness.
+- **Debug**: `RUST_BACKTRACE=1 cargo run` on a panic shows the full unwind stack; `anyhow::Error` also captures a backtrace automatically on nightly or with `RUST_BACKTRACE=1` set, viewable via `err.backtrace()`.
+- **Idiom**: reach for `thiserror` in library crates (callers need to `match` on specific variants) and `anyhow` in application/binary crates (callers just want to propagate and log) — mixing the two the other way around is a common early-career Rust smell.
+- **Debug**: `dbg!(&result)` before a `?` shows you the exact `Ok`/`Err` value at that point in the chain — cheaper than adding a temporary `match` block just to inspect an intermediate `Result`.
+- **Idiom**: `#[from]` in a `thiserror` enum variant auto-generates the `From` impl that `?` relies on — if you're hand-writing `impl From<X> for MyError` blocks, check whether switching to `thiserror` would eliminate that boilerplate entirely.
+- **Clippy**: `clippy::unwrap_used` and `clippy::expect_used` (part of the `restriction` group, opt-in) can be enabled crate-wide to make any stray `.unwrap()` in library code a compile-time lint failure, catching a common review miss before it ships.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`unwrap()` in production**: panic on bad input. Use `?` or `match` instead.
 - **`expect()` is better than `unwrap`**: a custom message helps debugging.
@@ -329,6 +338,55 @@ The error chain shows: "read config" → original `io::Error`.
 - **Panicking in a thread**: kills the thread but not the process. Use `JoinHandle` to detect; the panic becomes `Box<dyn Any + Send>` from `join`.
 - **`Result<T, E>` where `T == E`**: the compiler can't infer which arm you mean — annotate or use `.map_err`.
 - **Custom error type without `Debug`**: required by `Error` trait; derive it.
+
+## 🧠 Spot the Bug
+
+Why does this fail to compile?
+
+::code-wrapper{language="rust"}
+```rust
+use std::fmt;
+
+#[derive(Debug)]
+struct ParseError(String);
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "parse error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+fn parse_config(s: &str) -> Result<i32, ParseError> {
+    let n: i32 = s.parse()?;
+    Ok(n)
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+It fails with something like: `the trait bound \`ParseError: From<std::num::ParseIntError>\` is not satisfied`.
+
+The `?` operator doesn't just "return the error" — it calls `From::from(err)` to convert the failure's error type into the function's declared return error type, so that the caller gets back exactly the `Result<T, ParseError>` the signature promises. Here, `s.parse::<i32>()` produces a `Result<i32, std::num::ParseIntError>` on failure, but `parse_config` is declared to return `Result<i32, ParseError>` — for `?` to bridge the gap, the compiler needs a `From<ParseIntError> for ParseError` impl, and none exists. This is easy to miss because the two types "feel" related (both about parsing), but Rust performs no implicit error-type coercion — every conversion has to be spelled out via `From`, whether by hand or through `thiserror`'s `#[from]` attribute.
+
+The fix is either a manual `From` impl or, more idiomatically, `thiserror`:
+
+::code-wrapper{language="rust"}
+```rust
+impl From<std::num::ParseIntError> for ParseError {
+    fn from(e: std::num::ParseIntError) -> Self {
+        ParseError(e.to_string())
+    }
+}
+```
+::
+
+**The lesson**: `?` only converts error types automatically if a `From` impl exists between them — there's no structural or "looks similar" coercion, and forgetting the `From` impl surfaces as a `?`-site trait-bound error, not an obvious "missing conversion" message.
+
+</details>
 
 ## Error Handling Tricks
 

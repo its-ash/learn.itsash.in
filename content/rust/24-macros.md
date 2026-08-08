@@ -157,12 +157,14 @@ Procedural macros run real Rust code (a separate crate of type `proc-macro = tru
 
 ### Setup
 
-```
+::code-wrapper{language="text"}
+```text
 my_crate/
 ├── Cargo.toml           # the user-facing crate
 └── my_crate_derive/     # the proc-macro crate
     └── Cargo.toml       # [lib] proc-macro = true
 ```
+::
 
 Proc-macro crates must be separate and have `proc-macro = true` in `[lib]`.
 
@@ -297,6 +299,82 @@ Use a macro when:
 - You need compile-time string parsing (format strings).
 
 Otherwise, use a function (simpler, easier to debug, type-checks better).
+
+## 💡 Tips & Tricks
+
+- **Debug**: `cargo expand` is the single most useful tool for macros — it shows the fully expanded source after both declarative and procedural macros run, turning "why doesn't this compile" into a readable diff.
+- **Idiom**: write a macro's body once as a normal function/block first, get it working, *then* parameterize it into `macro_rules!` — debugging macro expansion errors is much harder than debugging plain code.
+- **Debug**: `stringify!($expr)` inside a macro captures the *literal source text* of an argument as a string — useful for building assertion macros that print "expected `x > 0`, got -5" style messages.
+- **Idiom**: always add a trailing `$(,)?` to comma-repeated macro patterns (`$($x:expr),* $(,)?`) so callers can use a trailing comma, matching the ergonomics of `vec![1, 2, 3,]`.
+- **Performance**: heavy proc-macro usage (especially derive macros like `serde`'s) meaningfully slows incremental compile times — `cargo build --timings` shows which crates dominate build time, often revealing proc-macro-heavy dependencies as the bottleneck.
+- **Debug**: raise `#![recursion_limit = "256"]` at the crate root when a deeply recursive `macro_rules!` hits the default 64-deep limit — the error message tells you exactly this, but it's easy to miss among other diagnostics.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`:expr` fragments double-evaluate side effects**: a macro that references `$x` more than once in its expansion, like `($x:expr) => { $x + $x }`, evaluates the caller's expression twice — `my_macro!(expensive_call())` runs `expensive_call()` twice, not once, which is invisible from the call site.
+- **Fragment "follow set" restrictions cause confusing parse errors**: `:expr` cannot be followed by certain tokens (like a bare `;` in some positions) because the grammar would be ambiguous — the compiler error mentions "local ambiguity" or "no rules expected this token," which doesn't obviously point back to the fragment-follow restriction.
+- **Hygiene means macro-internal `let` bindings never leak**: a macro that does `let tmp = $a;` internally can't have `tmp` accidentally shadow or be shadowed by a caller's own `tmp` variable — but this also means a macro *cannot* intentionally introduce a variable that the call site is meant to use, which trips up anyone trying to write a "define a variable for me" macro in `macro_rules!` (this requires `$name:ident` passed explicitly instead).
+- **Arm order matters and is easy to get backwards**: `macro_rules!` tries arms top-to-bottom and commits to the first structural match — a general catch-all pattern placed before a more specific one will shadow it silently (no error), unlike `match` exhaustiveness checks which at least warn about unreachable arms in some cases.
+- **`#[macro_export]` places the macro at the crate root regardless of module nesting**: a macro defined deep inside `mod a { mod b { macro_rules! ... } } ` with `#[macro_export]` is usable as `my_crate::the_macro!()`, not `my_crate::a::b::the_macro!()` — the nesting is invisible to callers, which surprises people expecting normal path-based visibility.
+- **Proc-macro crates cannot export anything but macros**: a `proc-macro = true` crate can't also expose regular `pub fn`s usable from a normal `use` — helper logic needs to live in a separate, non-proc-macro crate that both the macro crate and its consumers depend on.
+- **Platform-independent trap — recursive macro state accumulation**: a `macro_rules!` "counting" macro that recurses to compute a length (a common workaround for lack of const-eval in old macros) can hit the recursion limit on inputs that look small (a few dozen items) because each repetition step is a full macro expansion, not a cheap loop iteration.
+
+## 🧠 Spot the Bug
+
+What's wrong with this macro, and what does calling it twice with a side-effecting argument reveal?
+
+::code-wrapper{language="rust"}
+```rust
+macro_rules! max_of {
+    ($a:expr, $b:expr) => {
+        if $a > $b { $a } else { $b }
+    };
+}
+
+fn noisy(n: i32) -> i32 {
+    println!("evaluating {n}");
+    n
+}
+
+fn main() {
+    let result = max_of!(noisy(3), noisy(7));
+    println!("result: {result}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Output:
+::code-wrapper{language="rust"}
+```rust
+evaluating 3
+evaluating 7
+evaluating 7
+result: 7
+```
+::
+
+`noisy(7)` prints twice, not once. The macro expands to `if noisy(3) > noisy(7) { noisy(3) } else { noisy(7) }` — each `$a`/`$b` metavariable is substituted **textually, at every point it appears** in the expansion template. Since `$b` appears twice (once in the comparison, once in the `else` branch), and the `else` branch is the one taken (7 > 3), `noisy(7)` genuinely runs twice: once for the comparison, once to produce the result. This is invisible at the call site — `max_of!(noisy(3), noisy(7))` looks like each argument is evaluated once, the way a normal function call would guarantee.
+
+The fix is to bind each argument to a local variable exactly once inside the expansion, exploiting hygiene to avoid caller collisions:
+
+::code-wrapper{language="rust"}
+```rust
+macro_rules! max_of {
+    ($a:expr, $b:expr) => {{
+        let a = $a;
+        let b = $b;
+        if a > b { a } else { b }
+    }};
+}
+```
+::
+
+**The lesson**: `macro_rules!` substitutes expression fragments textually — an argument used more than once in the expansion is evaluated more than once, unless you bind it to a local first.
+
+</details>
 
 ## Summary
 

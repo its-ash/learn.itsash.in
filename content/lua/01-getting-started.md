@@ -26,9 +26,11 @@ sudo apt-get install lua5.4
 ::
 
 Verify:
+::code-wrapper{language="bash"}
 ```bash
 lua -v     # Lua 5.4.6 (or your version)
 ```
+::
 
 ## Your First Program
 
@@ -269,9 +271,11 @@ end
 
 **Use `luacheck` for linting**: Catches typos (undeclared globals), unused variables, and unreachable code. Saves hours of debugging.
 
+::code-wrapper{language="bash"}
 ```bash
 luacheck script.lua
 ```
+::
 
 **Local functions are faster**: `local function f() end` is faster and cleaner than assigning to a global.
 
@@ -283,13 +287,16 @@ luacheck script.lua
 
 **Globals leak by default**: Every assignment without `local` pollutes the global namespace. Use `strict.lua` or a linter to enforce `local`.
 
+::code-wrapper{language="lua"}
 ```lua
 x = 5              -- GLOBAL (oops, typo from 'local x = 5')
 local y = 10       -- local (safe)
 ```
+::
 
 **No block scope (only function scope)**: Unlike JavaScript, `if`, `for`, `while` don't create scopes. Only functions do. This surprises everyone.
 
+::code-wrapper{language="lua"}
 ```lua
 local x = 5
 if true then
@@ -299,6 +306,7 @@ end
 print(x)           -- 20
 print(y)           -- nil
 ```
+::
 
 **`#` doesn't work on sparse tables**: If your table has gaps (e.g., `{1, nil, 3}`), `#` gives undefined results. Use explicit length tracking.
 
@@ -308,12 +316,14 @@ print(y)           -- nil
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local x = 10
 local y = x or 20
 local z = false or 30
 print(y, z)
 ```
+::
 
 <details>
 <summary>Answer</summary>

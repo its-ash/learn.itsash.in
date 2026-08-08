@@ -266,6 +266,59 @@ npm test                # runs: vitest
 ```
 ::
 
+## 💡 Tips & Tricks
+
+**`node --watch` for instant reload** — Skip nodemon for simple projects: `node --watch src/index.js` restarts on file save, built into Node 18.11+.
+
+**Use the REPL as a scratchpad** — Type `.editor` inside `node` REPL to enter multi-line paste mode, then `Ctrl+D` to run — great for testing snippets without creating a file.
+
+**`npx` runs without polluting global installs** — `npx cowsay hi` downloads, runs, and discards — no `npm install -g` needed, no version conflicts across projects.
+
+**Console object shortcuts** — `console.table()` renders arrays of objects as a readable grid; `console.time('label')` / `console.timeEnd('label')` measures elapsed time without manual `Date.now()` math.
+
+**Check installed Node version per-project** — An `.nvmrc` file with just a version string (e.g. `22`) lets teammates run `nvm use` and get the exact same runtime.
+
+## ⚠️ Edge Cases & Gotchas
+
+**Non-strict mode silently creates globals** — Assigning to an undeclared variable inside a function (`undeclaredVar = 42`) creates a global instead of throwing, unless `'use strict'` is active. ES modules are strict automatically; plain `<script>` tags and CommonJS files are not.
+
+**`"type": "module"` changes `require`/`__dirname` availability** — Once `package.json` has `"type": "module"`, `.js` files become ES modules — `require()`, `module.exports`, and `__dirname` stop working and throw `ReferenceError`.
+
+**`npm install -g` permission errors are platform-specific** — On macOS/Linux, global installs often fail with `EACCES` because the default prefix is owned by root; on Windows this rarely happens. Fixing npm's prefix (or using `npx`) avoids `sudo npm install -g`, which creates further permission tangles.
+
+**`node --version` inside nvm shells vs system shells** — If a new terminal tab opens before nvm's shell init runs, `node --version` may report the system-installed Node (or "command not found") instead of the nvm-selected version — a common "it works in my other tab" confusion.
+
+**HTML `<script>` order matters for `document` access** — A `<script>` in `<head>` that queries `document.querySelector(...)` before the body has parsed gets `null`, not an error — the classic beginner bug fixed by moving the script to the end of `<body>` or using `defer`.
+
+## 🧠 Spot the Bug
+
+What does this log, and why?
+
+::code-wrapper{language="javascript"}
+```javascript
+function setName() {
+  userName = 'Alice'
+}
+setName()
+console.log(userName)
+
+function setNameStrict() {
+  'use strict'
+  userNameStrict = 'Bob'
+}
+setNameStrict()
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+The first block logs `Alice` — assigning to `userName` without `let`/`const`/`var` silently creates a global property on `globalThis`. The second block throws `ReferenceError: userNameStrict is not defined` because `'use strict'` disables implicit global creation.
+
+**The lesson**: always run in strict mode (or use ES modules, which are strict by default) so typos in variable names fail loudly instead of leaking into global state.
+
+</details>
+
 ## Key Takeaways
 
 - JavaScript runs in browsers (with DOM) and Node.js (with `fs`/`http`).

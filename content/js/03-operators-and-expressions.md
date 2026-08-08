@@ -233,12 +233,14 @@ const [first, ...rest] = [1, 2, 3, 4]   // first=1, rest=[2,3,4]
 
 What's the output?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const obj = { x: 1 }
 const result = obj?.x ?? 2
 const value = undefined ?? 0 || 5
 console.log(result, value)
 ```
+::
 
 <details>
 <summary>Answer</summary>

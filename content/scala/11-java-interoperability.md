@@ -336,6 +336,7 @@ def process[T](value: T): T = value
 
 What's wrong here?
 
+::code-wrapper{language="scala"}
 ```scala
 val javaList: java.util.List[Int] = new java.util.ArrayList()
 javaList.add(1)
@@ -347,6 +348,7 @@ scalaList.map(_ * 2)
 javaList.add(3)
 println(scalaList)  // prints what?
 ```
+::
 
 <details>
 <summary>Answer</summary>
@@ -360,9 +362,11 @@ Here's why:
 
 If you need a snapshot, convert first:
 
+::code-wrapper{language="scala"}
 ```scala
 val scalaList = javaList.asScala.toList  // immutable copy
 ```
+::
 
 **The lesson**: `asScala` is a view, not a copy. If you need independence, materialize it.
 

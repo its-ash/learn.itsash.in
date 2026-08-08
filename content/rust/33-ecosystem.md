@@ -307,6 +307,50 @@ Heuristics:
 - Prefer `serde`-based serialization.
 - For new projects: `axum` + `tokio` + `serde` + `sqlx` + `clap` + `tracing` + `anyhow` (app) or `thiserror` (lib).
 
+## 💡 Tips & Tricks
+
+- **Debug**: `cargo tree -d` finds duplicate versions of the same dependency pulled in transitively — a common source of unexpectedly large binaries and "why are there two versions of `tokio`" build errors.
+- **Idiom**: pick `rustls` over `openssl`-backed crates when you have a choice — it removes a system-level C dependency, which simplifies cross-compilation and Docker image builds considerably.
+- **Debug**: `cargo install cargo-outdated` (or `cargo update --dry-run`) shows which dependencies have newer versions available without touching your `Cargo.lock` — safer to run regularly than blindly running `cargo update`.
+- **Performance**: `cargo install cargo-nextest` for local test runs — it's a drop-in replacement for `cargo test` in most workflows and parallelizes at the process level, which is usually the single biggest "make CI faster" win available for free.
+- **Idiom**: when starting a new async project, `tokio` + `serde` + `anyhow` (or `thiserror` for libraries) + `tracing` is close to a de facto standard stack — deviating from it is fine, but knowing the default helps you read the vast majority of example code and Stack Overflow answers.
+- **Debug**: `cargo-audit` and `cargo-deny` should run in CI, not just locally — a dependency that was safe when you `cargo add`ed it can later have a security advisory published against it, and nothing about your own code changes to reveal that.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`serde`'s derive macros meaningfully slow compile times at scale**: a workspace with dozens of `#[derive(Serialize, Deserialize)]` structs pays real, cumulative proc-macro expansion cost — this is invisible in a small crate but becomes one of the top contributors to `cargo build --timings` output in large codebases.
+- **Picking an async runtime is a global, contagious decision**: mixing `tokio`-based and `async-std`-based crates in the same binary often doesn't work at all (they have incompatible reactors for I/O), so a transitive dependency pulling in the "wrong" runtime can force a rewrite far from where the actual incompatibility originates.
+- **`unsafe`-heavy crates (`ring`, `bytes`, low-level FFI wrappers) are not automatically vetted just because they're popular**: high download counts on crates.io reflect adoption, not an audit — `cargo-crev` or `cargo vet` provide actual review-based trust signals that download counts don't.
+- **Feature unification across a workspace can silently enable features you didn't ask for**: if crate A depends on `tokio` with feature `rt` and crate B (in the same workspace/build) depends on `tokio` with feature `full`, both end up compiled with the union of features — a crate can end up with more functionality (and more compiled code, more potential attack surface) than its own `Cargo.toml` implies.
+- **`bincode` and other "fast" binary formats are typically not cross-version stable**: a struct serialized with `bincode` on one version of your program is not guaranteed to deserialize correctly after you reorder or add fields — unlike `serde_json`, these formats are optimized for speed within a single, static schema, not for long-term storage or wire compatibility.
+- **`HashMap` (std) is intentionally not the fastest hash map**: it uses a DoS-resistant (SipHash-based) default hasher, which is slower than non-cryptographic alternatives like `FxHashMap`/`AHashMap` — reaching for `HashMap` reflexively in a performance-sensitive inner loop without considering `rustc-hash` or `ahash` is a common missed optimization.
+- **Platform-independent trap — `openssl` system dependency breaks reproducible cross-compilation**: crates that link the system's `openssl` (rather than `rustls` or a vendored/statically-linked OpenSSL) build successfully on a developer's machine and then fail in a minimal Docker build image or a different CI runner that lacks the matching system OpenSSL headers/version.
+
+## 🧠 Spot the Bug
+
+A team adds a new dependency to speed up JSON parsing in a hot path. What's the likely problem with this `Cargo.toml` change, given the rest of the codebase already uses `tokio` for async I/O?
+
+::code-wrapper{language="toml"}
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-std = { version = "1", features = ["attributes"] }
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+The bug isn't in the JSON parsing at all — it's `async-std` sitting alongside `tokio` in the same dependency list.
+
+`tokio` and `async-std` each ship their own async runtime with its own reactor (the component that drives I/O readiness, timers, and task scheduling). Types like `tokio::net::TcpStream` or a `tokio::time::sleep` future are only drivable by a running `tokio` executor — spawning them or `.await`ing them under an `async-std` runtime (or vice versa) typically panics at runtime with something like "there is no reactor running" rather than failing at compile time, because both runtimes present a similar-looking `async fn`/`Future` surface that the type system can't distinguish by itself. If this `async-std` dependency was pulled in transitively by some other crate the team added for an unrelated reason (rather than intentionally), the runtime-mixing bug can appear far from the `Cargo.toml` change that introduced it, and manifest only when a specific I/O code path actually executes at runtime.
+
+**The lesson**: async runtimes are not interchangeable at the type level — accidentally depending on two of them (directly or transitively) compiles cleanly but panics at runtime the moment a runtime-specific future actually runs.
+
+</details>
+
 ## Summary
 
 Use the ecosystem; don't reinvent. The `tokio`-`serde`-`tower` stack underlies most server-side Rust. For new projects: pick `axum` (web), `sqlx` (DB), `clap` (CLI), `tracing` (logging), `anyhow`/`thiserror` (errors), `serde` (serialization). For tools: `rust-analyzer`, `clippy`, `cargo-deny`, `cargo-nextest`, `cargo-expand`. For fuzzing: `cargo-fuzz`. For benchmarks: `criterion`.

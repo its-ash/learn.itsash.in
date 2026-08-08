@@ -307,7 +307,16 @@ fn main() {
 
 The default ABI is `extern "Rust"` (not stable to name explicitly until 1.86+). C ABI is `extern "C"`. Other ABIs: `stdcall`, `system` (Windows: `stdcall` on x86, `C` on x64), `aapcs`, `fastcall`, `win64`, `sysv64`.
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: run `cargo +nightly miri test` on every crate that contains `unsafe`, as a matter of habit, not just when something looks wrong — Miri catches classes of UB (misaligned access, invalid pointer arithmetic, uninitialized reads) that pass ordinary tests and even sanitizers on some platforms.
+- **Idiom**: write a `// SAFETY:` comment immediately above *every* `unsafe` block, explaining precisely which invariant the surrounding code guarantees and why the operation is sound given it — treat an `unsafe` block without one as incomplete, the same way you'd treat a public function without documentation.
+- **Idiom**: keep `unsafe` blocks as small as possible — wrap only the single operation that requires it, not the surrounding safe logic, so a reviewer (and Miri) can audit the minimal surface that actually needs scrutiny.
+- **Debug**: `cargo expand` on code using `#[repr(C)]`/FFI types can help confirm the layout the compiler actually generated matches your assumption, before you trust it in an `unsafe` cast.
+- **Idiom**: prefer existing safe abstractions (`split_at_mut`, `Cell`, `RefCell`, `MaybeUninit`) over hand-rolled `unsafe` for a problem the standard library has already solved soundly — reinventing these is a common source of subtly unsound code.
+- **Debug**: if you're tempted to reach for `std::mem::transmute`, search first for a safe, purpose-built conversion (`From`/`TryFrom`, `f32::from_bits`, `u32::from_ne_bytes`, etc.) — `transmute` is almost never the only option, and it's one of the easiest ways to introduce UB via a size or validity mismatch.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`unsafe` doesn't disable the borrow checker**: you still can't have aliasing `&mut T` even with `unsafe`.
 - **`unsafe fn` body has implicit unsafe in pre-2024 editions**: 2024 changes this — explicit `unsafe` blocks required inside.
@@ -317,6 +326,52 @@ The default ABI is `extern "Rust"` (not stable to name explicitly until 1.86+). 
 - **`static mut` races**: undetectable by `cargo test` in many cases; use atomics.
 - **`Cell`/`RefCell` and `Send`**: not `Sync`, but they are `Send` if `T: Send`.
 - **Pin and `unsafe`**: implementing your own `Future` requires `unsafe` because of `Pin` invariants.
+
+## 🧠 Spot the Bug
+
+Why is this "optimization" undefined behavior, even though it looks like harmless pointer arithmetic?
+
+::code-wrapper{language="rust"}
+```rust
+fn sum_as_u64_pairs(bytes: &[u8]) -> u64 {
+    let ptr = bytes.as_ptr() as *const u64;
+    let count = bytes.len() / 8;
+    let mut total = 0u64;
+    for i in 0..count {
+        total = total.wrapping_add(unsafe { *ptr.add(i) });
+    }
+    total
+}
+
+fn main() {
+    let data: Vec<u8> = (0..64).collect();
+    println!("{}", sum_as_u64_pairs(&data[1..]));
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+This is undefined behavior due to **misaligned access**, and it can crash, produce garbage, or "work" depending on the platform and optimization level — none of which makes it correct.
+
+`bytes.as_ptr()` for a `Vec<u8>` (or a `&[u8]`) is only guaranteed to be aligned to `u8`'s alignment, which is 1 byte. Casting that pointer to `*const u64` and dereferencing it requires the pointer to be aligned to `u64`'s alignment (typically 8 bytes) — but nothing about a `&[u8]` guarantees this, and slicing with `&data[1..]` deliberately shifts the starting address by one byte, making misalignment from a `u64` boundary the common case rather than a rare edge case. Reading through a misaligned pointer of this kind is UB in Rust regardless of whether the target CPU architecture happens to tolerate unaligned reads at the hardware level (x86 mostly does, silently; many ARM configurations either fault or read incorrect data) — the language-level rule is about the type's alignment invariant, not what the hardware can physically survive. This is exactly the trap called out for `Vec<u8>` buffers reused as `*mut u64` elsewhere in this chapter: the allocation's alignment matches the *original* element type, not whatever you later cast it to.
+
+The sound fix is to either allocate the buffer as `Vec<u64>` from the start (guaranteeing the right alignment) or read via `u64::from_ne_bytes` on a byte-slice chunk (no unsafe pointer cast needed, and no alignment requirement):
+
+::code-wrapper{language="rust"}
+```rust
+fn sum_as_u64_pairs(bytes: &[u8]) -> u64 {
+    bytes.chunks_exact(8)
+        .map(|chunk| u64::from_ne_bytes(chunk.try_into().unwrap()))
+        .fold(0u64, u64::wrapping_add)
+}
+```
+::
+
+**The lesson**: casting a byte pointer to a wider-type pointer and dereferencing it is UB unless you've independently guaranteed the correct alignment — the type system's alignment invariant is a language rule, not a suggestion the hardware happens to enforce for you.
+
+</details>
 
 ## `unsafe` Anti-Patterns
 

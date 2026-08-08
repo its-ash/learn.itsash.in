@@ -326,11 +326,13 @@ tonumber("5") + 3   -- 8
 ## 💡 Tips & Tricks
 
 **Print debugging**: Lua's `print()` auto-converts to string, so `print({a=1})` gives `table: 0x...`. For better output, use `print(vim.inspect(t))` (in Neovim) or write a debug function:
+::code-wrapper{language="lua"}
 ```lua
 local function dump(t)
   for k, v in pairs(t) do print(k, v) end
 end
 ```
+::
 
 **Table iteration patterns**: `ipairs` iterates array part in order (1-indexed); `pairs` is unordered but hits all keys. For predicability in production, collect keys first: `local keys = {}; for k in pairs(t) do table.insert(keys, k) end; table.sort(keys)`.
 
@@ -360,6 +362,7 @@ end
 
 What does this log?
 
+::code-wrapper{language="lua"}
 ```lua
 local x = {}
 x[1] = "a"
@@ -368,6 +371,7 @@ x[3] = nil
 x[4] = "c"
 print(#x)
 ```
+::
 
 <details>
 <summary>Answer</summary>

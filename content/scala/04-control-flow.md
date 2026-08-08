@@ -352,6 +352,7 @@ Assertions can be disabled at runtime (`-disableassertions`); use `require()` fo
 
 **For comprehensions for sequential operations**: Especially with `Option`/`Either`, they're cleaner than manual `.flatMap()`.
 
+::code-wrapper{language="scala"}
 ```scala
 for {
   x <- Some(1)
@@ -362,16 +363,20 @@ for {
 // vs
 Some(1).flatMap(x => Some(2).flatMap(y => Some(3).map(z => x + y + z)))
 ```
+::
 
 **Use `takeWhile` / `dropWhile` instead of break**: These functional alternatives are cleaner and composable.
 
+::code-wrapper{language="scala"}
 ```scala
 (1 to 100).takeWhile(_ < 50)    // stops at first false
 (1 to 100).dropWhile(_ < 50)    // skips while condition is true
 ```
+::
 
 **Match with guards for complex conditions**: More readable than nested ifs.
 
+::code-wrapper{language="scala"}
 ```scala
 x match {
   case n if n < 0 => "negative"
@@ -379,6 +384,7 @@ x match {
   case n if n > 0 => "positive"
 }
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -386,47 +392,58 @@ x match {
 
 **Option/Either require pattern matching or combinators**: You can't just call `.value`; use `.getOrElse()` or pattern match.
 
+::code-wrapper{language="scala"}
 ```scala
 val x: Option[Int] = Some(5)
 x.value                           // compile error
 x.getOrElse(0)                    // 5
 ```
+::
 
 **Try is not the same as Option**: `Try[T]` holds a value or a `Throwable`. Similar API but different semantics.
 
+::code-wrapper{language="scala"}
 ```scala
 import scala.util.Try
 Try(10 / 0)                       // Failure(ArithmeticException)
 Try(10 / 2)                       // Success(5)
 ```
+::
 
 **`for` loops don't return values; use `for (... yield ...)` for that**:
 
+::code-wrapper{language="scala"}
 ```scala
 for (x <- 1 to 5) println(x)      // Unit (side effect)
 val result = for (x <- 1 to 5) yield x * 2  // Vector(2, 4, 6, 8, 10)
 ```
+::
 
 **Variable scoping in for loops**: Loop variables are local to the loop.
 
+::code-wrapper{language="scala"}
 ```scala
 for (i <- 1 to 5) println(i)
 println(i)                        // compile error (i out of scope)
 ```
+::
 
 **Guard conditions in pattern matching can have side effects**: Use with caution.
 
+::code-wrapper{language="scala"}
 ```scala
 x match {
   case n if { println(s"Checking $n"); n > 0 } => "positive"
   case _ => "other"
 }
 ```
+::
 
 ## 🧠 Spot the Bug
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 val x = 5
 val result = if (x > 10) "big" else if (x > 0) "positive" else "non-positive"
@@ -438,15 +455,18 @@ val result2 = x match {
 println(result)
 println(result2)
 ```
+::
 
 <details>
 <summary>Answer</summary>
 
 Prints:
-```
+::code-wrapper{language="text"}
+```text
 positive
 positive
 ```
+::
 
 Here's why:
 - `x = 5`, so `x > 10` is false

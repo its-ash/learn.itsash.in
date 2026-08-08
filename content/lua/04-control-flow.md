@@ -272,6 +272,7 @@ luacheck script.lua
 
 **Use repeat-until for input validation loops**: Familiar pattern (like do-while).
 
+::code-wrapper{language="lua"}
 ```lua
 local choice
 repeat
@@ -279,6 +280,7 @@ repeat
   choice = tonumber(io.read())
 until choice and choice >= 1 and choice <= 3
 ```
+::
 
 **Tail calls enable deep recursion**: Lua optimizes tail calls, so you can recurse deeply without stack overflow (if the call is truly tail).
 
@@ -286,21 +288,25 @@ until choice and choice >= 1 and choice <= 3
 
 **`for` loop variables are local to the loop**: You can't access `i` after the loop ends (unless you explicitly declared it before).
 
+::code-wrapper{language="lua"}
 ```lua
 for i = 1, 5 do
   print(i)
 end
 print(i)            -- nil (not 6)
 ```
+::
 
 **`ipairs` stops at first `nil`**: If your table has a `nil` value in the middle, `ipairs` stops iterating the array part.
 
+::code-wrapper{language="lua"}
 ```lua
 local t = {1, 2, nil, 4, 5}
 for i, v in ipairs(t) do
   print(i, v)       -- prints: 1 1, 2 2 (stops at nil)
 end
 ```
+::
 
 **`pairs()` order is undefined**: Don't rely on insertion order; use `ipairs()` for arrays.
 
@@ -308,6 +314,7 @@ end
 
 **`break` only exits one level**: If nested loops, break exits the inner loop, not all loops. Use a flag or refactor.
 
+::code-wrapper{language="lua"}
 ```lua
 local found = false
 for i = 1, 5 do
@@ -320,11 +327,13 @@ for i = 1, 5 do
   if found then break end  -- break outer loop
 end
 ```
+::
 
 ## 🧠 Spot the Bug
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local x = 10
 if x > 5 and x < 15 then
@@ -335,6 +344,7 @@ if x > 5 and x < 15 then
 end
 print(x)
 ```
+::
 
 <details>
 <summary>Answer</summary>

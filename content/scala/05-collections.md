@@ -318,14 +318,17 @@ val list = 1 :: 2 :: 3 :: Nil   // List(1, 2, 3)
 
 **Chaining operations is efficient**: Scala fuses many operations into single pass.
 
+::code-wrapper{language="scala"}
 ```scala
 (1 to 1000).map(_ * 2).filter(_ > 100).take(10)  // lazy in Scala 3
 ```
+::
 
 **Use ranges instead of materializing lists**: `(1 to 1000)` doesn't create 1000 elements upfront; it's lazy.
 
 **Pattern match on collections**: Cleaner than index access.
 
+::code-wrapper{language="scala"}
 ```scala
 list match {
   case Nil => "empty"
@@ -333,6 +336,7 @@ list match {
   case head :: tail => s"head: $head"
 }
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -350,11 +354,13 @@ list match {
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 val nums = List(1, 2, 3, 4, 5)
 val result = nums.map(_ * 2).filter(_ > 5).map(_ / 2)
 println(result)
 ```
+::
 
 <details>
 <summary>Answer</summary>

@@ -147,6 +147,7 @@ try {
 
 What gets logged?
 
+::code-wrapper{language="javascript"}
 ```javascript
 try {
   try {
@@ -165,6 +166,7 @@ try {
   throw new Error('Finally')
 }
 ```
+::
 
 <details>
 <summary>Answer</summary>

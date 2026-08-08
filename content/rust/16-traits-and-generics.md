@@ -270,7 +270,16 @@ pub trait Public: private::Sealed { /* ... */ }
 
 Downstream types can't implement `Sealed`, so they can't implement `Public`. Used by std and many crates for forward compatibility.
 
-## Edge Cases & Pitfalls
+## 💡 Tips & Tricks
+
+- **Debug**: `cargo expand` on a generic function shows you each monomorphized instantiation the compiler actually generated — useful when you suspect code bloat from a heavily-generic function called with many distinct type parameters.
+- **Idiom**: implement `From` (never `Into` directly) for conversions — `impl From<A> for B` automatically gives you `B: Into<A>` via a blanket impl in `std`, so writing `Into` by hand is both redundant and loses the reflexive `From` you'd otherwise get.
+- **Performance**: static dispatch (`fn f<T: Trait>(x: T)`) has zero runtime cost but duplicates code per concrete type (monomorphization); `dyn Trait` has one shared implementation but pays a vtable indirection per call — benchmark before assuming either is "obviously" the right choice for a specific hot path.
+- **Idiom**: use the sealed-trait pattern (a private supertrait in a hidden module) the moment you want a public trait's method set to be extensible in the future without it being a breaking change for anyone who might have implemented it externally.
+- **Debug**: "the trait `Trait` is not implemented for `Type`" sometimes means the impl exists but for a *different* generic instantiation (e.g., `impl Trait for Vec<i32>` exists but you need `Vec<u32>`) — read the full type in the error, not just the trait name.
+- **Clippy**: `clippy::wrong_self_convention` flags methods like `fn to_x(self)` that consume `self` when the `to_`/`as_`/`into_` naming convention implies a specific receiver style — worth following since much of the ecosystem relies on these naming conventions to predict a method's ownership behavior without reading its signature.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Orphan rule**: can't implement external trait for external type. Use the **newtype pattern** to wrap and implement.
 - **`Self` returns break object safety**: traits returning `Self` can't be made into `dyn Trait`.
@@ -282,6 +291,52 @@ Downstream types can't implement `Sealed`, so they can't implement `Public`. Use
 - **`Self: Sized` bound on a method** excludes it from the vtable — useful for "static-only" methods on an object-safe trait.
 - **Generic method on trait object** is impossible — workaround is to expose concrete variants.
 - **Lifetime bounds on traits**: `trait Foo<'a>` requires the impl to specify a lifetime; used when methods borrow from inputs.
+
+## 🧠 Spot the Bug
+
+Why can't this trait be used as `Box<dyn Shape>`?
+
+::code-wrapper{language="rust"}
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+    fn scaled(&self, factor: f64) -> Self;
+}
+
+struct Circle { radius: f64 }
+
+impl Shape for Circle {
+    fn area(&self) -> f64 { std::f64::consts::PI * self.radius * self.radius }
+    fn scaled(&self, factor: f64) -> Self { Circle { radius: self.radius * factor } }
+}
+
+fn main() {
+    let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Circle { radius: 2.0 })];
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`error[E0038]: the trait \`Shape\` cannot be made into an object` — because `scaled(&self, factor: f64) -> Self` returns `Self` by value.
+
+Object safety requires that every method on a trait be callable through a `dyn Trait` fat pointer (`{data_ptr, vtable_ptr}`) without knowing the concrete type at compile time. A method returning `Self` is fundamentally incompatible with this: if you call `.scaled(2.0)` on a `Box<dyn Shape>`, the compiler would need to know the exact concrete return type's size to allocate space for it — but `dyn Shape` erases that information by design. Two different concrete types implementing `Shape` (say, `Circle` and `Square`) would need `scaled` to return *different* concrete types, which a single vtable entry cannot represent (a vtable entry is one function pointer with one fixed signature, not "whatever `Self` happens to be for this instance"). This is exactly why `Clone` (whose `clone(&self) -> Self` has the identical shape) isn't object-safe either, and why `dyn Clone` doesn't exist without a workaround.
+
+The fix is to avoid `Self`-by-value returns on object-safe traits — return `Box<dyn Shape>` instead, accepting the heap-allocation cost, or split the trait so the `Self`-returning method lives on a separate, non-object-safe trait:
+
+::code-wrapper{language="rust"}
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+    fn scaled(&self, factor: f64) -> Box<dyn Shape>;
+}
+```
+::
+
+**The lesson**: any trait method returning `Self` by value breaks object safety, because a `dyn Trait` vtable entry can't represent "return whatever concrete type this particular instance happens to be."
+
+</details>
 
 ## Summary
 

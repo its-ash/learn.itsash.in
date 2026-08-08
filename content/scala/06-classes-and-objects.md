@@ -297,6 +297,7 @@ Math.add(2, 3)              // 5
 
 **Companion objects for factories**: Cleaner than multiple constructors.
 
+::code-wrapper{language="scala"}
 ```scala
 case class User(id: Int, name: String)
 object User {
@@ -306,11 +307,13 @@ object User {
   }
 }
 ```
+::
 
 **Traits for behavior, classes for data**: Traits mix in behavior; classes represent entities.
 
 **Use sealed traits for exhaustiveness checking**: Compiler verifies all cases handled.
 
+::code-wrapper{language="scala"}
 ```scala
 sealed trait Result
 case class Success(value: String) extends Result
@@ -322,6 +325,7 @@ def handle(r: Result) = r match {
   // Compiler warns if cases missing
 }
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -333,12 +337,14 @@ def handle(r: Result) = r match {
 
 **Visibility `private` is per-file, not per-class**: Use `private[this]` to restrict to just the instance.
 
+::code-wrapper{language="scala"}
 ```scala
 class C {
   private val x = 1
   def f(other: C) = other.x  // OK (private within class)
 }
 ```
+::
 
 **Constructor side effects run on instantiation**: Be careful with expensive operations in class body.
 
@@ -346,6 +352,7 @@ class C {
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 class Counter(private var count: Int = 0) {
   def increment() = count += 1
@@ -357,6 +364,7 @@ c.increment()
 c.increment()
 println(c.get)
 ```
+::
 
 <details>
 <summary>Answer</summary>

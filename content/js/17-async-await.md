@@ -100,6 +100,7 @@ async function dependent() {
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 async function test() {
   const a = await Promise.resolve(1)
@@ -113,6 +114,7 @@ test().then(([a, b, c]) => {
   console.log(typeof a, typeof b, typeof c)
 })
 ```
+::
 
 <details>
 <summary>Answer</summary>

@@ -208,6 +208,70 @@ let owned = *b; // unbox (moves String out)
 ```
 ::
 
+## 💡 Tips & Tricks
+
+- **Debug**: `dbg!(&value)` prints the file, line, and a `Debug` dump of an expression *and* returns ownership of it, so you can splice it into a move chain: `let s = dbg!(String::from("hi"));` without disturbing the move.
+- **Idiom**: prefer `std::mem::take`/`std::mem::replace` over `clone()` when you need to "empty out" a field during a state transition — it's O(1) and avoids an allocation.
+- **Performance**: `Rc::clone(&rc)`/`Arc::clone(&arc)` never deep-copy; the call is a refcount bump. Writing `rc.clone()` compiles to the same thing but reads ambiguously — always use the explicit associated-function form in shared code.
+- **Idiom**: `Box<T>` values move just like any other value — a move of a `Box` is a pointer-sized copy of the box header, not a deep copy of the heap data, which is why moving even a gigabyte-sized `Vec` is cheap.
+- **Debug**: `std::mem::size_of::<T>()` is handy for confirming your intuition about move cost — `String` is 24 bytes on 64-bit regardless of how much heap data it owns.
+- **Clippy**: `clippy::redundant_clone` flags `.clone()` calls whose result is never used mutably alongside the original — a common sign a borrow would have worked instead.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Moving into a loop condition**: `for s in vec_of_strings` consumes the `Vec` — `vec_of_strings` is gone after the loop. Use `&vec_of_strings` to iterate by reference and keep ownership.
+- **`if`/`else` branches move differently**: `let x = if cond { a } else { b };` moves whichever branch runs; the compiler tracks this per-branch, so using `a` after the `if` (when `cond` was true) is still an error even though the `else` branch "didn't touch it."
+- **Shadowing doesn't drop early**: `let s = String::from("a"); let s = String::from("b");` — the first `s` isn't dropped when shadowed; it drops at the *original* scope's end (after the second one, in reverse declaration order), which can surprise you when both hold expensive resources.
+- **`Copy` closures silently duplicate, not move**: a closure that captures a `Copy` type by value takes a copy each call if it's `Fn`, so mutations inside the closure never propagate back to the caller — this is invisible without checking the captured type's `Copy`-ness.
+- **Self-assignment through `mem::swap`**: `std::mem::swap(&mut a, &mut a)` is legal but a no-op — the borrow checker allows it because it's a single mutable borrow, not two, but it wastes a swap's worth of moves.
+- **`Drop` order with early return**: if a function returns early (via `?` or an explicit `return`), locals still drop in reverse order at that return point — not at the end of the function's lexical block — which matters when destructors have side effects like releasing locks.
+- **Platform quirk — `Drop` and `panic = "abort"`**: if you set `panic = "abort"` in `Cargo.toml`, a panic during unwinding never runs remaining `Drop` impls in the current call stack (there is no unwinding at all), so RAII guards relying on `Drop` for cleanup won't fire on panic.
+
+## 🧠 Spot the Bug
+
+What happens when this compiles and runs?
+
+::code-wrapper{language="rust"}
+```rust
+struct Logger;
+
+impl Drop for Logger {
+    fn drop(&mut self) {
+        println!("Logger dropped");
+    }
+}
+
+fn make_and_swap() {
+    let mut first = Logger;
+    let second = Logger;
+    first = second;
+    println!("about to end scope");
+}
+
+fn main() {
+    make_and_swap();
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Output:
+::code-wrapper{language="rust"}
+```rust
+Logger dropped
+about to end scope
+Logger dropped
+```
+::
+
+`first = second;` is an assignment to an existing binding that already owns a value. Rust doesn't just overwrite the pointer — because `Logger` implements `Drop`, assigning a new value into `first` first **drops the old value** `first` was holding (printing "Logger dropped" immediately), *then* moves `second`'s value into `first`. `second` is now invalid. At the end of the function, only the surviving `first` (originally `second`'s value) drops, printing "Logger dropped" a second time — for a total of two drops, matching the two `Logger` values ever created, but at very different times than a beginner would guess (who often expects both drops to happen only at scope end).
+
+**The lesson**: assigning over a live binding with a `Drop` type runs the old value's destructor immediately, not at scope end.
+
+</details>
+
 ## Summary
 
 - Each value has one owner; scope-end drops it.

@@ -165,6 +165,7 @@ setTimeout(() => {
 
 What's the output order?
 
+::code-wrapper{language="javascript"}
 ```javascript
 console.log('1')
 
@@ -184,6 +185,7 @@ queueMicrotask(() => console.log('6'))
 
 console.log('7')
 ```
+::
 
 <details>
 <summary>Answer</summary>

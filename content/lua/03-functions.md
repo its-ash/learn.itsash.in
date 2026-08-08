@@ -314,11 +314,13 @@ local doubled = map(function(x) return x * 2 end, nums)
 **Immediate invocation for scope**: Use `(function() ... end)()` to create a scope without polluting globals. Useful in large config files or plugins.
 
 **Unpack varargs with `...`**: To pass varargs to another function, use `...:
+::code-wrapper{language="lua"}
 ```lua
 local function delegate(...)
   return someOtherFunction(...)  -- passes all arguments through
 end
 ```
+::
 
 **Use `select()` for varargs reflection**: `select('#', ...)` gets count, `select(i, ...)` gets i-th argument.
 
@@ -328,15 +330,18 @@ end
 
 **Missing arguments are `nil`, not errors**: If you call `fn(a)` but `fn` expects `(a, b)`, then `b = nil`. No error thrown. Use `assert()` for preconditions.
 
+::code-wrapper{language="lua"}
 ```lua
 local function divide(a, b)
   assert(b ~= 0, "b must not be zero")
   return a / b
 end
 ```
+::
 
 **Return without value returns `nil`**: A bare `return` or omitted return returns `nil`. To return multiple values, separate with commas.
 
+::code-wrapper{language="lua"}
 ```lua
 local function test()
   return            -- returns nil
@@ -346,15 +351,18 @@ local function test2()
   return 1, 2, 3    -- returns 1, 2, 3
 end
 ```
+::
 
 **Varargs doesn't include function name**: `select('#', ...)` counts only arguments, not the function itself.
 
 **Tail calls only work if result is immediately returned**: If you do anything after the call (add, concatenate, etc.), it's not a tail call.
 
+::code-wrapper{language="lua"}
 ```lua
 return f(x)       -- tail call
 return f(x) + 1   -- NOT a tail call
 ```
+::
 
 **Functions are values, but can't be serialized**: You can't `json.encode()` a function. Use closures for state, not functions.
 
@@ -362,6 +370,7 @@ return f(x) + 1   -- NOT a tail call
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local function makeAdder(x)
   return function(y)
@@ -375,6 +384,7 @@ local add10 = makeAdder(10)
 print(add5(3))
 print(add10(3))
 ```
+::
 
 <details>
 <summary>Answer</summary>

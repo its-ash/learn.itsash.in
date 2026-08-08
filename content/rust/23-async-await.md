@@ -368,6 +368,15 @@ while let Some(Ok(val)) = futs.next().await { println!("{val}"); }
 - Avoid for CPU-bound work — use threads or `rayon`.
 - Avoid in `no_std`/embedded unless using a `no_std`-friendly runtime (`embassy`).
 
+## 💡 Tips & Tricks
+
+- **Debug**: the `console-subscriber` crate plus `tokio-console` gives a live, top-like view of every spawned task's state (running, idle, blocked) — far faster than reasoning about hangs by staring at `select!` blocks.
+- **Idiom**: default to `#[tokio::main(flavor = "current_thread")]` for single-purpose CLI tools and small services that don't need multi-core parallelism — it has noticeably lower overhead than the default multi-threaded runtime and simplifies reasoning about `!Send` types.
+- **Performance**: avoid `tokio::spawn` for very short-lived work (a few microseconds of computation) — the scheduling overhead can exceed the work itself; prefer `join!`/`FuturesUnordered` to run several futures concurrently within the current task instead of spawning a task per unit of work.
+- **Debug**: a task that "hangs forever" with no panic is almost always either an unbounded channel filling up unboundedly on the *other* end, or a lock held across an `.await` that another task needs — check both before assuming it's a runtime bug.
+- **Idiom**: prefer `tokio::sync::Mutex` only when you truly must hold a lock across an `.await` point; if you can restructure to compute the value inside a small `{ }` block with a `std::sync::Mutex` and drop the guard before awaiting, the synchronous mutex is cheaper and avoids the "async mutex held across await" footguns entirely.
+- **Debug**: `RUST_LOG=trace` with `tracing`/`tracing-subscriber` and span-based instrumentation (`#[tracing::instrument]` on async functions) preserves causality across `.await` points in a way plain `println!` timestamps cannot, since interleaved task output is otherwise very hard to attribute to the right logical flow.
+
 ## Async Edge Cases & Gotchas
 
 ::code-wrapper{language="rust"}
@@ -413,6 +422,49 @@ loop {
 }
 ```
 ::
+
+## 🧠 Spot the Bug
+
+What's wrong with this "concurrent" fetch, and how long does it actually take if each `fetch` takes 1 second?
+
+::code-wrapper{language="rust"}
+```rust
+async fn fetch(id: u32) -> u32 {
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    id * 2
+}
+
+#[tokio::main]
+async fn main() {
+    let start = std::time::Instant::now();
+
+    let a = fetch(1).await;
+    let b = fetch(2).await;
+    let c = fetch(3).await;
+
+    println!("{a} {b} {c} in {:?}", start.elapsed());
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+This takes roughly **3 seconds**, not 1 — despite `async`/`.await` being the tool commonly reached for to get concurrency.
+
+`.await` suspends the *current* task until that specific future completes, then resumes execution of the very next line — it does not start the next `fetch` call until the previous one has fully finished. Writing `fetch(1).await; fetch(2).await; fetch(3).await;` sequences three futures one after another, exactly as three blocking calls would, just without blocking the underlying OS thread while waiting. Async by itself does not make independent operations run concurrently — it only avoids blocking a thread while waiting on one. Achieving actual concurrency requires explicitly running multiple futures together, e.g., with `tokio::join!`:
+
+::code-wrapper{language="rust"}
+```rust
+let (a, b, c) = tokio::join!(fetch(1), fetch(2), fetch(3));
+```
+::
+
+This version takes roughly 1 second total, since all three `sleep`s run concurrently on the runtime rather than one after another.
+
+**The lesson**: `.await` sequences one future after another — it does not automatically run independent futures concurrently; use `join!`, `try_join!`, `tokio::spawn`, or `FuturesUnordered` when you actually want operations to overlap in time.
+
+</details>
 
 ## Summary
 

@@ -436,6 +436,68 @@ inherits = "release"
 ```
 ::
 
+## 💡 Tips & Tricks
+
+- **Debug**: `std::hint::black_box` (stable, successor to `test::black_box`) prevents the optimizer from constant-folding or eliminating a value in *any* build, not just `cargo bench` — use it in ad-hoc `Instant::now()` micro-benchmarks too.
+- **Idiom**: profile before guessing — `cargo flamegraph` on a debug-symbol-enabled release build (`debug = true` under `[profile.release]`) turns a vague "this feels slow" into a concrete, addressable stack frame.
+- **Performance**: `cargo asm` or Godbolt (godbolt.org) is the fastest way to check whether an iterator chain actually auto-vectorized — don't trust intuition about "iterators vs loops" performance without looking at the generated assembly for your specific case.
+- **Debug**: a custom `#[global_allocator]` that logs every `alloc`/`dealloc` call (shown in this chapter) is a zero-dependency way to spot unexpected allocation hot spots before reaching for a heavier tool like `dhat`.
+- **Idiom**: `Vec::with_capacity` pays off even when your estimate is approximate — an *undercount* still saves most of the reallocations compared to starting from `Vec::new()`, since growth is exponential regardless.
+- **Clippy**: `clippy::perf` group (part of `clippy::all`) catches many of this chapter's anti-patterns automatically — `redundant_clone`, `or_fun_call`, `single_char_pattern`, and more — running `cargo clippy` before profiling often removes the low-hanging fruit for free.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`opt-level = 3` alone doesn't enable link-time optimization**: the default `[profile.release]` has `lto = false` and `codegen-units = 16` — this parallelizes compilation but caps how much cross-function inlining/optimization LLVM can do; two projects both "built in release mode" can differ substantially in runtime performance based on unrelated `Cargo.toml` profile settings.
+- **`#[inline(always)]` can make code slower, not faster**: forcing inlining of a large or frequently-called function bloats the binary and can hurt instruction-cache locality, ironically *reducing* real-world throughput even though the benchmark for that one function in isolation looks faster.
+- **Debug-mode overflow panics vanish in release, changing observable behavior**: code that "works" in `cargo test` (debug, panics on overflow) can silently wrap in `cargo run --release` — a performance-motivated switch to release mode is also a correctness-mode switch for arithmetic, which is easy to forget.
+- **`Arc::clone`'s atomic increment is not free, even though it's much cheaper than a deep clone**: in a sufficiently tight loop (millions of iterations), the atomic operation itself becomes measurable — "just use `Arc::clone`, it's cheap" is true in absolute terms but not always true relative to the rest of a hot loop's cost budget.
+- **`String`/`Vec` capacity growth strategy is not guaranteed by the standard library**: relying on exact capacity values after a sequence of `push`es (e.g., asserting `v.capacity() == 16`) is relying on an implementation detail that has changed across Rust versions and is not part of the stability guarantee.
+- **`black_box` doesn't stop *all* optimizations, only some**: wrapping a value in `black_box` prevents constant folding of that value, but the compiler can still optimize surrounding code in ways that change measured timings — naive benchmarks without `black_box` on both inputs and outputs can report numbers that are effectively measuring how well the optimizer proved the loop did nothing.
+- **Platform quirk — cache-line and SIMD-width assumptions don't transfer across architectures**: code hand-tuned for AVX2 (`#[target_feature(enable = "avx2")]`) silently isn't used at all on non-x86 targets or older x86 CPUs unless gated correctly with `is_x86_feature_detected!` — the fallback path's performance is what most users on ARM (e.g., Apple Silicon) or older hardware actually experience, and it's easy to benchmark only on the fast path.
+
+## 🧠 Spot the Bug
+
+Why is `sum_bad` measured as dramatically faster than `sum_good` in a naive benchmark, even though `sum_good` is the "more correct" version?
+
+::code-wrapper{language="rust"}
+```rust
+fn sum_bad(v: &[i32]) -> i32 {
+    let mut total = 0;
+    for &x in v {
+        total += x;
+    }
+    total
+}
+
+fn sum_good(v: &[i32]) -> i32 {
+    v.iter().sum()
+}
+
+fn benchmark() {
+    let v = vec![1; 1_000_000];
+
+    let start = std::time::Instant::now();
+    let _ = sum_bad(&v);
+    println!("bad: {:?}", start.elapsed());
+
+    let start = std::time::Instant::now();
+    let _ = sum_good(&v);
+    println!("good: {:?}", start.elapsed());
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+In a release build, both are likely to report near-zero elapsed time — and whichever runs *second* often looks artificially faster, or both look identical, because neither result is used for anything.
+
+The bug is in the benchmark, not the functions: `let _ = sum_bad(&v);` discards the return value immediately, and the compiler's optimizer is legally allowed to prove that a pure function's result which is never observed doesn't need to be computed at all — in a sufficiently aggressive release build, LLVM can eliminate the entire loop body of `sum_bad` (and possibly `sum_good`) as dead code, since summing into a value that's immediately thrown away has no observable side effect. What you're measuring at that point is close to the cost of `Instant::now()` calls themselves, not the summation logic — the "bad" one might get optimized away more aggressively than the "good" one (or vice versa) depending on how each shape happens to interact with LLVM's dead-code elimination passes, producing a misleading and unstable comparison.
+
+**The lesson**: never benchmark a discarded return value — wrap results in `std::hint::black_box` (or use `criterion`, which does this for you) so the optimizer can't prove the computation is dead code.
+
+</details>
+
 ## Summary
 
 Profile with `criterion`, `flamegraph`, `samply`, `cargo bloat`. Optimize hot paths: avoid allocation, use slices, generic over `dyn`, `with_capacity`, lock granularity, SIMD. Use `release` profile + `lto = "fat"` + `codegen-units = 1` for final binaries. Don't trust intuition; measure. Iterate. Avoid common anti-patterns like repeated string concatenation, unsafe HashMap operations, and premature `Box<dyn>` usage.

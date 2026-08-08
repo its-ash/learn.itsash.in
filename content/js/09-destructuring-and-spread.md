@@ -306,6 +306,7 @@ for (const [key, value] of myMap) {
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const obj = { a: 1, b: { c: 2 } }
 const copy = { ...obj }
@@ -315,6 +316,7 @@ const [x = 5, , y = 10] = [1, undefined]
 
 console.log(obj.b.c, copy.b.c, x, y)
 ```
+::
 
 <details>
 <summary>Answer</summary>

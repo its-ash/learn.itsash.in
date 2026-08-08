@@ -265,6 +265,7 @@ truncate('Hello World', 8, '…')   // "Hello…"
 
 What's the output?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const text = 'hello world'
 const result1 = text.replace(/l/g, 'L')
@@ -273,6 +274,7 @@ const result3 = '  trim me  '.trim().split(' ')
 
 console.log(result1, result2, result3.length)
 ```
+::
 
 <details>
 <summary>Answer</summary>

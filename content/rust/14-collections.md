@@ -363,6 +363,65 @@ l1.append(&mut l2); // l2 is now empty, l1 has all elements
 ```
 ::
 
+## 💡 Tips & Tricks
+
+- **Performance**: always reach for `Vec::with_capacity(n)` when you know (even approximately) the final size — it collapses what could be several reallocation-and-copy cycles (capacity doubling: 4, 8, 16, 32...) into a single allocation.
+- **Idiom**: `*map.entry(key).or_insert(0) += 1;` is the idiomatic "insert or increment" pattern — it performs a single hash lookup, unlike the `if !map.contains_key(&key) { map.insert(...) }` pattern, which hashes twice.
+- **Debug**: `dbg!(v.capacity())` alongside `dbg!(v.len())` after a loop of `push`es is a quick way to confirm whether you're seeing avoidable reallocation churn before reaching for a profiler.
+- **Idiom**: prefer `BTreeMap` over `HashMap` the moment you need sorted iteration or range queries (`map.range("a".."m")`) — `HashMap`'s iteration order is randomized per run by design and should never be relied upon, even informally.
+- **Performance**: swap in `rustc_hash::FxHashMap` or `ahash::AHashMap` for hot-path, non-adversarial-input maps — `std::collections::HashMap`'s default hasher (SipHash) is deliberately DoS-resistant but meaningfully slower than non-cryptographic alternatives.
+- **Clippy**: `clippy::unnecessary_to_owned` and `clippy::or_fun_call` catch common collection-related inefficiencies, like calling `.or_insert(expensive_call())` (always evaluated) instead of `.or_insert_with(|| expensive_call())` (evaluated only when needed).
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`HashMap` iteration order is randomized per process run, not just "unspecified"**: two runs of the exact same binary over the exact same insertions can and will produce different iteration orders — code that happens to pass a test because the order looked stable in one CI run can fail nondeterministically elsewhere, including on a re-run of the identical binary.
+- **Float keys can't go in `HashMap`/`BTreeMap` at all**: `f64`/`f32` implement neither `Hash + Eq` (no total equality because of `NaN`) nor `Ord` (no total ordering), so `HashMap<f64, V>` and `BTreeMap<f64, V>` are compile errors, not runtime surprises — the fix is a wrapper type with a defined total order (e.g., via the `ordered-float` crate) if you truly need float keys.
+- **`Vec::swap_remove` silently reorders elements**: it's O(1) because it moves the *last* element into the removed slot instead of shifting everything down — correct for unordered collections, but a data-corrupting bug if your code implicitly relies on `Vec` order elsewhere (e.g., parallel arrays indexed by position).
+- **`String::remove`/slicing panics on non-char-boundary indices**: because `String` is UTF-8 internally, `s.remove(i)` and `&s[a..b]` require `i`/`a`/`b` to land exactly on a character boundary — any index computed from a byte count that doesn't account for multi-byte characters can panic on real-world (non-ASCII) input that never appeared in testing with ASCII-only fixtures.
+- **`Vec<Option<T>>` doesn't get the same niche optimization as a bare `Option<T>` in some contexts**: while `Option<T>` alone can be niche-optimized when `T` has spare bit patterns, a `Vec` of them still stores one full `Option<T>` per slot — there's no cross-element compression, so a `Vec<Option<LargeType>>` is exactly `len * size_of::<Option<LargeType>>()`, which surprises people expecting `Vec`-level "sparse" savings.
+- **`Vec::with_capacity(n)` reserves capacity, not length**: `Vec::with_capacity(10)` still has `len() == 0` — indexing `v[0]` on it panics exactly like an empty `Vec::new()` would, a common confusion for developers coming from languages where "capacity" and "size" are more interchangeable.
+- **Platform-independent trap — `LinkedList::append` is the *only* thing `LinkedList` is good at**: everything else (iteration, indexing, cache behavior) is worse than `VecDeque` due to pointer-chasing and poor cache locality; reaching for `LinkedList` because "I need a list" without needing O(1) splicing specifically is almost always the wrong data structure choice in Rust.
+
+## 🧠 Spot the Bug
+
+What's wrong with this "deduplicate the list" function?
+
+::code-wrapper{language="rust"}
+```rust
+fn dedup_unsorted(v: &mut Vec<i32>) {
+    v.dedup();
+}
+
+fn main() {
+    let mut v = vec![1, 3, 2, 3, 1, 2];
+    dedup_unsorted(&mut v);
+    println!("{v:?}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Prints `[1, 3, 2, 3, 1, 2]` — completely unchanged, which looks like `dedup` silently did nothing.
+
+`Vec::dedup()` only removes **consecutive** duplicate elements, not duplicates anywhere in the vector — it's designed to clean up runs of repeated values (commonly used right after `sort()`, where equal elements become adjacent), not to deduplicate an arbitrary unsorted collection. In `[1, 3, 2, 3, 1, 2]`, no two *adjacent* elements are equal, so `dedup()` has nothing to remove and the vector is returned unchanged — this is working exactly as documented, but the function name `dedup_unsorted` (and the intuition that "dedup" means "remove all duplicates") sets up the wrong expectation entirely.
+
+To actually remove all duplicate values regardless of position, either sort first (if order doesn't matter) or use a `HashSet` to track what's been seen:
+
+::code-wrapper{language="rust"}
+```rust
+fn dedup_unsorted(v: &mut Vec<i32>) {
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|x| seen.insert(*x));
+}
+```
+::
+
+**The lesson**: `Vec::dedup()` only collapses consecutive equal elements — it is not a general "remove all duplicates" operation, and calling it on unsorted data is a silent no-op whenever no two adjacent elements happen to match.
+
+</details>
+
 ## Summary
 
 `Vec` is the workhorse — understand its memory model (capacity doubling, amortized O(1)). `String` is UTF-8-aware; never confuse bytes with chars. `HashMap`/`BTreeMap` are the map workhorses; the `entry` API is idiomatic. Pick the right collection for the access pattern. Use `Vec::with_capacity` and `String::with_capacity` to avoid reallocations; use `retain` and `drain` for efficient in-place operations.

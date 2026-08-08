@@ -362,12 +362,14 @@ for (const v of iterable) console.log(v)  // 0, 1, 2
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const x = 0
 const y = x ?? 10
 const z = y || 20
 console.log(z)
 ```
+::
 
 <details>
 <summary>Answer</summary>

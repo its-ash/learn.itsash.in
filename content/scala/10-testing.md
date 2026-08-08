@@ -378,6 +378,7 @@ class BestPracticesTest extends AnyFunSuite {
 
 **Arrange-Act-Assert pattern**: Organize test into setup, action, verification.
 
+::code-wrapper{language="scala"}
 ```scala
 test("add function") {
   // Arrange
@@ -390,6 +391,7 @@ test("add function") {
   result shouldBe 5
 }
 ```
+::
 
 **Run tests during development**: `sbt ~test` for continuous testing.
 
@@ -411,6 +413,7 @@ test("add function") {
 
 What's wrong with this test?
 
+::code-wrapper{language="scala"}
 ```scala
 class MyTest extends AnyFunSuite {
   var counter = 0
@@ -425,6 +428,7 @@ class MyTest extends AnyFunSuite {
   }
 }
 ```
+::
 
 <details>
 <summary>Answer</summary>
@@ -433,6 +437,7 @@ Tests share state. If first test runs, counter is 1. If second test runs first, 
 
 Tests should not depend on execution order. Use `beforeEach` to reset state:
 
+::code-wrapper{language="scala"}
 ```scala
 class MyTest extends AnyFunSuite {
   var counter = 0
@@ -451,6 +456,7 @@ class MyTest extends AnyFunSuite {
   }
 }
 ```
+::
 
 </details>
 

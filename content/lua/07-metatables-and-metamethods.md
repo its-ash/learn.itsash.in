@@ -327,6 +327,7 @@ print(dog:speak())      -- "Buddy barks!"
 
 **Use `__index` for lazy initialization**: Load data on first access instead of upfront.
 
+::code-wrapper{language="lua"}
 ```lua
 local mt = {
   __index = function(self, key)
@@ -336,9 +337,11 @@ local mt = {
   end
 }
 ```
+::
 
 **Combine `__index` and `__newindex` for property validation**:
 
+::code-wrapper{language="lua"}
 ```lua
 local mt = {
   __index = function(self, key)
@@ -350,9 +353,11 @@ local mt = {
   end
 }
 ```
+::
 
 **Use metatables to prevent accidental global pollution**: Make undefined globals error instead of returning nil.
 
+::code-wrapper{language="lua"}
 ```lua
 setmetatable(_G, {
   __index = function(self, key)
@@ -360,6 +365,7 @@ setmetatable(_G, {
   end
 })
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -367,6 +373,7 @@ setmetatable(_G, {
 
 **`__index` called only if key not found**: If key exists in table, `__index` metamethod isn't called. Remove the key first if you want to override.
 
+::code-wrapper{language="lua"}
 ```lua
 local t = setmetatable({x = 1}, {
   __index = function() return "default" end
@@ -374,6 +381,7 @@ local t = setmetatable({x = 1}, {
 print(t.x)              -- 1 (not "default")
 print(t.y)              -- "default"
 ```
+::
 
 **`__newindex` called only if key doesn't exist**: To intercept all assignments, use a proxy table approach.
 
@@ -387,6 +395,7 @@ print(t.y)              -- "default"
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local t = {}
 setmetatable(t, {
@@ -402,6 +411,7 @@ t.x = 42
 print(t.x)
 print(t.y)
 ```
+::
 
 <details>
 <summary>Answer</summary>

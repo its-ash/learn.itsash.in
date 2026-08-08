@@ -329,6 +329,7 @@ function* concatGen(...gens) {
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const obj = {
   name: 'Alice',
@@ -339,6 +340,7 @@ const obj = {
 obj.greet()
 obj.greetRegular()
 ```
+::
 
 <details>
 <summary>Answer</summary>

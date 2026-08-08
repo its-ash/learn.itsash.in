@@ -290,7 +290,16 @@ CI must test with that version:
 ```
 ::
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: `cargo tree -e features -i <crate>` shows exactly which of your dependencies are enabling a specific feature on a shared dependency — the fastest way to track down an unwanted feature that "somehow" got turned on.
+- **Idiom**: use `cargo hack check --feature-powerset` (via `cargo install cargo-hack`) in CI for libraries with several optional features — it compiles every combination, catching a `#[cfg(feature = "a")]` block that silently depends on feature `b` without declaring it.
+- **Performance**: `codegen-units = 1` plus `lto = "fat"` gives the best runtime performance but the slowest release build — reserve this combination for the final distributed binary, not for every CI run, since a "profiling" or "dist" custom profile inheriting from `release` can isolate the cost to only when you need it.
+- **Idiom**: set `publish = false` on internal workspace-only crates from the start — it costs nothing and prevents an embarrassing accidental `cargo publish` of a crate never meant for crates.io.
+- **Debug**: `cargo publish --dry-run` catches missing metadata (license, description) and packaging issues without actually publishing — always run it before the real `cargo publish`, especially the first time for a new crate.
+- **Idiom**: prefer `dep:crate_name` syntax over a bare optional dependency when you don't want the feature name to be implicitly tied to the dependency's crate name — it decouples your public feature-flag API from your internal dependency choices, so swapping the underlying crate later isn't a breaking change to your feature flags.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Feature unification breaking builds**: if your crate's `cfg(feature = "x")` only makes sense with another crate's feature, you can't express that without `dep:`/`?dep/feat` syntax.
 - **Optional dep without `dep:`** creates an implicit feature of the same name; sometimes you want this (so users can `features = ["serde_json"]`), sometimes you don't.
@@ -298,6 +307,35 @@ CI must test with that version:
 - **`build.rs` and feature interaction**: read `CARGO_FEATURE_*` env vars in build scripts.
 - **Profile inheritance**: a custom profile that doesn't `inherits` from another starts empty (potentially wrong optimization).
 - **`opt-level = "z"`** can be slower at runtime than `"s"` or `3` despite smaller binaries.
+
+## 🧠 Spot the Bug
+
+Two crates in the same dependency graph both use `serde`, with different feature needs. What actually happens at build time?
+
+::code-wrapper{language="toml"}
+```toml
+# crate-a/Cargo.toml
+[dependencies]
+serde = { version = "1", default-features = false }
+
+# crate-b/Cargo.toml (also in the same build)
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`serde` gets compiled with the `derive` feature enabled for **both** crates — including `crate-a`, which explicitly asked for `default-features = false` and no extra features.
+
+Cargo's feature unification is graph-wide, not per-crate: within a single build (one `Cargo.lock` resolution), there is exactly **one** compiled version of `serde` with **one** feature set, and that set is the union of every feature requested by every crate that depends on it, anywhere in the graph. `crate-a`'s `default-features = false` only means "don't turn on `serde`'s own defaults *from crate-a's request*" — it does not mean "guarantee `serde` compiles without `derive` no matter what else needs it." If `crate-b` (a sibling dependency, possibly many levels removed) asks for `derive`, `crate-a` gets `derive`-enabled `serde` too, silently, with no warning that its own more restrictive request was overridden by unification.
+
+This is precisely why the "Additive-Only Rule" in this chapter matters: since you cannot reliably prevent a feature from being enabled by *someone else* in the graph, features must never change behavior in a way that would break a crate expecting them to be off — they can only ever add capability.
+
+**The lesson**: Cargo feature unification means a crate's `default-features = false` only affects its own request — if any other crate anywhere in the build graph requests a feature, everyone using that dependency gets it, with no per-crate opt-out.
+
+</details>
 
 ## Summary
 

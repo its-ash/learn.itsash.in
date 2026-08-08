@@ -337,6 +337,55 @@ let val = rx.recv()?; // simpler API than std::mpsc
 
 `std::thread` doesn't have a built-in pool. Use `rayon` (data parallel), `tokio` (async), or `threadpool`/`crossbeam_pool` (custom).
 
+## 💡 Tips & Tricks
+
+- **Debug**: `RUST_LOG=trace tokio_console` and the `console-subscriber` crate visualize live task/thread state for async code — far faster than sprinkling `println!` across spawned tasks.
+- **Idiom**: reach for `thread::scope` before `Arc` when threads only need to borrow data for the duration of the scope — it avoids the `'static` requirement entirely and is often simpler than wrapping everything in `Arc`.
+- **Performance**: batch small messages before sending over a channel in tight producer loops — each `send`/`recv` has synchronization overhead, so amortizing it across a `Vec<T>` payload instead of one `T` per message can meaningfully cut throughput cost.
+- **Debug**: `cargo build` + `cargo miri test` won't catch data races, but running under a real thread sanitizer (`RUSTFLAGS="-Z sanitizer=thread" cargo +nightly test` on nightly) can catch races that Rust's type system doesn't already prevent (e.g., ones hidden behind `unsafe`).
+- **Idiom**: when in doubt between `Mutex<T>` and channels, default to channels — "share memory by communicating" avoids lock ordering and poisoning entirely, at the cost of some message-passing overhead.
+- **Performance**: `AtomicUsize::fetch_add` with `Ordering::Relaxed` is enough for simple counters where you don't need happens-before relationships with other memory — reserve `SeqCst` for cases you've actually reasoned about, since it's the most expensive ordering on weakly-ordered architectures like ARM.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Deadlock is a silent hang, not a panic or error**: two threads acquiring the same two `Mutex`es in opposite order will freeze forever with no error message — nothing in the type system prevents inconsistent lock ordering, unlike data races which `Send`/`Sync` do prevent.
+- **`Rc<T>` across threads is a compile error, but `Arc<RefCell<T>>` is not — and is still wrong**: `RefCell` provides no synchronization, only runtime borrow checking; sharing `Arc<RefCell<T>>` across threads compiles (both `Arc` and the outer type can be `Send` if `T: Send`) but panics or, worse, causes actual data corruption because `RefCell`'s borrow flag itself isn't atomic.
+- **Holding a `std::sync::MutexGuard` across an `.await` point** in async code can deadlock the executor — the guard isn't `Send` in many cases (compile error) or, if it does compile, the lock stays held while the task is suspended, blocking every other task that needs it.
+- **Lock poisoning cascades**: a single `panic!` inside *any* thread while holding a `Mutex` poisons it for *all future lockers*, including unrelated code paths that never panicked themselves — `.lock().unwrap()` everywhere means one bug anywhere can cascade into unrelated failures elsewhere.
+- **`thread::spawn` silently detaches if you drop the `JoinHandle`**: forgetting to call `.join()` (or storing the handle) doesn't error — the spawned thread keeps running independently and may not finish before `main` exits, silently dropping its work.
+- **Atomic orderings can be "wrong but appear correct" on x86**: code using `Ordering::Relaxed` where `Acquire`/`Release` was actually required will often pass tests on x86/x86_64 (strongly ordered hardware) and only manifest as a real bug on ARM or other weakly-ordered platforms — a classic "works on my machine, breaks in production" trap tied to CPU architecture, not Rust itself.
+- **`mpsc::channel()` senders keep the channel alive even if the receiver is dropped**: `tx.send(v)` on a channel whose `rx` was dropped returns `Err` (doesn't panic) — a common oversight is `.unwrap()`ing that send, which then panics on an entirely expected "consumer went away" condition.
+
+## 🧠 Spot the Bug
+
+Does this deadlock, panic, or print `20`?
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::Mutex;
+
+fn main() {
+    let data = Mutex::new(10);
+
+    let first = data.lock().unwrap();
+    let second = data.lock().unwrap();
+
+    println!("{}", *first + *second);
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+It deadlocks — the program hangs forever with no output and no panic.
+
+`std::sync::Mutex` is **not reentrant**. Calling `.lock()` a second time from the *same thread* while the first `MutexGuard` (`first`) is still alive doesn't detect "oh, this thread already owns the lock" — the mutex has no concept of which thread holds it, only whether it's currently locked. The second `.lock()` call blocks, waiting for the lock to be released, but the only thing that could release it is `first` going out of scope, which can't happen because the thread is stuck blocking inside the very statement (`let second = ...`) that would need to complete first. This is the single most common self-inflicted deadlock in Rust: re-locking the same `Mutex` on one thread, often disguised through a function call rather than back-to-back lines as here.
+
+**The lesson**: `std::sync::Mutex` deadlocks on same-thread re-entrant locking — never call `.lock()` again while an earlier guard from the same mutex is still in scope on that thread.
+
+</details>
+
 ## Summary
 
 `Send`/`Sync` are the foundation. Use `Arc` for shared ownership, `Mutex`/`RwLock` for synchronization, channels for message passing. Atomics for low-level coordination. `Condvar`/`Barrier`/`OnceLock` for common patterns. `rayon` for data parallelism. Prefer async for I/O-bound concurrency.

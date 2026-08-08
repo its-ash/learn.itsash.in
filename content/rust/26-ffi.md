@@ -404,6 +404,62 @@ cc = "1.0"
 - `libc`: raw C types and constants (`c_int`, `c_char`, `size_t`, etc.).
 - `raw-cpuid`, `nix`, `winapi`/`windows-sys`: OS bindings.
 
+## 💡 Tips & Tricks
+
+- **Debug**: run `cargo miri test` on any FFI wrapper's safe-Rust boundary tests where feasible — Miri catches misaligned pointers, use-after-free, and uninitialized reads that regular tests silently tolerate on x86 due to lenient hardware.
+- **Idiom**: wrap every raw `extern "C"` block in a private `mod sys` and expose only a safe, `Result`-returning API from the parent module — never let `unsafe extern` signatures leak directly into your crate's public API.
+- **Debug**: `cbindgen --crate my_lib --output my_lib.h` regenerates the C header from your actual Rust signatures — run it in CI so a signature change that isn't reflected in a hand-maintained header fails the build instead of corrupting memory silently.
+- **Idiom**: for `Option<extern "C" fn(...)>` fields, remember `None` is guaranteed to be represented as a null pointer at the ABI level (a niche optimization) — this is *why* that pattern works for nullable C callbacks instead of using a raw function pointer with a sentinel value.
+- **Performance**: prefer passing large structs to FFI functions by pointer (`*const MyStruct`) rather than by value once they exceed a few machine words — C ABI value-passing conventions for large structs vary and add copying overhead that a pointer avoids.
+- **Debug**: `RUST_BACKTRACE=1` doesn't help across an FFI boundary if the C side segfaults — use `rust-gdb`/`rust-lldb` with `catch signal SIGSEGV` to get a native-code-aware backtrace spanning both sides.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Mismatched allocators are silent until they aren't**: freeing Rust-allocated memory with C's `free()` (or vice versa) is undefined behavior that often *appears to work* in simple tests because both allocators may use the same underlying `malloc` on some platforms — the corruption surfaces later, often nondeterministically, and rarely at the actual site of the mismatch.
+- **Unwinding across an `extern "C"` boundary is UB, not a clean panic**: if Rust code called from C panics and the unwind tries to cross back into C stack frames, the behavior is undefined — it might abort cleanly, might corrupt the stack, and the failure mode differs by platform and optimization level, making it a "works in debug, corrupts in release" class of bug.
+- **`#[repr(C)]` is required, and its absence fails silently at the type level**: a struct shared with C that's missing `#[repr(C)]` still compiles fine in isolation (Rust's default layout is unspecified, but *a* layout exists) — the bug only appears when the field order/padding Rust picked doesn't match what the C side expects, producing corrupted field reads with no compiler warning.
+- **`CString::new` rejects interior NUL bytes at runtime, not compile time**: `CString::new("hi\0there")` returns `Err`, not a truncated or escaped string — code that `.unwrap()`s this call will panic on user-controlled input containing an embedded NUL, a realistic scenario when data originates from untrusted files or network input.
+- **Returning a pointer to a local/stack variable is classic UB across FFI**: `fn get_ptr() -> *const i32 { let x = 5; &x }` compiles (with a warning in safe contexts, but the raw-pointer FFI version often doesn't even warn) and hands C a dangling pointer the moment the function returns.
+- **Variadic FFI functions can only be declared `extern "C"`**: you cannot write a Rust-native (non-FFI) variadic function — `printf`-style APIs can only be *called* via FFI declarations, never authored in ordinary Rust, which surprises people trying to build a `format!`-like variadic function from scratch.
+- **Platform quirk — ABI mismatches on Windows**: `"system"` resolves to `"stdcall"` on 32-bit Windows targets but `"C"`-equivalent on Win64 — code hardcoding `extern "C"` for a Windows DLL built with `stdcall` conventions links but corrupts the stack on 32-bit targets only, a bug that vanishes when testing exclusively on 64-bit machines.
+
+## 🧠 Spot the Bug
+
+What's unsafe about this "safe" wrapper, and what happens when a caller passes a string containing an embedded null byte?
+
+::code-wrapper{language="rust"}
+```rust
+use std::ffi::CString;
+use std::os::raw::c_char;
+
+extern "C" {
+    fn puts(s: *const c_char) -> i32;
+}
+
+pub fn print_line(s: &str) {
+    let c_string = CString::new(s).unwrap();
+    unsafe {
+        puts(c_string.as_ptr());
+    }
+}
+
+fn main() {
+    print_line("hello\0world");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+It panics: `called \`Result::unwrap()\` on an \`Err\` value: NulError(...)`.
+
+`CString::new` scans the input for interior NUL bytes and returns `Err` if it finds one, because a C string's length is defined by where the first `\0` occurs — a Rust `&str` is free to contain `\0` as an ordinary byte (Rust strings are length-prefixed, not null-terminated), but that same byte would silently truncate the string on the C side. Rather than truncate silently (which would be a worse, harder-to-detect bug — `puts` would just print "hello" and drop "world" with no error), `CString::new` refuses construction entirely and hands back a `Result`. The bug in `print_line` is calling `.unwrap()` on that `Result` without considering that its input comes from a public, `&str`-typed function signature — any caller passing arbitrary user data (a file, network payload, or database field) can trigger this panic, and there is nothing in the type signature (`fn print_line(s: &str)`) that hints a NUL byte is dangerous.
+
+**The lesson**: `&str` can contain embedded NUL bytes but C strings cannot — always propagate `CString::new`'s `Result` instead of `unwrap`ing it in code that accepts external string input.
+
+</details>
+
 ## Summary
 
 `extern "C"` declares FFI. `#[no_mangle] pub extern "C" fn` exports Rust to C. `#[repr(C)]` controls struct layout. Use `bindgen`/`cbindgen`/`cxx` for safe interop. Memory ownership must match allocators. Panics must not cross FFI. `CString`/`CStr`/`OsString`/`OsStr` for string interop. Wrap unsafe bindings in safe abstractions.

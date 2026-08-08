@@ -118,6 +118,7 @@ timesSix(4)  // 24
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const compose = (...fns) => x => fns.reduceRight((v, f) => f(v), x)
 
@@ -128,6 +129,7 @@ const composed = compose(add10, times2)
 
 console.log(composed(5))
 ```
+::
 
 <details>
 <summary>Answer</summary>

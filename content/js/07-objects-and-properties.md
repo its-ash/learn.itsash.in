@@ -268,6 +268,7 @@ handlers.onClick()
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const user = { name: 'Alice' }
 const copy = { ...user }
@@ -278,6 +279,7 @@ profile.age = 30
 
 console.log(user.name, copy.name, profile.name, Object.keys(profile))
 ```
+::
 
 <details>
 <summary>Answer</summary>

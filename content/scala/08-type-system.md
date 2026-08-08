@@ -284,11 +284,13 @@ send(verified)      // OK
 
 **Implicit ambiguity**: Multiple implicit values in scope cause compile error.
 
+::code-wrapper{language="scala"}
 ```scala
 implicit val x: Int = 1
 implicit val y: Int = 2
 val z: Int = x  // ERROR: ambiguous implicits
 ```
+::
 
 **Phantom types have zero runtime cost**: But if you need runtime checks, use real types or runtime reflection.
 
@@ -298,6 +300,7 @@ val z: Int = x  // ERROR: ambiguous implicits
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 def first[T](list: List[T]): Option[T] = list.headOption
 
@@ -310,6 +313,7 @@ x match {
   case None => println("empty")
 }
 ```
+::
 
 <details>
 <summary>Answer</summary>

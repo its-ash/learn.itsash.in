@@ -358,12 +358,14 @@ Not covered here (advanced), but functions can accept implicit parameters that a
 
 **Function values as DSL builders**: Higher-order functions are perfect for building domain-specific languages.
 
+::code-wrapper{language="scala"}
 ```scala
 def repeat(n: Int)(fn: => Unit): Unit = {
   for (_ <- 1 to n) fn
 }
 repeat(3) { println("hello") }
 ```
+::
 
 **Type bounds in functions**: Use `[A <: Number]` for generic functions with constraints.
 
@@ -371,6 +373,7 @@ repeat(3) { println("hello") }
 
 **By-name parameters are re-evaluated each call**: If you pass `() => { expensive() }` as a by-name parameter, it runs again on each access. Use `lazy val` if you want memoization.
 
+::code-wrapper{language="scala"}
 ```scala
 def once(fn: => Unit): Unit = { fn; fn }
 once(println("hi"))    // prints "hi" twice
@@ -380,16 +383,19 @@ def onceLazy(fn: => Unit): Unit = {
   result; result
 }
 ```
+::
 
 **Pattern matching exhaustiveness**: In function bodies, Scala checks if all cases are handled. Missing a case is a compile error (usually).
 
 **Default parameters are evaluated at definition time**: Like Python, mutable defaults are shared.
 
+::code-wrapper{language="scala"}
 ```scala
 def bad(items: scala.collection.mutable.ArrayBuffer[Int] = scala.collection.mutable.ArrayBuffer()) { }
 // Fix: use => to defer
 def good[A](items: => scala.collection.mutable.ArrayBuffer[A] = scala.collection.mutable.ArrayBuffer()) { }
 ```
+::
 
 **`_` in function position has special meaning**: `list.map(_)` is invalid (ambiguous). Use `x => x` or a proper function reference.
 
@@ -397,6 +403,7 @@ def good[A](items: => scala.collection.mutable.ArrayBuffer[A] = scala.collection
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 def makeAdder(x: Int) = {
   y => x + y
@@ -408,6 +415,7 @@ val add10 = makeAdder(10)
 println(add5(3))
 println(add10(3))
 ```
+::
 
 <details>
 <summary>Answer</summary>

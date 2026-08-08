@@ -235,6 +235,7 @@ try {
 **for...of is often faster than forEach** — Modern engines optimize `for...of` loops better than callbacks. If performance matters, use `for...of` over `.forEach()` or `.map()`.
 
 **Short-circuit returns in guards** — Replace nested `if` with early returns:
+::code-wrapper{language="javascript"}
 ```javascript
 // Bad
 if (user) {
@@ -247,6 +248,7 @@ if (user) {
 if (!user || !user.active) return null
 return user.name
 ```
+::
 
 **Switch without default can hide bugs** — Always add `default` and throw or log. Catches typos in case values.
 
@@ -266,6 +268,7 @@ return user.name
 
 What gets logged?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const result = []
 for (let i = 0; i < 3; i++) {
@@ -280,6 +283,7 @@ for (const key in { a: 1, b: 2, c: 3 }) {
 
 console.log(result)
 ```
+::
 
 <details>
 <summary>Answer</summary>

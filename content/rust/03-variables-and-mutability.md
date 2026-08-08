@@ -129,7 +129,16 @@ r.push(5);
 
 A `&mut T` requires the underlying binding to be `mut` too (you can't take a mutable borrow of an immutable binding).
 
-## Edge Cases & Pitfalls
+## 💡 Tips & Tricks
+
+- **Debug**: `dbg!(x)` is a better habit than `println!("{x:?}")` for quick checks — it prints the file/line and the expression's source text alongside the value, and it returns the value so you can inline it: `let y = dbg!(x + 1);`.
+- **Idiom**: use shadowing to "narrow" a value through a validation/parse pipeline (`let s = s.trim(); let s: i32 = s.parse()?;`) instead of inventing a new name at each step — it keeps the variable name meaningful without `mut`.
+- **Idiom**: reach for `std::sync::OnceLock` (stable since 1.70) for lazily-initialized global state instead of `static mut` or even the older `lazy_static!`/`once_cell` crates — it's in `std`, requires no `unsafe`, and is the modern default.
+- **Debug**: a stray `let _ = expr;` is easy to miss in a diff — search for it specifically when a value seems to vanish without a compiler warning, since it deliberately silences "unused" lints while still running side effects.
+- **Performance**: `const` values are inlined at every use site (no memory location, no runtime lookup), while `static` values have a single fixed address — prefer `const` for small, cheap values and `static` when you need a stable address (e.g., to hand a `&'static` reference across an FFI boundary).
+- **Clippy**: `clippy::let_and_return` flags the `let x = expr; x` pattern as unnecessary — a good nudge that not every intermediate value needs its own `let` binding.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Unused `mut`**: `warning: variable does not need to be mutable`. Fix by removing `mut` or prefix `_mut` if intentional.
 - **Unused variables**: `let _x = 5;` (leading underscore) suppresses the warning; `_` itself drops the value immediately.
@@ -145,6 +154,46 @@ A `&mut T` requires the underlying binding to be `mut` too (you can't take a mut
 - **Drop order with shadowing**: `let x = String::from("a"); let x = String::from("b");` — the first `String` is dropped at the end of its scope, not at the statement boundary.
 - **Partial moves and shadowing**: `let s = String::from("hi"); let s = &s;` is a rebind (not move), `s` is now a reference. But `let (a, b) = (String::from("hi"), 5); let a = 10;` shadows `a` only, `b` still holds the `String`.
 - **`static mut` requires `unsafe` to read/write**: Even reading a `static mut` is undefined behavior without synchronization; use `std::sync::atomic` for thread-safe access.
+
+## 🧠 Spot the Bug
+
+What does this print?
+
+::code-wrapper{language="rust"}
+```rust
+struct Guard(i32);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        println!("dropping {}", self.0);
+    }
+}
+
+fn main() {
+    let g = Guard(1);
+    let g = Guard(2);
+    println!("end of main");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Output:
+::code-wrapper{language="rust"}
+```rust
+end of main
+dropping 2
+dropping 1
+```
+::
+
+Both `Guard` values are dropped — not just the second one — and they drop in **reverse order of creation**, not the order you might assume from "the second `g` replaced the first." Shadowing (`let g = Guard(2);` reusing the name `g`) does not drop or overwrite the first `Guard(1)`; it creates a brand-new, independent binding that happens to share a name, while the original `Guard(1)` binding still exists in the same scope under the hood, simply no longer nameable as `g`. Both bindings are live until the end of `main`'s scope, at which point normal drop order applies: locals drop in reverse declaration order, so the second `g` (`Guard(2)`) drops first, then the first `g` (`Guard(1)`).
+
+**The lesson**: shadowing creates a new, separate binding — it does not drop the previous one early; the old value stays alive (just unreachable by name) until its original scope ends.
+
+</details>
 
 ## `let`-else (1.65+)
 

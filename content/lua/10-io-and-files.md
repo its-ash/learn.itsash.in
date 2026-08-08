@@ -416,6 +416,7 @@ print(loaded.host)  -- "localhost"
 
 What does this do?
 
+::code-wrapper{language="lua"}
 ```lua
 local file = io.open("data.txt", "r")
 local line1 = file:read("*l")
@@ -428,6 +429,7 @@ local file2 = io.open("data.txt", "r")
 print(file2:read("*l"))
 file2:close()
 ```
+::
 
 <details>
 <summary>Answer</summary>

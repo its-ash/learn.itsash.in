@@ -227,7 +227,16 @@ add5(3);   // 8
 ```
 ::
 
-## Edge Cases & Pitfalls
+## 💡 Tips & Tricks
+
+- **Debug**: if a closure's inferred type is confusing in an error message, give it an explicit `impl Fn(...) -> ...` return-position or parameter-position annotation temporarily — this often surfaces which capture is causing `Fn`/`FnMut`/`FnOnce` mismatch far more clearly than the original error.
+- **Idiom**: prefer passing plain `fn` pointers over closures for callback parameters that never need to capture state — `fn(i32) -> i32` is `Copy`, has a nameable type, and can be stored in a `static` without `Box`, none of which apply to closures in general.
+- **Performance**: a generic `fn apply<F: Fn(i32) -> i32>(f: F, x: i32)` monomorphizes per closure type (zero-cost, but code-size cost if called with many distinct closures), while `fn apply(f: &dyn Fn(i32) -> i32, x: i32)` uses one shared vtable-dispatched code path — pick based on whether you're optimizing for speed or binary size.
+- **Idiom**: `RefCell` inside a `Fn` closure is the standard trick for a closure that needs to mutate captured state but must still satisfy an API that demands `Fn` (not `FnMut`) — common in callback-registration APIs that only accept `Fn`.
+- **Debug**: `cargo expand` on a function returning `impl Fn(...)` won't show you the closure's real (compiler-generated, unnameable) type, but it will confirm exactly what's captured and whether `move` applied where you expected.
+- **Idiom**: for currying-style APIs (`|a| move |b| a + b`), each returned closure owns its own copy/move of outer captures — verify with `std::mem::size_of_val` if you're concerned about how much state is being carried along through a chain of nested closures.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Capture lifetime**: a closure borrowing from local vars can't escape the local's scope. Use `move` (often with `'static` requirement).
 - **`FnOnce` and `Vec::map`**: `map` consumes the iterator but only requires `FnMut`; if you consume captures inside, you might need a different signature.
@@ -237,6 +246,47 @@ add5(3);   // 8
 - **Capturing by `RefCell`**: if you need to mutate through a closure called multiple times behind an `&`-reference, use `RefCell` for interior mutability.
 - **`move` doesn't always move**: `move || println!("{x}")` for `x: i32` copies; `move` only forces *by-value* capture (which is `Copy`-duplicating for `Copy` types).
 - **`move ||` in threads**: required for `std::thread::spawn` since the closure must be `'static + Send`.
+
+## 🧠 Spot the Bug
+
+What's the compiler error, and why?
+
+::code-wrapper{language="rust"}
+```rust
+fn make_counter() -> impl FnMut() -> i32 {
+    let mut count = 0;
+    || {
+        count += 1;
+        count
+    }
+}
+
+fn make_broken_counter() -> impl Fn() -> i32 {
+    let mut count = 0;
+    || {
+        count += 1;
+        count
+    }
+}
+
+fn main() {
+    let mut counter = make_counter();
+    println!("{}", counter());
+    println!("{}", counter());
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`make_broken_counter` fails to compile: the closure `|| { count += 1; count }` mutates its captured environment (`count`), which means it can only implement `FnMut` (and `FnOnce`) — never `Fn`. `Fn` is the trait for closures callable through a **shared** reference an unlimited number of times without ever observing a change in behavior between calls; a closure that increments a counter and returns a different value each time is, by definition, not that. The function signature `-> impl Fn() -> i32` promises callers "this closure never changes state you can observe across calls," which the body directly contradicts, so the compiler rejects it at the `impl Fn` bound, not at the closure definition itself.
+
+`make_counter`, which correctly declares `-> impl FnMut() -> i32`, compiles and works exactly as expected — each call advances `count` and returns the new value, which is precisely what `FnMut` (callable through `&mut self`, allowed to mutate captures) is for.
+
+**The lesson**: `Fn`/`FnMut`/`FnOnce` are inferred from what the closure body actually does to its captures, not from how you intend to call it — a closure that mutates a capture can never satisfy an `Fn` bound, regardless of the function signature you write around it.
+
+</details>
 
 ## `thread::spawn` and `'static + Send`
 

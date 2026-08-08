@@ -455,6 +455,60 @@ Don't define traits until you have a second implementation. Don't reach for `dyn
 - `let-else` for early-return validation.
 - `Cow` for borrowed-or-owned APIs.
 
+## 💡 Tips & Tricks
+
+- **Idiom**: prefer the typestate builder over the `Option<T>`-field builder once your type has fields whose validity depends on each other (e.g., "TLS requires a cert path") — the typestate version turns a runtime `build()` error into a compile-time impossibility.
+- **Debug**: when a `Box<dyn Trait>`-heavy codebase feels sluggish, `cargo flamegraph` will show vtable-dispatched calls as regular (non-inlined) stack frames — a flat, wide flamegraph with many small frames is a common signature of over-using dynamic dispatch in hot paths.
+- **Clippy**: `clippy::use_self` nudges constructors and impl methods to write `Self` instead of repeating the concrete type name — helps typestate/builder code stay renamable without touching every method body.
+- **Idiom**: for the extension-trait pattern, name the trait `FooExt` (e.g., `StrExt`, `IteratorExt`) by convention — this signals "adds methods to an existing type" at a glance and avoids collisions with a plain `Foo` domain trait.
+- **Performance**: the newtype pattern (`struct Meters(f64)`) is verified zero-cost — `#[repr(transparent)]` guarantees identical layout to the wrapped type, so passing `Meters` around costs nothing over passing `f64` directly.
+- **Debug**: `cargo expand` on a `#[derive(Default)]` struct shows exactly what field defaults get filled in — handy for confirming assumptions before using `..Default::default()` in a builder-style struct update.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **The `Option<T>`-field builder pattern defers required-field errors to runtime**: `ServerBuilder::new().build()` without calling `.host(...)` first compiles perfectly fine and only fails when `build()` runs — in a codebase with many optional call sites, a missing required field can ship to production before any test exercises that exact path.
+- **`Deref`-based "inheritance" silently changes method resolution when both types define the same method name**: if `struct B(A)` implements `Deref<Target = A>` and you later add a method to `B` with the same name as one on `A`, Rust resolves to `B`'s inherent method first — a previously-working call that relied on `A`'s method now silently calls different logic, with no warning about the shadowing.
+- **Trait objects behind `Box<dyn Trait>` lose the concrete type permanently**: there's no safe way to "downcast" a `Box<dyn Trait>` back to its original concrete type unless the trait explicitly bounds `Any` and you use `.downcast_ref::<T>()` — a design that stores heterogeneous `Box<dyn Trait>` values without planning for this can hit a wall when later code needs type-specific behavior.
+- **Extension traits can't override existing inherent methods**: if the type you're extending already has a method with the same name (even in a different, unimported trait), the compiler prefers the inherent/already-in-scope method, and your extension trait's method becomes unreachable through normal dot-call syntax without fully-qualified syntax (`StrExt::shout(&s)`).
+- **The orphan rule blocks more than people expect**: you cannot implement `std::fmt::Display` (foreign trait) for `Vec<i32>` (foreign type) even though both individually seem "close enough" to your crate — the newtype pattern (`struct Wrapper(Vec<i32>)`) is the standard, sometimes surprising, workaround.
+- **Smart-constructor validation is bypassable via `..` struct update syntax if the field is `pub`**: `pub struct Percent(pub u8)` with a validating `Percent::new()` constructor still lets any caller write `Percent(200)` directly if the tuple field is public — the "smart constructor" pattern only enforces invariants if the inner field is private, which is easy to get wrong when adding `pub` for unrelated reasons (e.g., enabling pattern matching).
+- **Platform-independent trap — dependency injection via generics monomorphizes per concrete type**: `Service<RealClock>` and `Service<MockClock>` are two entirely separate types after compilation, which means you cannot store both behind the same `Vec<Service<_>>` without erasing to `Box<dyn Clock>` first — a design that started fully generic for performance sometimes has to partially give that up the moment heterogeneous storage is needed.
+
+## 🧠 Spot the Bug
+
+What's wrong with this "smart constructor," and how can a caller bypass its invariant?
+
+::code-wrapper{language="rust"}
+```rust
+pub struct Percent(pub u8);
+
+impl Percent {
+    pub fn new(p: u8) -> Option<Self> {
+        if p <= 100 { Some(Percent(p)) } else { None }
+    }
+}
+
+fn main() {
+    let a = Percent::new(150);
+    assert!(a.is_none());
+
+    let b = Percent(150);
+    println!("{}", b.0);
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Prints `150` — a value the type was supposed to make impossible to construct.
+
+`Percent::new` correctly validates the range and returns `None` for out-of-bounds input, but the tuple field is declared `pub u8`. Making the field public exposes the tuple struct's default constructor syntax, `Percent(150)`, as a completely separate, unchecked way to build the type — it bypasses `new()` entirely because Rust doesn't have a way to make *only* the validating path reachable while the field itself remains publicly constructible. The "smart constructor" pattern only works as an invariant-enforcing boundary when the field is **private** (`u8`, not `pub u8`); with a private field, the only way to build a `Percent` from outside the module is through `new()`, and only within the same module can code construct it directly (where you presumably already uphold the invariant).
+
+**The lesson**: a smart constructor only enforces its invariant if the wrapped field is private — a public field on the same type is an unchecked backdoor around the validation.
+
+</details>
+
 ## Summary
 
 Builder for complex construction. Newtype for type safety. Typestate for compile-time state machines. Traits for polymorphism (static via generics, dynamic via `dyn`). RAII for resources. `From`/`AsRef`/`?` for conversions. Iterators over loops. Avoid `unwrap`, globals, and over-abstraction. Document with `///`. Use idiomatic naming and patterns.

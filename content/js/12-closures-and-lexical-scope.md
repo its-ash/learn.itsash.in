@@ -233,6 +233,7 @@ function setupBetter() {
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const fns = []
 for (var i = 0; i < 3; i++) {
@@ -241,6 +242,7 @@ for (var i = 0; i < 3; i++) {
 
 console.log(fns[0](), fns[1](), fns[2]())
 ```
+::
 
 <details>
 <summary>Answer</summary>
@@ -251,6 +253,7 @@ Logs `3 3 3`. Here's why:
 
 **Fix**: Use `let` instead of `var`. Each iteration gets a fresh binding.
 
+::code-wrapper{language="javascript"}
 ```javascript
 const fns = []
 for (let i = 0; i < 3; i++) {
@@ -259,6 +262,7 @@ for (let i = 0; i < 3; i++) {
 
 console.log(fns[0](), fns[1](), fns[2]())  // 0 1 2
 ```
+::
 
 </details>
 

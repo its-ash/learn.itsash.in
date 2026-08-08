@@ -174,7 +174,16 @@ fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
 
 `?` returns early from the function on `Err` (or `None` with `Option`). Works on anything implementing `Try` (stabilized for `Option`/`Result`). See Error Handling chapter.
 
-## Control-Flow Edge Cases
+## 💡 Tips & Tricks
+
+- **Idiom**: prefer `let-else` (`let Some(x) = opt else { return; };`) over `if let ... else { return; }` when the success path is the rest of the function — it avoids one level of nesting for the common "validate or bail" shape.
+- **Debug**: label every loop you might need to `break`/`continue` out of from a nested context, even before you think you'll need it (`'outer: for ... { 'inner: for ... } }`) — adding a label later requires touching every `break`/`continue` inside, while having it unused costs nothing (a leading underscore silences the warning: `'_outer:`).
+- **Idiom**: use `loop { ... break value; }` instead of a `while`/manual flag variable when a loop's natural exit condition also produces the value you want out of it — `loop` as an expression is one of Rust's more underused features by newcomers from C-family languages.
+- **Performance**: `loop { }` is recognized by the compiler as unconditionally infinite (useful for `-> !` diverging functions), whereas `while true { }` requires the optimizer to prove the condition never changes — prefer `loop` for intentional infinite loops.
+- **Debug**: `matches!(x, pattern)` is a fast way to sanity-check what a `match` guard or pattern actually captures during debugging, without writing out a full `match` block just to print a boolean.
+- **Idiom**: chain `?` instead of nesting `match`/`if let` for early-return error propagation — a function with three sequential fallible steps reads far better as three `?`-suffixed lines than as three levels of nested `match`.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`if` returning `()` vs value**: forgetting the trailing expr in one arm gives `()` and a type mismatch error.
 - **`break` value type**: every `break` in the same `loop` must return the same type.
@@ -196,6 +205,59 @@ fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
 - **Binding in guards**: `if let Some(x) = opt { if x > 10 { } }` vs `if let Some(x) = opt, x > 10 { }` (let chains, unstable) — use explicit if/else for clarity.
 - **`match` with or-patterns and different captures**: `Some(x) | None => ...` captures `x` only if the first arm matches; `None` arm can't use `x`.
 - **Empty `loop { }` vs `while true { }`**: both are infinite, but `loop` is idiomatic and slightly more efficient (compiler recognizes it as an infinite loop). Use `loop { ... break; }` for controlled early exits.
+
+## 🧠 Spot the Bug
+
+What's wrong with this "find the first even number, or -1" function?
+
+::code-wrapper{language="rust"}
+```rust
+fn first_even(nums: &[i32]) -> i32 {
+    let mut result = -1;
+    for &n in nums {
+        if n % 2 == 0 {
+            result = n;
+            break;
+        }
+    }
+    result
+}
+
+fn main() {
+    let result = 'search: loop {
+        let nums = [3, 5, 7, 8, 9];
+        for &n in &nums {
+            if n % 2 == 0 {
+                break 'search n;
+            }
+        }
+        break 'search -1;
+    };
+    println!("{result}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Both versions actually work correctly and print `8` — but the second one only works because the label `'search` is attached to the outer `loop`, not the inner `for`. The bug to spot is what happens if you "simplify" the second version by removing the seemingly-redundant outer `loop` and labeling the `for` instead:
+
+::code-wrapper{language="rust"}
+```rust
+let result = 'search: for &n in &[3, 5, 7, 8, 9] {
+    if n % 2 == 0 {
+        break 'search n;  // ERROR
+    }
+};
+```
+::
+
+This fails to compile: `break` with a value is only allowed within a `loop` block, not `for` or `while`. The reason is that `for` and `while` loops can exit *normally* (condition false, iterator exhausted) without ever hitting a `break` — the compiler cannot know in advance what value to produce for that implicit "fell through" exit path, so `for`/`while` loops are only allowed to evaluate to `()`. Only `loop` (which the compiler knows can *only* exit via `break`, or run forever) is permitted to evaluate to a non-`()` value, which is exactly why the working version wraps the `for` inside a `'search: loop { ... }` — the label lives on the `loop`, and the `for` is just an unlabeled traversal inside it.
+
+**The lesson**: only `loop` (never `for`/`while`) can `break` with a value, because only `loop` is guaranteed to exit exclusively through an explicit `break`.
+
+</details>
 
 ## `if let` chains (unstable) / `let-else`
 

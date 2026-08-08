@@ -75,6 +75,18 @@ async function getWeather(city) {
 
 ### 10. Type Checker (mini TypeScript — parse and validate types at runtime)
 
+## 💡 Tips & Tricks
+
+**Build vertically, not horizontally** — Get one feature fully working end-to-end (e.g. adding a todo, saving it, rendering it) before starting the next, rather than building all the UI first and wiring up logic later — you'll catch integration bugs immediately instead of at the end.
+
+**Constrain yourself before reaching for a framework** — Building the Todo app or Mini Framework in plain JavaScript first (no React/Vue) forces you to understand what the framework is actually doing under the hood — DOM diffing, event delegation, state-to-render syncing.
+
+**Write the test cases before the implementation for the Function Library project** — Since `debounce`, `throttle`, `curry`, and `memoize` all have well-known edge cases (rapid calls, zero-arg functions, `this` binding), writing `it('debounces rapid calls', ...)` first clarifies exactly what "correct" means before you write a line of implementation.
+
+**Commit after every working milestone, not just at the end** — Small, frequent commits (`git commit -m "todo: add localStorage persistence"`) let you bisect back to a working state if a later refactor breaks something, especially useful in the Advanced projects where a single bug (e.g. in the Promise Library) can be hard to isolate later.
+
+**Read one production library's source before building your own version** — Before attempting the Function Library or Mini Framework, skim the actual source of `lodash.debounce` or a small virtual-DOM implementation — you'll reuse fewer wrong assumptions and recognize the real edge cases (leading vs trailing calls, key-based reconciliation) instead of discovering them the hard way.
+
 ## Key Takeaways
 
 - Start small — Todo app covers DOM, events, storage, and state management.

@@ -69,7 +69,8 @@ Code from older editions keeps compiling; editions are about how the *parser* se
 
 ## The Cargo Build Pipeline
 
-```
+::code-wrapper{language="text"}
+```text
 cargo new my_project      # scaffolds a binary crate
 cargo new my_lib --lib    # scaffolds a library crate
 cargo build               # debug build -> target/debug
@@ -84,6 +85,7 @@ cargo update             # update deps in Cargo.lock
 cargo tree               # print dependency tree
 cargo bench              # run benchmarks (requires nightly or criterion)
 ```
+::
 
 ### Profile customization
 
@@ -101,7 +103,8 @@ panic = "abort"      # smaller binary, no unwinding
 
 ## Project Layout Conventions
 
-```
+::code-wrapper{language="text"}
+```text
 my_project/
 ├── Cargo.toml
 ├── Cargo.lock          # binary: commit it; library: usually commit too
@@ -117,8 +120,18 @@ my_project/
 └── examples/
     └── example.rs
 ```
+::
 
-## Edge Cases & Gotchas
+## 💡 Tips & Tricks
+
+- **Idiom**: run `cargo check` in a tight edit-compile loop and reserve `cargo build`/`cargo run` for when you actually need a binary — `check` skips code generation and is dramatically faster feedback for catching type errors.
+- **Debug**: `rust-analyzer.check.command = "clippy"` in VS Code settings runs Clippy (not just `cargo check`) on every save, surfacing style and correctness lints directly in the editor instead of waiting for a manual `cargo clippy` run.
+- **Idiom**: install `rustup component add rust-src` early — without it, "go to definition" on standard library items in rust-analyzer silently fails or shows a stub instead of real source.
+- **Debug**: if incremental compilation ever produces a confusing, seemingly-impossible error (usually after a rustc/toolchain upgrade), `cargo clean` before assuming the error is real — stale incremental caches are a known source of ghost errors.
+- **Idiom**: pin an MSRV with `rust-version` in `Cargo.toml` from day one, even for personal projects — retrofitting MSRV support after using a newer feature by accident is far more painful than checking as you go.
+- **Performance**: `cargo build --timings` (stable) generates an HTML report showing exactly which crates and codegen units dominate your build time — the fastest way to find out whether "my build is slow" is a proc-macro problem, an LTO problem, or just a big dependency tree.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Cargo.lock**: commit it for binaries to ensure reproducible builds. For libraries it's debated; the official guidance is to commit it too, but it's not required.
 - **`cargo check` is your friend**: during development it's 10x faster than `build`.
@@ -127,6 +140,26 @@ my_project/
 - **MSRV** (Minimum Supported Rust Version): set with `rust-version` in `Cargo.toml`; CI should pin to that version.
 - **Incremental compilation**: on by default in dev; can occasionally produce stale errors — `cargo clean` fixes it.
 - **`~/.cargo/bin`** must be on your `PATH` (rustup installer adds it to your shell profile).
+
+## 🧠 Spot the Bug
+
+A teammate says "I fixed the bug, `cargo build` compiles clean now" — but the bug is still happening in production. What did they most likely check, and what should they have checked instead?
+
+::code-wrapper{language="bash"}
+```bash
+cargo build
+./target/debug/my_app
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`cargo build` (without `--release`) produces a **debug** binary in `target/debug/` — unoptimized, with debug assertions and overflow checks enabled, and none of the release profile's optimizations applied. Production deployments almost always ship the `--release` build (`target/release/`), which behaves differently in ways that matter: integer overflow panics in debug but silently wraps in release; `debug_assert!` checks run in debug but are compiled out entirely in release; and general performance characteristics (and even some timing-sensitive bugs) differ because of the optimizer's transformations. A bug that only reproduces "in production" while a local debug build looks fine is a classic symptom of exactly this mismatch — the teammate tested and "fixed" the debug binary, but never confirmed the fix against `cargo build --release`, which is what's actually running where the bug was reported.
+
+**The lesson**: `cargo build` alone produces the debug profile, not what typically ships to production — always verify a fix against `cargo build --release` (or your project's actual release profile) before considering a production bug resolved.
+
+</details>
 
 ## Recommended Environment (VS Code)
 

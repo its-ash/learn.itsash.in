@@ -68,6 +68,15 @@ v.push(4);           // OK — r no longer used
 
 Without NLL this would error. With NLL it compiles.
 
+## 💡 Tips & Tricks
+
+- **Debug**: when the borrow checker rejects code you're sure is fine, add explicit `{ }` blocks around each borrow's intended lifetime — this often reveals exactly where NLL's "last use" inference disagrees with your mental model, before you touch a single type.
+- **Idiom**: prefer reborrowing (`&mut *r`) over passing the original `&mut T` by value into a helper you'll need again afterward — reborrowing keeps the original reference alive (just temporarily inactive) instead of moving it away permanently.
+- **Idiom**: split borrows on distinct struct fields (`&mut s.x`, `&mut s.y`) instead of taking one `&mut s` and threading it through — the compiler can see field-level disjointness but not disjointness hidden behind a single struct-wide borrow.
+- **Debug**: `cargo build --edition 2021` (or checking your `Cargo.toml`'s `edition` key) matters for borrow-checker behavior — NLL and 2021 disjoint closure captures relax rules that were errors under the 2015/2018 borrow checker, so an old edition can reject code a newer one accepts.
+- **Performance**: `&[T]`/`&str` function parameters cost nothing over `&Vec<T>`/`&String` at runtime (both are effectively a pointer+length) but accept a strictly wider range of callers — there's no tradeoff, only upside, to preferring the slice form.
+- **Clippy**: `clippy::needless_borrow` and `clippy::ptr_arg` catch the `&Vec<T>`/`&String` anti-pattern and redundant `&` automatically — worth enabling even in early-stage code.
+
 ## Reference Scope Edge Cases
 
 ::code-wrapper{language="rust"}
@@ -81,6 +90,44 @@ println!("{r} {r2}");
 ::
 
 Here the mutable borrow happens *before* the last use of `r`, so it's rejected.
+
+## 🧠 Spot the Bug
+
+Why does this fail to compile, even though `v.push(4)` looks like it happens after `r`'s only use?
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let r = &v[0];
+    let doubled = *r * 2;
+    v.push(4);
+    println!("{doubled}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+This one actually **compiles fine** — which is itself the lesson, in contrast to a superficially identical-looking snippet that doesn't:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let r = &v[0];
+    v.push(4);
+    println!("{r}");
+}
+```
+::
+
+This second version fails: `cannot borrow \`v\` as mutable because it is also borrowed as immutable`. The difference is entirely about **where each reference's last use is**, which Non-Lexical Lifetimes (NLL) computes precisely. In the first (working) version, `r`'s last use is `let doubled = *r * 2;` — by the time `v.push(4)` runs, `r` is dead, so the borrow checker shrinks `r`'s live range to end right there, and the subsequent mutable borrow is fine. In the second (failing) version, `r` is used again *after* `v.push(4)` (inside `println!`), so its live range extends across the `push` call — meaning at the moment of `v.push(4)`, there's simultaneously a live `&v[0]` and an attempted `&mut v`, which is exactly the aliasing the borrow checker exists to prevent (a `push` can reallocate the `Vec`'s backing buffer, which would leave `r` dangling).
+
+**The lesson**: NLL shrinks a reference's live range to its actual last use in the code, not its lexical scope — reordering a `println!` that uses an old reference to *before* a mutation is often the entire fix for a borrow-checker error.
+
+</details>
 
 ## Reborrowing
 

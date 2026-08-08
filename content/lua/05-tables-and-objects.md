@@ -355,11 +355,13 @@ table.move(src, 2, 4, 1, dest)  -- move src[2:4] to dest[1:3]
 
 **Use `table.pack()` to capture varargs**: Better than manual `{...}` for preserving `nil` values.
 
+::code-wrapper{language="lua"}
 ```lua
 local function capture(...)
   return table.pack(...)  -- includes .n (count) even with trailing nils
 end
 ```
+::
 
 **Metamethods for custom behavior**: `__add`, `__tostring`, `__index`, `__newindex` customize operator and property behavior.
 
@@ -371,12 +373,14 @@ end
 
 **Modifying table during iteration**: Behavior is undefined if you add/remove keys during a `pairs()` loop. Always iterate a copy if you need to modify.
 
+::code-wrapper{language="lua"}
 ```lua
 local t = {1, 2, 3}
 for k, v in pairs(t) do
   t[k+10] = v  -- undefined behavior (may or may not add new keys)
 end
 ```
+::
 
 **nil removes keys completely**: `t[key] = nil` doesn't set value to nil; it removes the key. To store nil, use `table.pack()` or other patterns.
 
@@ -388,12 +392,14 @@ end
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local t = {10, 20, 30, name = "Alice"}
 t[4] = nil
 table.insert(t, 40)
 print(#t, table.concat(t, ", "))
 ```
+::
 
 <details>
 <summary>Answer</summary>
@@ -433,12 +439,14 @@ Actually, I need to think about this differently. What if this is a trick about 
 Let me retrace: the user wants to demonstrate the gotcha about `#` and nil in arrays.
 
 If we did:
+::code-wrapper{language="lua"}
 ```lua
 local t = {10, 20, 30, 40, name = "Alice"}  -- note: 4 elements
 t[4] = nil
 table.insert(t, 50)
 print(#t, table.concat(t, ", "))
 ```
+::
 
 Then:
 - Initial: `{10, 20, 30, 40}`, `#t = 4`
@@ -455,18 +463,22 @@ But the actual code starts with only 3 elements. So:
 I think my original code doesn't actually demonstrate the gotcha well. Let me revise.
 
 Actually, looking at the code again:
+::code-wrapper{language="lua"}
 ```lua
 local t = {10, 20, 30, name = "Alice"}
 t[4] = nil
 ```
+::
 
 There's no t[4] to nil out. This is a no-op. The real gotcha is:
 
+::code-wrapper{language="lua"}
 ```lua
 local t = {10, 20, 30, 40}
 t[3] = nil  -- Remove middle element
 print(#t)   -- Prints 2 (not 3!)
 ```
+::
 
 Let me rewrite this as the actual puzzle, making it clearer and demonstrating the real gotcha.
 </details>
@@ -475,6 +487,7 @@ Let me revise this example to be clearer:
 
 What does this print?
 
+::code-wrapper{language="lua"}
 ```lua
 local t = {10, 20, 30, 40}
 t[3] = nil
@@ -482,6 +495,7 @@ print(#t)
 table.insert(t, 50)
 print(#t, table.concat(t, ", "))
 ```
+::
 
 <details>
 <summary>Answer</summary>

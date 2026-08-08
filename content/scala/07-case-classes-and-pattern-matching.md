@@ -284,12 +284,15 @@ val List(head, second, _*) = List(1, 2, 3, 4, 5)  // head=1, second=2
 
 **Use `_*` to match remaining elements**: Cleaner than `:: tail` patterns.
 
+::code-wrapper{language="scala"}
 ```scala
 val List(first, second, rest@_*) = List(1, 2, 3, 4)  // rest=List(3, 4)
 ```
+::
 
 **Extractors for custom matching**: Define `unapply()` for custom pattern matching.
 
+::code-wrapper{language="scala"}
 ```scala
 object Even {
   def unapply(n: Int): Option[Int] = if (n % 2 == 0) Some(n/2) else None
@@ -299,6 +302,7 @@ object Even {
   case Even(half) => s"Half of 42 is $half"  // matches
 }
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -308,12 +312,14 @@ object Even {
 
 **Underscore `_` in patterns**: Each `_` is a fresh variable. Using same name in multiple patterns doesn't bind to same variable.
 
+::code-wrapper{language="scala"}
 ```scala
 (1, 2) match {
   case (_, _) => // OK
   case (x, x) => // ERROR: duplicate name
 }
 ```
+::
 
 **Case class copy is shallow**: If fields are mutable collections, modifications affect the original.
 
@@ -323,6 +329,7 @@ object Even {
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 sealed trait Status
 case class Active(name: String) extends Status
@@ -338,6 +345,7 @@ val message = s match {
 
 println(message)
 ```
+::
 
 <details>
 <summary>Answer</summary>

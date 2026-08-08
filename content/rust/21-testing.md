@@ -59,10 +59,12 @@ cargo test -- --ignored    # run #[ignore] tests
 
 ## Integration Tests
 
-```
+::code-wrapper{language="text"}
+```text
 tests/
 └── integration_test.rs
 ```
+::
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -80,12 +82,14 @@ fn integration_add() {
 
 ### Common Setup Module
 
-```
+::code-wrapper{language="text"}
+```text
 tests/
 ├── common/
 │   └── mod.rs          # NOT a test file
 └── integration_test.rs   # use mod common;
 ```
+::
 
 Files in `tests/common/` (without a top-level test fn) are helpers, not test binaries.
 
@@ -123,6 +127,7 @@ The `#` line is hidden from rendered docs but included when testing.
 ### Skipping Doc Tests
 
 `::code-wrapper{language="text"}
+::code-wrapper{language="text"}
 ```text
 /// ```no_run
 /// loop { /* don't actually run */ }
@@ -132,6 +137,7 @@ The `#` line is hidden from rendered docs but included when testing.
 /// let x = todo!();
 /// ```
 ```
+::
 ::`
 
 `no_run` compiles but doesn't execute. `ignore` skips compilation. `compile_fail` asserts the snippet fails to compile (negative tests). `rust,no_run` etc. customize.
@@ -353,6 +359,60 @@ fn test_render() {
 }
 ```
 ::
+
+## 💡 Tips & Tricks
+
+- **Debug**: run `cargo test -- --nocapture --test-threads=1` when chasing a flaky test — serializing execution plus seeing `println!`/`dbg!` output often reveals ordering assumptions that parallel runs hide.
+- **Idiom**: return `Result<(), E>` from a `#[test]` function instead of `.unwrap()`-ing everywhere — failures print the `Debug` of `E` automatically and you keep `?` ergonomics inside the test body.
+- **Performance**: `cargo install cargo-nextest` and run `cargo nextest run` — it parallelizes across process boundaries (not just threads), isolates test crashes, and is often 2-3x faster on large suites than plain `cargo test`.
+- **Idiom**: name test modules `mod tests` (not `mod test`) by convention, and use `use super::*;` to pull in the parent module's items without re-declaring `use` paths.
+- **Debug**: `cargo test --doc` runs *only* doc tests, useful for isolating whether a CI failure is a doc example rot versus a real unit test regression.
+- **Clippy**: `#[test]` functions are exempt from `dead_code` and many style lints by default, but `clippy::assertions_on_result_states` will flag `assert!(result.is_ok())` and suggest `result.unwrap()` or `assert_matches!` instead, since the former discards the error on failure.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`#[should_panic(expected = "...")]` is a substring match, not exact**: `#[should_panic(expected = "index")]` will pass for a completely unrelated panic message that merely happens to contain the word "index" — a typo'd panic message elsewhere in the call chain can make a test pass for the wrong reason.
+- **Tests run in parallel by default, sharing process state**: two tests that both write to the same file path, bind the same port, or mutate the same `static` will race intermittently — failures that "only happen sometimes" are almost always a shared-state collision, not a logic bug.
+- **`cargo test` filters by substring across *all* test names**: `cargo test add` runs every test whose name contains "add" in every file, including unrelated ones like `test_address_parsing` — use `cargo test --test integration -- add` or more specific names to avoid surprise matches.
+- **Doc tests execute in a separate crate per code block**: a doc example that relies on a `use` statement from a previous doc block on the same page won't compile — each fenced block is its own isolated mini-crate unless explicitly using hidden `#` setup lines.
+- **`debug_assert!` vanishes in release builds**: a test suite run with `cargo test --release` silently skips all `debug_assert!` checks inside the code under test — a bug caught only by `debug_assert!` will pass in release-mode CI and fail in production debug builds, or vice versa.
+- **`#[ignore]` tests are invisible in normal runs**: `cargo test` reports "0 failed" even if an `#[ignore]`d test would fail, since it never executes without `--ignored` — a slow/expensive test can silently rot for months.
+- **Platform quirk**: floating-point test assertions like `assert_eq!(0.1 + 0.2, 0.3)` fail on every platform (not a quirk of one OS) because of IEEE 754 representation — this is deterministic but still catches people who assume decimal literals are exact.
+
+## 🧠 Spot the Bug
+
+Why does this test pass even though the logic looks wrong?
+
+::code-wrapper{language="rust"}
+```rust
+fn divide(a: i32, b: i32) -> i32 {
+    a / b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn test_divide_by_zero() {
+        divide(10, 0);
+        assert_eq!(1, 2);
+    }
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+The test passes — and it would pass even if `divide` were fixed to never panic on zero (say, it returned `i32::MAX` instead), as long as *something* in the test panics.
+
+`#[should_panic]` without an `expected = "..."` string only asserts that the test function panics *somewhere* before returning — it doesn't care which line panics or why. Here, `divide(10, 0)` panics first (integer division by zero always panics in Rust, debug and release alike, unlike overflow), so execution never reaches the deliberately-wrong `assert_eq!(1, 2)`. If `divide` were changed to not panic, the test would then panic on the `assert_eq!` instead — and `#[should_panic]` would still report success, masking the fact that the *real* assertion (`assert_eq!`) failed for the wrong reason entirely.
+
+**The lesson**: bare `#[should_panic]` verifies *a* panic occurred, not *which* one — always add `expected = "substring"` to pin down the specific failure you're testing for.
+
+</details>
 
 ## Summary
 

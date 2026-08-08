@@ -479,6 +479,67 @@ unsafe fn experimental() { }
 ```
 ::
 
+## 💡 Tips & Tricks
+
+- **Debug**: `cargo build --features "a b c" -vv` (or `cargo tree -e features`) shows exactly which `cfg(feature = ...)` flags are active for a build — useful when a `#[cfg]`-gated function mysteriously "doesn't exist" in a build.
+- **Idiom**: use `cfg_if::cfg_if!` instead of stacking several `#[cfg(...)]`/`#[cfg(not(...))]` function definitions — it reads top-to-bottom like a normal `if`/`else if` chain and avoids accidentally leaving a gap where no `#[cfg]` matches.
+- **Debug**: `cargo expand` shows you exactly which `#[cfg]` branches survived compilation for your current target/feature set — helpful when you suspect the "wrong" branch is being compiled in.
+- **Performance**: `#[inline]` is only a *hint*; the compiler still runs its own cost-benefit heuristics. For cross-crate inlining (a function in crate A called from crate B), `#[inline]` matters much more than for same-crate calls, because without it LLVM can't see the callee's body during B's compilation at all.
+- **Idiom**: `#[non_exhaustive]` on a struct still lets you construct it *within* the defining crate as normal — the restriction (must use `..Default::default()` or a constructor) only applies to external crates, which trips up people testing across a workspace boundary.
+- **Clippy**: `#![warn(clippy::all)]` is a good default; add `#![warn(clippy::pedantic)]` incrementally per-lint (not all at once) since pedantic includes some deliberately opinionated lints not everyone wants.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Both branches of a `#[cfg]` still get parsed, but only one type-checks**: `#[cfg(unix)] fn f() -> UnixOnlyType { ... }` alongside a Windows `#[cfg]` version means the *non-compiled* branch is still parsed as valid Rust syntax (so a syntax error there breaks the build on every platform), but it is never type-checked — a type error hidden inside a `#[cfg(windows)]` block on Linux CI will pass silently until someone builds for Windows.
+- **`cfg!(...)` (the macro) is not the same as `#[cfg(...)]` (the attribute)**: `if cfg!(target_os = "linux") { linux_fn() } else { other_fn() }` type-checks *both* branches even though only one runs — if `other_fn()` doesn't exist on Linux, this fails to compile on Linux even though the `else` branch would "never run" there; `#[cfg]` attributes on items, not the `cfg!` macro, are what actually removes code.
+- **`#[forbid]` cannot be un-forbidden, even in nested scopes that "should" be allowed**: `#![forbid(unsafe_code)]` at the crate root means *no* inner module, function, or even a dependency's macro expansion inside your crate can locally `#[allow(unsafe_code)]` to carve out an exception — the only fix is removing the `forbid` or the unsafe code.
+- **`#[allow]` in an outer scope doesn't protect against `#[deny]` in an inner one**: `#![allow(dead_code)]` at the crate root can still be overridden by a `#[deny(dead_code)]` on a specific inner module — lint attribute resolution is scoped and the innermost, most specific attribute wins, which is the opposite of what "allow at the top" might suggest.
+- **`#[must_use]` warnings are silent when the value is used for *anything*, even trivially**: `let _ = risky_operation();` suppresses the "unused" warning even though the value is just as discarded as not binding it at all — this pattern is a common way `#[must_use]` protections get accidentally defeated in a code review that doesn't notice the underscore.
+- **`#[repr(packed)]` combined with references is undefined behavior**: taking `&field` of a field inside a `#[repr(packed)]` struct can produce a misaligned reference, which is UB the moment it's created (not just when dereferenced) — Rust added lints for this, but code compiled with older toolchains or using raw pointer casts can still hit it.
+- **Platform quirk — `target_os` vs `target_family`**: `#[cfg(unix)]` covers Linux, macOS, BSDs, and more, but forgetting that `#[cfg(target_os = "macos")]` is *not* covered by `#[cfg(target_os = "linux")]`'s negation (`not(target_os = "linux")` also matches Windows) leads to "unix-only" code accidentally compiling (and failing) on Windows unless you use `not(windows)` or `unix` explicitly.
+
+## 🧠 Spot the Bug
+
+Why does this fail to compile only on Windows, even though it looks platform-agnostic?
+
+::code-wrapper{language="rust"}
+```rust
+#[cfg(not(target_os = "linux"))]
+fn get_separator() -> char {
+    std::path::MAIN_SEPARATOR
+}
+
+#[cfg(target_os = "linux")]
+fn get_separator() -> char {
+    '/'
+}
+
+fn main() {
+    println!("{}", get_separator());
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+It compiles fine everywhere in this exact form — the actual trap is subtler and appears once someone "simplifies" the non-Linux branch believing it only needs to handle Unix-likes:
+
+::code-wrapper{language="rust"}
+```rust
+#[cfg(not(target_os = "linux"))]
+fn get_separator() -> char {
+    '/'  // assumes "not Linux" means "some other Unix"
+}
+```
+::
+
+`not(target_os = "linux")` matches *every* non-Linux target, including Windows — not just macOS/BSD as a Linux-centric developer might assume. On Windows, the path separator is `\`, not `/`, so hardcoding `'/'` under a `not(target_os = "linux")` guard silently produces wrong (not broken — *wrong*) behavior on Windows: it compiles, runs, and returns an incorrect separator with no diagnostic anywhere, because from the compiler's point of view the `cfg` predicate matched exactly as written.
+
+**The lesson**: `not(target_os = "X")` means "every platform except X," not "the other major platform" — enumerate the platforms you actually mean (`unix`, `windows`, or explicit `target_os` values) rather than negating a single one.
+
+</details>
+
 ## Summary
 
 `#[cfg]` controls what compiles; `#[derive]` auto-implements traits; `#[allow]`/`#[deny]`/`#[forbid]` tune lints; `#[non_exhaustive]` future-proofs APIs; `#[must_use]`/`#[deprecated]` drive correctness; `#[repr(C)]` controls layout; `#[global_allocator]`/`#[panic_handler]` customize the runtime. Use `#[track_caller]` for better debugging; use `#[cfg_attr]` for conditional attributes; use platform-specific `#[cfg]` for cross-platform code.

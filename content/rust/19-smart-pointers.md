@@ -359,6 +359,62 @@ let s2: Cow<str> = Cow::Owned(String::from("world"));
 - `Cell<T>`/`RefCell<T>`: in-place storage; `RefCell` adds a borrow-state field.
 - `Mutex<T>`/`RwLock<T>`: in-place storage + OS synchronization primitives.
 
+## 💡 Tips & Tricks
+
+- **Debug**: `Rc::strong_count(&rc)` and `Rc::weak_count(&rc)` let you print live reference counts at any point — invaluable for tracking down a suspected cycle leak.
+- **Idiom**: prefer `Rc::clone(&rc)` over `rc.clone()` everywhere in shared codebases; the associated-function form makes "this is just a refcount bump" visible at every call site, especially useful for code reviewers scanning for accidental deep clones.
+- **Performance**: `parking_lot::Mutex`/`RwLock` skip the `Result`/poisoning machinery of `std::sync`, making lock/unlock noticeably cheaper in hot paths — swap in when you don't need poison-based panic detection.
+- **Idiom**: `Rc::get_mut`/`Arc::get_mut` return `Some(&mut T)` only when the strong count is exactly 1 — a cheap way to mutate in place right after construction, before you've shared the handle.
+- **Debug**: `RefCell::try_borrow_mut()` returns a `Result` instead of panicking — use it in debug assertions or logging to diagnose *which* borrow is still outstanding before the panic-causing one fires.
+- **Idiom**: `Rc<str>`/`Arc<str>` (via `Rc::from(&str)`) are cheaper to clone than `Rc<String>` when you never need to mutate the string — they skip one level of indirection.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`RefCell` panics are runtime, not compile-time**: two `.borrow_mut()` calls whose lifetimes overlap only by an easy-to-miss expression ordering (e.g., inside the same `let x = ...` statement as another borrow) panic with "already mutably borrowed" only when that exact code path runs — tests that don't hit the path won't catch it.
+- **`Weak::upgrade()` after the last strong ref drops silently returns `None`**: there's no panic, no error type — a forgotten `Weak` cleanup can quietly make a "parent" pointer permanently `None` without any visible failure until you notice missing data.
+- **`Rc`/`Arc` cycles are a *safe-Rust* memory leak**: the borrow checker and the type system do not prevent reference cycles — `Rc<RefCell<Node>>` trees with back-pointers as `Rc` (not `Weak`) leak forever with zero warnings, compiler or runtime.
+- **`Mutex` poisoning propagates**: once one thread panics while holding a `std::sync::Mutex`, *every future* `.lock()` call from *any* thread returns `Err` — a single panicking worker can silently degrade an entire pool unless you handle poison recovery explicitly.
+- **`Cell<T>` requires `T: Copy` for `.get()`**: this makes `Cell` a poor fit for anything beyond primitives and small `Copy` structs; reaching for `Cell<String>` won't compile, and the fix (`RefCell`) has different panic semantics, not just a bigger API.
+- **`Box::leak` is a real leak, not a trick**: the returned `&'static mut` is legitimate and safe to use, but the memory is never reclaimed for the life of the process — using it in a loop (e.g., per-request config) exhausts memory in production even though every individual use compiles and runs correctly.
+- **Platform quirk**: `Arc`'s atomic refcount operations use `Relaxed`/`Acquire`/`Release` orderings internally that are essentially free on x86 (strongly ordered) but have real cost on ARM — code that "feels" equally fast in local dev (x86) can show different `Arc::clone` overhead on ARM-based CI or deployment targets.
+
+## 🧠 Spot the Bug
+
+What happens when `main` runs?
+
+::code-wrapper{language="rust"}
+```rust
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Node {
+    value: i32,
+    children: RefCell<Vec<Rc<Node>>>,
+}
+
+fn main() {
+    let leaf = Rc::new(Node { value: 1, children: RefCell::new(vec![]) });
+    let root = Rc::new(Node { value: 0, children: RefCell::new(vec![Rc::clone(&leaf)]) });
+
+    let children = root.children.borrow();
+    root.children.borrow_mut().push(Rc::clone(&leaf));
+
+    println!("{}", children.len());
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+This panics at runtime: `already borrowed: BorrowMutError`.
+
+`root.children.borrow()` creates an immutable `Ref` guard bound to `children`, which is **still alive** (in scope) when `root.children.borrow_mut()` is called two lines later — `children` isn't used again until the `println!`, but Rust's borrow checker only enforces *static* (compile-time) borrow rules on the `RefCell` handle itself, not on the `Ref`/`RefMut` guards it hands out. Those guards are ordinary values whose lifetime extends to their last use or scope end, and here `children`'s scope extends to the end of `main` (it's used in `println!`). `RefCell` enforces the actual "no mutable borrow while an immutable one is live" rule at *runtime* by panicking, because the compile-time borrow checker has no visibility into `RefCell`'s internal state — that's the entire point of interior mutability, and also its risk.
+
+**The lesson**: `RefCell` moves borrow checking from compile time to runtime — an active `Ref` guard still blocks a `borrow_mut()` even though the compiler can't see the conflict.
+
+</details>
+
 ## Summary
 
 `Box` = single-owner heap. `Rc`/`Arc` = shared ownership. `Cell`/`RefCell`/`Mutex`/`RwLock` = interior mutability. `Cow` = borrowed-or-owned. `Pin` = no-move guarantee for async. `Weak` avoids cycles. Memory leaks via reference cycles are possible in safe Rust — design with `Weak` back-references.

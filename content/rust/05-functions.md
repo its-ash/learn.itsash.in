@@ -174,7 +174,16 @@ extern "C" { fn imported(x: i32) -> i32; }
 
 Useful for FFI and callbacks passed to C libraries.
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: `#[track_caller]` on a helper function that panics (e.g., a custom `assert`-like wrapper) makes the reported panic location point at the *caller* instead of inside the helper — invaluable for library-style assertion functions.
+- **Idiom**: express "no return value on this path" with `-> !` (diverging functions) for helpers like `fn fatal(msg: &str) -> !`, so the compiler lets you use them anywhere a value is expected (`let x = check(y).unwrap_or_else(|| fatal("bad"));`) without a type mismatch.
+- **Performance**: `#[inline]` on small, frequently-called cross-crate functions can matter a lot (without it, the callee's body may not even be visible to the caller crate's optimizer), while `#[inline(always)]` on large functions often backfires by bloating the binary — reserve `always` for genuinely tiny hot-path helpers.
+- **Idiom**: use pattern-matching function parameters (`fn f((a, b): (i32, i32))`) to destructure tuples/structs right at the call boundary instead of an extra line inside the body — keeps small helper functions (especially ones passed to `.map()`) terse.
+- **Debug**: `cargo expand` on a `const fn` shows you whether it actually got evaluated at compile time or deferred to runtime — useful when you're relying on `const fn` purely for the performance benefit, not just the ability to use it in a `const` context.
+- **Clippy**: `clippy::too_many_arguments` (default threshold: 7) is a nudge, not a hard rule, to bundle related parameters into a struct — genuinely useful for functions that keep growing an argument list over a project's lifetime.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`return` in a closure**: `return` inside a closure returns from the *closure*, not the enclosing function (unlike some languages). Use labeled loops/breaks or `?` carefully.
 - **Block-as-expression footgun**: forgetting the trailing `;` returns the value; adding it silently changes the return type to `()`. The compiler catches this.
@@ -190,6 +199,35 @@ Useful for FFI and callbacks passed to C libraries.
 - **Attribute positions in fn**: `#[must_use]` on a function warns if the return is ignored; useful for error-prone computations.
 - **Default parameters via function overloading**: Rust has no function overloading; use builder pattern or separate functions: `new()`, `with_capacity()`, `from()`, etc.
 - **Const vs const fn**: `const X: i32 = 5;` is a value; `const fn f() -> i32 { 5 }` is a function. Both are evaluated at compile time but have different purposes.
+
+## 🧠 Spot the Bug
+
+What does this function return, and why is it probably not what the author intended?
+
+::code-wrapper{language="rust"}
+```rust
+fn classify(n: i32) -> &'static str {
+    if n < 0 {
+        "negative";
+    } else if n == 0 {
+        "zero"
+    } else {
+        "positive"
+    }
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+This fails to compile: `error[E0308]: if and else have incompatible types`, with the compiler pointing out that the first branch evaluates to `()`.
+
+`"negative";` — with the trailing semicolon — is a **statement**, not an expression that produces a value; a semicolon after any expression turns it into a statement whose value is discarded, and the block it's the last line of evaluates to `()` as a result. The other two branches, `"zero"` and `"positive"`, have no trailing semicolon and correctly evaluate to `&'static str`. Because `if`/`else if`/`else` is a single expression whose overall type must be consistent across every branch, mismatched branch types (`()` vs `&'static str`) is a hard compile error — not a silent runtime bug, in this particular case, because the mismatch happens to be caught by the type checker. The insidious version of this same mistake is when the "empty" branch's type coincidentally matches (e.g., all branches secretly compute `()`, or the stray semicolon is on the *last* branch of a function whose return type is also `()`) — then the bug compiles clean and just silently returns nothing where a value was expected.
+
+**The lesson**: a trailing semicolon converts an expression into a `()`-valued statement — in a multi-branch `if`/`else` used as an expression, one stray semicolon breaks the whole chain, and the compiler only catches it when the resulting type mismatch is visible.
+
+</details>
 
 ## Summary
 

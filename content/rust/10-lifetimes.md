@@ -195,7 +195,16 @@ let leaked: &'static mut [u8] = Box::leak(vec![1, 2, 3].into_boxed_slice());
 | A `'static` literal or constant | Write `&'static` explicitly |
 | Data tied to a self-borrow | Use `self`-elision |
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: when a lifetime error is confusing, temporarily write out every elided lifetime explicitly (`fn f<'a>(x: &'a str) -> &'a str`) — seeing the desugared signature often makes it obvious which input the compiler thinks the output is (or should be) tied to.
+- **Idiom**: reach for owning the data (`String` instead of `&str`, `Vec<T>` instead of `&[T]`) as your first fix attempt for a stubborn lifetime error in application code — it's rarely the "most correct" fix in a vacuum, but it's almost always the fastest way to unblock yourself, and you can optimize back to borrowing later once the design has settled.
+- **Idiom**: use `'_` (anonymous lifetime) in `impl` blocks and return positions where elision already determines the lifetime — it signals "there's a lifetime here, let the compiler infer it" more clearly than omitting it entirely, especially in generic-heavy code.
+- **Debug**: `cargo expand` won't show you lifetime *inference* results (lifetimes are erased before codegen), but rust-analyzer's inlay hints for elided lifetimes (enable in VS Code settings) will show you exactly what the compiler inferred, inline in the editor.
+- **Idiom**: prefer two named lifetimes (`<'src, 'arena>`) over collapsing to one (`<'a>`) the moment two borrowed fields in a struct genuinely have independent, unrelated lifespans — collapsing them to one is not "simpler," it's a stricter (and sometimes wrong) constraint that the compiler will start rejecting valid code against.
+- **Debug**: `'static` in an error's suggested fix is not the compiler telling you "add `'static` and move on" — it's usually flagging a design where a reference is trying to outlive its data; treat a `'static` suggestion as a prompt to reconsider ownership, not a fix to apply reflexively.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`'a` ties output to the *shortest* input**: `longest<'a>(x: &'a, y: &'a)` means the result lives at most as long as the *shorter* of `x` and `y`.
 - **Closures capturing references**: the closure's lifetime must include the captured references' lifetimes.
@@ -270,6 +279,39 @@ let s: &'static str = "hi";
 accept(s); // 'static <: 'a works
 ```
 ::
+
+## 🧠 Spot the Bug
+
+Why does this fail to compile?
+
+::code-wrapper{language="rust"}
+```rust
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+
+fn main() {
+    let result;
+    let s1 = String::from("long string");
+    {
+        let s2 = String::from("short");
+        result = longest(s1.as_str(), s2.as_str());
+    }
+    println!("{result}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`error[E0597]: \`s2\` does not live long enough`.
+
+`longest`'s signature, `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str`, forces both parameters to share a **single** lifetime `'a` — this doesn't mean "whichever is longer," it means the compiler must pick one `'a` that is valid for *both* arguments simultaneously, which is necessarily the *shorter* of the two actual borrow durations. Since `result` is assigned inside the inner block but read in `println!` after the block ends, `result`'s required lifetime spans past `s2`'s drop point. But because `longest`'s return type shares `'a` with *both* inputs, the compiler must treat the returned reference as only valid for as long as the shorter-lived argument (`s2`) — regardless of the fact that, at runtime, the `if` branch that actually executes only ever returns `x` (`s1`, the longer string). The compiler doesn't run the function to see which branch executes; it only checks that the signature's contract holds for *every possible* execution, and the signature promises a lifetime no longer than the shortest input.
+
+**The lesson**: a shared lifetime parameter across multiple inputs means the output is only as long-lived as the *shortest* of them — the compiler enforces this from the signature alone, without regard to which branch of the function body would actually execute at runtime.
+
+</details>
 
 ## Summary
 

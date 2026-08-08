@@ -162,6 +162,7 @@ console.log(obj1.name)      // "Alice" (bind was ignored)
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 const obj = {
   name: 'Alice',
@@ -173,6 +174,7 @@ const obj = {
 
 obj.delayedGreet()
 ```
+::
 
 <details>
 <summary>Answer</summary>

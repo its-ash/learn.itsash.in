@@ -194,7 +194,16 @@ let p = 42 as *const i32;
 
 Use `From`/`Into`/`TryFrom`/`TryInto` for safe, explicit conversions.
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: `dbg!(x)` prints a value's type-relevant `Debug` output alongside file/line — pair it with `std::any::type_name::<T>()` in generic code when you need to confirm exactly which concrete type got inferred.
+- **Idiom**: use `checked_*`/`saturating_*`/`wrapping_*` arithmetic methods explicitly wherever overflow is a real possibility (parsing untrusted input, accumulating user-supplied counts) — don't rely on debug-mode panics to catch it, since release builds silently wrap instead.
+- **Performance**: prefer `copied()` over `cloned()` for iterators over `&T` where `T: Copy` — functionally identical for `Copy` types, but `copied()` fails to compile if `T` ever stops being `Copy`, catching an accidental future deep-clone at the type level.
+- **Idiom**: reach for the newtype pattern (`struct Meters(f64)`) the moment two values of the same primitive type could be accidentally swapped at a call site (e.g., `fn distance(from: f64, to: f64)`) — it costs nothing at runtime and turns a whole category of mixing bugs into compile errors.
+- **Debug**: `f64::to_bits()`/`from_bits()` let you inspect or construct the exact IEEE 754 bit pattern of a float — useful for debugging "why doesn't this float equal that float" issues that stem from precision, not logic.
+- **Clippy**: `clippy::cast_possible_truncation`, `clippy::cast_sign_loss`, and `clippy::cast_precision_loss` (part of `clippy::pedantic`) flag risky `as` casts individually — enable them when auditing numeric code for correctness rather than relying on `as`'s silent behavior.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Default int**: `let x = 1;` → `i32`. In a `match` arm that returns an integer, the inferred type can leak across arms.
 - **Default float**: `let x = 1.0;` → `f64`.
@@ -205,6 +214,48 @@ Use `From`/`Into`/`TryFrom`/`TryInto` for safe, explicit conversions.
 - **Integer literals overflow in source**: `let x: u8 = 255;` is fine, but `let x: u8 = 256;` is a compile error.
 - **`char` size**: always 4 bytes even for ASCII; for ASCII use `u8` if memory matters.
 - **`as` with `f64::NAN as i32`** → 0 (platform-defined, not reliable).
+
+## 🧠 Spot the Bug
+
+What does this print in a release build, and why might it be completely different in debug?
+
+::code-wrapper{language="rust"}
+```rust
+fn checksum(values: &[u8]) -> u8 {
+    let mut sum: u8 = 0;
+    for &v in values {
+        sum += v;
+    }
+    sum
+}
+
+fn main() {
+    let data = [200u8, 100, 50];
+    println!("{}", checksum(&data));
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+In a **debug** build, this panics: `attempt to add with overflow`. In a **release** build, it silently prints `94` (the wrapped result of `(200 + 100 + 50) % 256`).
+
+`200 + 100 = 300`, which overflows `u8`'s range (0–255) on the very first addition. Rust's `+` operator has different behavior depending on build profile specifically for this case: debug builds insert overflow checks that panic immediately (`overflow-checks = true` by default in the dev profile), while release builds compile the same `+=` to a two's-complement wraparound with no check at all (`overflow-checks = false` by default in the release profile) — this is a deliberate performance/safety tradeoff, not an inconsistency, but it means the *exact same source code* produces a hard crash in one build mode and a silently wrong numeric answer in the other. A function like `checksum` that looks correct and passes casual testing in `cargo run` (debug, which would actually panic and get noticed) can ship a silent miscalculation in `cargo run --release` if the overflow case wasn't covered by a test that runs in both modes.
+
+The fix is to be explicit about the desired overflow behavior rather than relying on ambient build-profile behavior:
+
+::code-wrapper{language="rust"}
+```rust
+fn checksum(values: &[u8]) -> u8 {
+    values.iter().fold(0u8, |acc, &v| acc.wrapping_add(v))
+}
+```
+::
+
+**The lesson**: integer overflow panics in debug builds but silently wraps in release builds — code that "worked" during development can compute a different, wrong answer in production unless overflow-prone arithmetic uses explicit `wrapping_*`/`checked_*`/`saturating_*` methods.
+
+</details>
 
 ## Summary
 

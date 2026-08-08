@@ -353,6 +353,7 @@ user.validate()   // true
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 class Animal {
   constructor(name) {
@@ -373,6 +374,7 @@ class Dog extends Animal {
 const dog = new Dog('Rex', 'Lab')
 console.log(dog.speak(), Dog.greet(), dog.greet?.())
 ```
+::
 
 <details>
 <summary>Answer</summary>

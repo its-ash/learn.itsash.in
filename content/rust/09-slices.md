@@ -152,7 +152,16 @@ print(&substring);         // &str
 
 Always prefer `&str` in function parameters unless you need to grow the string.
 
-## Edge Cases
+## 💡 Tips & Tricks
+
+- **Debug**: `slice.get(i)` instead of `slice[i]` while debugging index-related panics — it returns `Option<&T>` so you can `dbg!(slice.get(i))` without crashing the program, then swap back to indexing once you've confirmed the bounds are right.
+- **Idiom**: accept `&[T]`/`&str` in function signatures, never `&Vec<T>`/`&String` — it's strictly more general (accepts arrays, `Vec`, and slices of slices too) at zero runtime cost, since both are already fat pointers under the hood.
+- **Performance**: `slice.windows(n)` and `slice.chunks(n)` are both zero-allocation, lazy iterators — prefer them over manually indexing with a `for i in 0..len` loop for sliding-window or batch-processing logic; they're also harder to get an off-by-one error in.
+- **Idiom**: `split_at_mut` is the *only* safe way to get two simultaneously mutable, non-overlapping views into the same slice — reaching for `unsafe`/raw pointers to "convince" the borrow checker to allow two `&mut` slices is almost always unnecessary once you know this method exists.
+- **Debug**: a panic message like "byte index 2 is not a char boundary" always means UTF-8-unsafe slicing on a `&str` — the fix is almost never to slice at a different fixed byte offset (which is fragile for any non-ASCII input) but to use `.char_indices()`/`.chars()` to find valid boundaries.
+- **Clippy**: `clippy::indexing_slicing` (opt-in, part of `restriction`) flags all direct `[]` indexing in favor of `.get()`, useful to enable temporarily when auditing a codebase for unhandled panics on untrusted input.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Empty slice**: `&arr[0..0]` is valid, length 0; never panics.
 - **Slicing past end**: `&v[..v.len() + 1]` panics.
@@ -161,6 +170,42 @@ Always prefer `&str` in function parameters unless you need to grow the string.
 - **Range patterns**: limited; stable Rust allows `[a, b, ..]` only in limited forms.
 - **`Vec::drain`**: takes a range, removes and returns an iterator — modifies the `Vec`.
 - **String slicing pitfall**: indexing `s[i]` is intentionally not allowed for `String`/`&str` because UTF-8 byte indexing is meaningless. Use `s.chars().nth(i)` or `s.as_bytes()[i]` (returns `u8`).
+
+## 🧠 Spot the Bug
+
+What does this print, and why might it surprise someone who expects both halves to be independent?
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let s = String::from("héllo");
+    println!("byte len: {}", s.len());
+
+    let first_two_bytes = &s[0..2];
+    println!("{first_two_bytes}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+This panics: `byte index 2 is not a char boundary; it is inside 'é' (bytes 1..3) of \`héllo\``.
+
+`String::len()` reports the length in **bytes**, not characters — `é` is a single Unicode scalar value (one `char`) but encodes to **2 bytes** in UTF-8, so `"héllo".len()` is `6`, not `5`. Slicing `&s[0..2]` looks like it should grab "the first two characters," but string slicing in Rust operates on **byte offsets**, and byte offset `2` falls squarely in the *middle* of `é`'s 2-byte encoding — cutting a multi-byte UTF-8 sequence in half would produce invalid UTF-8, which `&str` can never represent (it's a safety invariant of the type). Rather than silently producing corrupted text, Rust panics immediately at the slice operation. This is a common trap for anyone assuming `&str` indexing works like character-array indexing in languages such as Python or Java, where `s[0:2]` means "first two characters" regardless of encoding.
+
+The fix is to use `char_indices()` to find a valid byte offset for a given number of characters, rather than guessing a byte count:
+
+::code-wrapper{language="rust"}
+```rust
+let boundary = s.char_indices().nth(2).map(|(i, _)| i).unwrap_or(s.len());
+let first_two_chars = &s[..boundary];
+```
+::
+
+**The lesson**: `&str` length and slicing are always in bytes, not characters — any non-ASCII input can make a byte-offset slice land mid-character, which panics rather than silently corrupting the string.
+
+</details>
 
 ## Slice Methods Cheat Sheet
 

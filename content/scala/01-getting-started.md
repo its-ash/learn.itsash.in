@@ -41,9 +41,11 @@ sudo apt-get install scala
 ::
 
 Verify:
+::code-wrapper{language="bash"}
 ```bash
 scala -version    # Scala 3.x.x
 ```
+::
 
 ## Your First Program
 
@@ -340,11 +342,13 @@ nums.forall(_ > 0)                    // true
 
 **Use `case class` for data**: Quick way to define data containers with equality, hashing, and pattern matching built-in.
 
+::code-wrapper{language="scala"}
 ```scala
 case class Person(name: String, age: Int)
 val alice = Person("Alice", 30)
 alice.name           // "Alice"
 ```
+::
 
 **Leverage type inference**: Scala infers types from context. Annotations are mainly for clarity or API boundaries.
 
@@ -354,34 +358,42 @@ alice.name           // "Alice"
 
 **`.toInt` on non-numeric String throws**: Use `.toIntOption` for safe conversion.
 
+::code-wrapper{language="scala"}
 ```scala
 "abc".toInt                           // NumberFormatException
 "abc".toIntOption                     // None
 "42".toIntOption                      // Some(42)
 ```
+::
 
 **Tuple indices are 1-based (like Lua, unlike arrays)**: `(1, 2, 3)._1` is the first element, not `._0`. This confuses everyone.
 
+::code-wrapper{language="scala"}
 ```scala
 val t = ("a", "b", "c")
 t._1                                  // "a" (not ._0)
 t._2                                  // "b"
 ```
+::
 
 **`==` calls `equals()`, not reference equality**: If you need reference equality, use `eq`:
 
+::code-wrapper{language="scala"}
 ```scala
 val a = new String("hello")
 val b = new String("hello")
 a == b                                // true (value equality)
 a eq b                                // false (reference equality)
 ```
+::
 
 **Default arguments are evaluated once**: Avoid mutable defaults.
 
+::code-wrapper{language="scala"}
 ```scala
 def bad(items: scala.collection.mutable.ArrayBuffer[Int] = scala.collection.mutable.ArrayBuffer()) { }
 ```
+::
 
 **Variance gotcha**: `List[Dog]` is not a subtype of `List[Animal]`, even if `Dog <: Animal`. Use `List[Animal]` if you need flexibility (covariance).
 
@@ -389,6 +401,7 @@ def bad(items: scala.collection.mutable.ArrayBuffer[Int] = scala.collection.muta
 
 What does this print?
 
+::code-wrapper{language="scala"}
 ```scala
 val nums = List(1, 2, 3)
 val result = nums.map { x =>
@@ -397,6 +410,7 @@ val result = nums.map { x =>
 }
 println(result)
 ```
+::
 
 <details>
 <summary>Answer</summary>

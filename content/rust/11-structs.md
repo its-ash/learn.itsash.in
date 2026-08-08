@@ -194,7 +194,16 @@ let email = u.email;             // partial move
 
 Reconstruct with `..` if needed.
 
-## Edge Cases & Pitfalls
+## 💡 Tips & Tricks
+
+- **Debug**: `#[derive(Debug)]` plus `{:#?}` (pretty-print) on a deeply nested struct is far more readable in `println!`/`dbg!` output than the compact `{:?}` form — flip to pretty-print the moment a struct has more than two or three fields.
+- **Idiom**: use field-init shorthand (`User { email, username, .. }`) everywhere the local variable name matches the field name — it's not just shorter, it also means renaming a field forces every construction site relying on shorthand to be visibly touched (a useful refactor safety net).
+- **Idiom**: derive `Default` and use `..Default::default()` in struct literals for "mostly-defaults" construction instead of writing out every field — pairs especially well with a builder for the few fields that need validation.
+- **Performance**: field reordering for minimal padding happens automatically for Rust's default struct layout — don't hand-order fields "by size" the way you might in C; only reach for `#[repr(C)]` when FFI or a wire format genuinely requires a fixed layout.
+- **Idiom**: use tuple structs (`struct Meters(f64)`) for lightweight newtype wrappers where you don't need named fields, and named-field structs the moment a type has more than one piece of data — mixing positional (`.0`) access into a struct with two or more fields quickly becomes unreadable.
+- **Clippy**: `clippy::field_reassign_with_default` flags patterns like `let mut c = Config::default(); c.port = 8080;` and suggests the equivalent, more idiomatic `Config { port: 8080, ..Default::default() }`.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **Out-of-order field initialization** is allowed — order doesn't matter in struct literals.
 - **Mutability is per-binding, not per-field**: there's no `mut` field modifier. Use `Cell`/`RefCell` for interior mutability of single fields.
@@ -205,6 +214,52 @@ Reconstruct with `..` if needed.
 - **Self-referential structs**: not expressible directly in safe Rust (the borrow checker can't describe the relationship); use crates like `ouroboros` or own the data.
 - **ZST struct**: `struct Marker;` has size 0.
 - **Field order and `Drop`**: struct fields drop in **declaration order** (RFC 1857), unlike locals which drop in reverse order. This can matter for field destructors that depend on each other.
+
+## 🧠 Spot the Bug
+
+Why does this fail to compile?
+
+::code-wrapper{language="rust"}
+```rust
+struct Inventory {
+    items: Vec<String>,
+    total_weight: f64,
+}
+
+impl Inventory {
+    fn add_item(&mut self, item: String, weight: f64) {
+        self.items.push(item);
+        self.total_weight += weight;
+    }
+
+    fn heaviest_summary(&mut self) -> &String {
+        let last = self.items.last().unwrap();
+        self.total_weight += 0.0;
+        last
+    }
+}
+
+fn main() {
+    let mut inv = Inventory { items: vec!["box".to_string()], total_weight: 5.0 };
+    let name = inv.heaviest_summary();
+    inv.add_item("crate".to_string(), 2.0);
+    println!("{name}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`error[E0502]: cannot borrow \`inv\` as mutable because it is also borrowed as immutable`.
+
+`heaviest_summary` takes `&mut self` and returns `&String` — a reference borrowed *from* `self.items`. Because the return value's lifetime is tied to `&mut self` (the only lifetime available in the signature), the compiler must treat the returned `&String` as keeping the **entire** `self` borrowed for as long as `name` is alive, even though the method body only actually needs a shared borrow of `self.items` to produce that reference. This is a well-known limitation of whole-struct borrowing through method signatures: the borrow checker can see disjoint *field* accesses within a single function body (as in the split-borrow patterns from the References chapter), but it cannot see through a method call's boundary — from the caller's perspective, `inv.heaviest_summary()` mutably borrows all of `inv`, full stop, for as long as `name` lives. The subsequent `inv.add_item(...)` call needs `&mut inv` too, which conflicts.
+
+The fix is to change `heaviest_summary` to take `&self` (it doesn't actually need to mutate anything — the `+= 0.0` is a red herring/smell) or to return an owned `String` (`.clone()`) if a genuine mutation is required alongside the borrow.
+
+**The lesson**: a method's return-value lifetime that borrows from `self` locks the *entire* receiver for the borrow's duration from the caller's point of view, even if the method body only touches one field — the borrow checker doesn't see inside function calls the way it sees inside a single function body.
+
+</details>
 
 ## `impl` Method Dispatch
 

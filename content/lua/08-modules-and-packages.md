@@ -338,6 +338,7 @@ return {helper = helper}
 
 **Create an `__init.lua` for packages** (Lua 5.4 style):
 
+::code-wrapper{language="lua"}
 ```lua
 -- mylib/__init.lua
 return {
@@ -345,18 +346,22 @@ return {
   models = require("mylib.models"),
 }
 ```
+::
 
 **Use `debug.getinfo()` to find calling module**:
 
+::code-wrapper{language="lua"}
 ```lua
 local function who_called_me()
   local info = debug.getinfo(2)
   return info.source
 end
 ```
+::
 
 **Lazy load expensive modules**:
 
+::code-wrapper{language="lua"}
 ```lua
 local M = {}
 local json = nil  -- load on first use
@@ -368,6 +373,7 @@ end
 
 return M
 ```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -387,6 +393,7 @@ return M
 
 What happens here?
 
+::code-wrapper{language="lua"}
 ```lua
 -- a.lua
 print("Loading A")
@@ -403,17 +410,20 @@ return {name = "B"}
 -- main.lua
 require("a")
 ```
+::
 
 <details>
 <summary>Answer</summary>
 
 Prints:
-```
+::code-wrapper{language="text"}
+```text
 Loading A
 Loading B
 Loaded A
 Loaded B
 ```
+::
 
 Here's why:
 - Require A: prints "Loading A", then requires B

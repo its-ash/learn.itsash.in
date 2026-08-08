@@ -43,6 +43,83 @@
   <url><loc>https://learn.itsash.in/lua/09-error-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua/10-io-and-files</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/01-introduction-and-how-llms-work</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/02-anatomy-of-a-prompt</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/03-zero-shot-and-few-shot-prompting</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/04-clarity-and-specificity</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/05-chain-of-thought-prompting</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/06-role-and-persona-prompting</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/07-output-formatting-and-structured-data</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/08-context-and-memory-management</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/09-iterative-refinement-and-prompt-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/10-decomposition-and-task-breakdown</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/11-self-consistency-and-verification</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/12-retrieval-augmented-generation-rag</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/13-tool-use-and-function-calling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/14-multi-agent-and-agentic-workflows</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/15-working-with-claude</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/16-working-with-gpt-and-other-models</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/17-handling-hallucination-and-uncertainty</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/18-prompt-injection-and-security</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/19-evaluating-and-testing-prompts-at-scale</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering/20-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/prompt-engineering</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/02-variables-and-data-types</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/03-operators-and-expressions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/04-control-flow</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/05-functions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/06-strings-and-text</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/07-lists-and-tuples</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/08-dictionaries-and-sets</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/09-comprehensions-and-generators</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/10-functional-programming</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/11-closures-and-decorators</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/12-classes-and-objects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/13-inheritance-and-polymorphism</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/14-magic-methods-and-protocols</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/15-properties-and-descriptors</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/16-error-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/17-modules-and-packages</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/18-file-io-and-serialization</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/19-iterators-and-context-managers</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/20-type-hints-and-typing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/21-concurrency-threading-and-multiprocessing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/22-async-await</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/23-metaprogramming</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/24-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/25-packaging-and-virtual-environments</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/26-performance-and-optimization</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/27-security</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python/28-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/python</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/02-jsx-deep-dive</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/03-components-and-props</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/04-state-and-usestate</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/05-event-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/06-useeffect-and-lifecycle</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/07-usecontext-and-prop-drilling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/08-useref-and-dom-access</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/09-usememo-and-usecallback</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/10-usereducer-and-complex-state</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/11-custom-hooks</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/12-conditional-rendering-patterns</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/13-lists-keys-and-reconciliation</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/14-forms-controlled-and-uncontrolled</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/15-composition-vs-inheritance</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/16-error-boundaries</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/17-fetching-data</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/18-context-and-state-management-libraries</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/19-routing-react-router</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/20-performance-optimization</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/21-concurrent-features</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/22-server-components-and-ssr</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/23-typescript-with-react</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/24-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/25-security</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react/26-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/react</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/rust/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/rust/02-hello-world-and-cargo</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/rust/03-variables-and-mutability</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
@@ -91,4 +168,29 @@
   <url><loc>https://learn.itsash.in/scala/10-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/scala/11-java-interoperability</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/scala</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/02-template-syntax-and-directives</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/03-reactivity-fundamentals</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/04-computed-and-watchers</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/05-components-basics</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/06-component-communication</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/07-composition-api-in-depth</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/08-lifecycle-hooks</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/09-forms-and-v-model</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/10-state-management-pinia</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/11-routing-vue-router</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/12-fetching-data-and-async</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/13-slots-and-scoped-slots</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/14-dynamic-and-async-components</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/15-custom-directives</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/16-teleport-and-suspense</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/17-typescript-with-vue</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/18-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/19-performance-optimization</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/20-ssr-and-nuxt-basics</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/21-build-tooling-and-vite</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/22-security</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/23-design-patterns</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue/24-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/vue</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
 </urlset>

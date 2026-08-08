@@ -324,7 +324,16 @@ let max = v.iter().max_by_key(|x| x.score);
 ```
 ::
 
-## Edge Cases & Pitfalls
+## 💡 Tips & Tricks
+
+- **Debug**: `.inspect(|x| eprintln!("{x:?}"))` spliced anywhere in a chain lets you peek at intermediate values without breaking the chain or changing its type — far less disruptive than temporarily `.collect()`ing to a `Vec` just to `println!` it.
+- **Idiom**: prefer `.filter_map(|x| ...)` over `.filter(...).map(...)` when the predicate and transformation both depend on the same computed `Option` — it avoids computing that value twice and is usually clearer besides.
+- **Performance**: `.copied()` is preferred over `.cloned()` for `Iterator<Item = &T> where T: Copy` — both compile down to a copy for `Copy` types, but `.copied()` documents the intent and fails to compile if `T` ever stops being `Copy`, catching an accidental future deep-clone at compile time.
+- **Idiom**: `std::iter::successors(Some(seed), |&x| next(x))` is an underused way to express "unfold" sequences (like a linked-list traversal or a Collatz sequence) lazily, without a manual `while let` loop and a `Vec` to collect into.
+- **Debug**: if `.collect()` gives a baffling type-inference error, add a turbofish (`.collect::<Vec<_>>()`) at the point of the error rather than trying to annotate the outer `let` — it isolates whether the ambiguity is really about the collection type.
+- **Performance**: `Vec::from_iter` and `.collect::<Vec<_>>()` will use `size_hint()` to pre-allocate when the iterator reports an exact or reasonable bound — chains that start from a `Vec`/slice `iter()` (which have exact size hints) collect with zero reallocations.
+
+## ⚠️ Edge Cases & Gotchas
 
 - **`collect` ambiguity**: if you write `let v = it.collect();` without a type annotation, you'll get an error. Always annotate.
 - **Iterator invalidation**: you can't mutate the underlying collection while iterating via a borrowed iterator. `Vec::retain` is the safe way to filter in place.
@@ -344,6 +353,55 @@ let max = v.iter().max_by_key(|x| x.score);
 - **Finding the index of an element**: `v.iter().position(|x| x == &target)` returns `Option<usize>`, not the element.
 - **Iterator adapters don't consume until collected or iterated**: `v.iter().map(|x| expensive(x))` does nothing until you `collect()` or `for x in`.
 - **Chaining empty iterators**: `std::iter::empty::<i32>().chain(v.iter())` is valid and useful for conditional chains.
+
+## 🧠 Spot the Bug
+
+What does this print?
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut iter = v.iter().map(|x| {
+        println!("mapping {x}");
+        x * 2
+    });
+
+    println!("about to consume");
+    let doubled_first = iter.next();
+    println!("got: {doubled_first:?}");
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+Output:
+::code-wrapper{language="rust"}
+```rust
+about to consume
+mapping 1
+got: Some(2)
+```
+::
+
+Not:
+::code-wrapper{language="rust"}
+```rust
+mapping 1
+mapping 2
+mapping 3
+about to consume
+got: Some(2)
+```
+::
+
+Iterators in Rust are **lazy** — `v.iter().map(|x| ...)` builds a chain of adapters but does no work at all until something actually pulls a value out of it. The closure passed to `.map()` doesn't run for every element up front; it runs exactly once per element, and only when that specific element is demanded. Calling `.next()` once demands exactly one element, so the closure prints "mapping 1" and stops — elements 2 and 3 are never touched because nothing asked for them. This trips up developers coming from languages (or from misremembering `Vec::iter().map(...).collect()` idioms) where transformation stages are commonly eager.
+
+**The lesson**: iterator adapters do no work until consumed, and they only do as much work as the consumer actually demands, element by element.
+
+</details>
 
 ## Iterator Tricks
 

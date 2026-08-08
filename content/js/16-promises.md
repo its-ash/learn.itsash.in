@@ -118,6 +118,7 @@ Promise.all([p1, p2, p3]) // all must fulfill
 
 What does this log?
 
+::code-wrapper{language="javascript"}
 ```javascript
 Promise.resolve(1)
   .then(x => x + 1)
@@ -129,6 +130,7 @@ Promise.resolve(1)
   .then(x => x + 2)
   .then(x => console.log(x))
 ```
+::
 
 <details>
 <summary>Answer</summary>
