@@ -73,12 +73,8 @@ useSeoMeta({
         <p class="font-mono text-xs uppercase tracking-widest text-c-muted-fg">
           {{ new Date().getFullYear() }} · Minimalist Monochrome
         </p>
-        <a
-          href="https://its-ash.github.io/"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="font-mono text-xs uppercase tracking-widest text-c-muted-fg underline underline-offset-4 hover:text-c-fg"
-        >
+        <a href="https://its-ash.github.io/" target="_blank" rel="noopener noreferrer"
+          class="font-mono text-xs uppercase tracking-widest text-c-muted-fg underline underline-offset-4 hover:text-c-fg">
           its-ash.github.io
         </a>
       </div>
