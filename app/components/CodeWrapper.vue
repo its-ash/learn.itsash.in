@@ -14,6 +14,8 @@ import xml from 'highlight.js/lib/languages/xml'
 import cssLang from 'highlight.js/lib/languages/css'
 import shell from 'highlight.js/lib/languages/shell'
 import dockerfile from 'highlight.js/lib/languages/dockerfile'
+import lua from 'highlight.js/lib/languages/lua'
+import scala from 'highlight.js/lib/languages/scala'
 
 hljs.registerLanguage('rust', rust)
 hljs.registerLanguage('python', python)
@@ -32,6 +34,8 @@ hljs.registerLanguage('css', cssLang)
 hljs.registerLanguage('shell', shell)
 hljs.registerLanguage('sh', shell)
 hljs.registerLanguage('dockerfile', dockerfile)
+hljs.registerLanguage('lua', lua)
+hljs.registerLanguage('scala', scala)
 
 const props = defineProps<{
     language?: string
