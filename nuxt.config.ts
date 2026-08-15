@@ -63,6 +63,12 @@ export default defineNuxtConfig({
       routes: ["/", "/sitemap.xml", ...contentRoutes, "/404.html"],
       failOnError: false,
     },
+    routeRules: {
+      "/site.webmanifest": { static: true },
+      "/manifest.webmanifest": { redirect: "/site.webmanifest" },
+      "/robots.txt": { static: true },
+      "/favicon.png": { static: true },
+    },
   },
   content: {
     build: {

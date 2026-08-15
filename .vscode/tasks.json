@@ -4,7 +4,7 @@
 		{
 			"label": "deploy",
 			"type": "shell",
-			"command": "npm rebuild better-sqlite3 && npm run generate && git add . && (claude commit -m \"deploy: regenerate static site\" || copilot commit -m \"deploy: regenerate static site\" || git commit -m \"deploy: regenerate static site\") && git push",
+			"command": "npm rebuild better-sqlite3 && npm run generate && git add . && MSG=$(claude -p --allow-dangerously-skip-permissions \"Generate a concise conventional commit message for the staged changes. Output only the message on a single line, no quotes, no code blocks.\" 2>/dev/null || copilot -p --allow-all \"Generate a concise conventional commit message for the staged changes. Output only the message on a single line, no quotes, no code blocks.\" 2>/dev/null || echo \"deploy: regenerate static site\") && git commit -m \"$MSG\" && git push",
 			"problemMatcher": [],
 			"group": "build"
 		},

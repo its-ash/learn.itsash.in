@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { theme, init, cycle } = useTheme()
+const { size, init: initFont, increase, decrease } = useFontSize()
 const route = useRoute()
 
 const links = [
@@ -14,7 +15,10 @@ const iconMap: Record<string, string> = {
     warm: 'material-symbols:wb-sunny-outline',
 }
 
-onMounted(init)
+onMounted(() => {
+    init()
+    initFont()
+})
 </script>
 
 <template>
@@ -26,8 +30,24 @@ onMounted(init)
             </NuxtLink>
 
             <nav class="flex items-center gap-2 md:gap-6">
+                <div class="flex items-center border border-c-fg">
+                    <button type="button" aria-label="Decrease font size"
+                        class="flex h-10 w-9 items-center justify-center transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline-2 focus-visible:outline-offset-3 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-c-fg"
+                        :disabled="size <= 14" @click="decrease">
+                        <Icon name="material-symbols:text-decrease" size="20" stroke-width="1.5" />
+                    </button>
+                    <span class="flex h-10 w-10 items-center justify-center border-x border-c-fg text-xs font-mono" aria-live="polite">
+                        {{ size }}
+                    </span>
+                    <button type="button" aria-label="Increase font size"
+                        class="flex h-10 w-9 items-center justify-center transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline-2 focus-visible:outline-offset-3 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-c-fg"
+                        :disabled="size >= 28" @click="increase">
+                        <Icon name="material-symbols:text-increase" size="20" stroke-width="1.5" />
+                    </button>
+                </div>
+
                 <button type="button" :aria-label="'Theme: ' + theme"
-                    class="flex h-10 w-10 items-center justify-center border border-c-fg transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-3"
+                    class="flex h-10 w-10 items-center justify-center border border-c-fg transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline-2 focus-visible:outline-offset-3"
                     @click="cycle">
                     <Icon :name="iconMap[theme]" size="20" stroke-width="1.5" />
                 </button>
