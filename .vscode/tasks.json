@@ -1,0 +1,20 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "deploy",
+			"type": "shell",
+			"command": "npm rebuild better-sqlite3 && npm run generate && git add . && (claude commit -m \"deploy: regenerate static site\" || copilot commit -m \"deploy: regenerate static site\" || git commit -m \"deploy: regenerate static site\") && git push",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "run",
+			"type": "shell",
+			"command": "npm rebuild better-sqlite3 && npm run dev",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
