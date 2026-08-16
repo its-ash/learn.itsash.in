@@ -63,6 +63,7 @@
 }
 
 .md-prose li {
+  overflow-x: auto;
   @apply relative pl-8 leading-relaxed;
 }
 

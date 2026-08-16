@@ -35,6 +35,20 @@
   --c-texture: #ffffff;
 }
 
+:root {
+  --text-brightness: 1;
+}
+
+.dark body :where(h1, h2, h3, h4, h5, h6, p, li, blockquote, td, th, span, a, strong, em, small) {
+  opacity: var(--text-brightness);
+  transition: opacity 0.15s ease;
+}
+
+.dark body pre,
+.dark body pre * {
+  opacity: 1 !important;
+}
+
 .warm {
   --c-bg: #faf6f0;
   --c-fg: #2b2419;

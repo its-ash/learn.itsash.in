@@ -56,7 +56,7 @@ const breadcrumbs = computed(() => {
 const pageTitle = computed(() => {
   const title = page.value?.title || page.value?.meta?.title
   if (title) return title as string
-  const h1 = page.value?.body?.toc?.title
+  const h1 = page?.value?.body?.toc?.title
   if (h1) return h1
   return breadcrumbs.value.at(-1)?.label || 'Page'
 })

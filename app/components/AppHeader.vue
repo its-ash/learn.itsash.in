@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const { theme, init, cycle } = useTheme()
 const { size, init: initFont, increase, decrease } = useFontSize()
+const { brightness, init: initBright, increase: brightUp, decrease: brightDown } = useBrightness()
 const route = useRoute()
 
 const links = [
@@ -18,6 +19,7 @@ const iconMap: Record<string, string> = {
 onMounted(() => {
     init()
     initFont()
+    initBright()
 })
 </script>
 
@@ -43,6 +45,22 @@ onMounted(() => {
                         class="flex h-10 w-9 items-center justify-center transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline-2 focus-visible:outline-offset-3 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-c-fg"
                         :disabled="size >= 28" @click="increase">
                         <Icon name="material-symbols:text-increase" size="20" stroke-width="1.5" />
+                    </button>
+                </div>
+
+                <div v-if="theme === 'dark'" class="flex items-center border border-c-fg">
+                    <button type="button" aria-label="Decrease text brightness"
+                        class="flex h-10 w-9 items-center justify-center transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline-2 focus-visible:outline-offset-3 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-c-fg"
+                        :disabled="brightness <= 40" @click="brightDown">
+                        <Icon name="material-symbols:brightness-low" size="20" stroke-width="1.5" />
+                    </button>
+                    <span class="flex h-10 w-10 items-center justify-center border-x border-c-fg text-xs font-mono" aria-live="polite">
+                        {{ brightness }}%
+                    </span>
+                    <button type="button" aria-label="Increase text brightness"
+                        class="flex h-10 w-9 items-center justify-center transition-colors duration-100 hover:bg-c-fg hover:text-c-bg focus-visible:outline-2 focus-visible:outline-offset-3 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-c-fg"
+                        :disabled="brightness >= 100" @click="brightUp">
+                        <Icon name="material-symbols:brightness-high" size="20" stroke-width="1.5" />
                     </button>
                 </div>
 
