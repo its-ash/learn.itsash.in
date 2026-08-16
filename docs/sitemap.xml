@@ -1,6 +1,94 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://learn.itsash.in/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://learn.itsash.in/bash/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/02-variables-and-data-types</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/03-operators-and-expansions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/04-control-flow</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/05-functions-and-scope</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/06-text-processing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/07-file-system-and-io</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/08-processes-and-signals</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/09-arrays</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/10-string-manipulation</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/11-command-line-arguments</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/12-debugging-and-error-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/13-best-practices</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/14-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash/15-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/bash</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/02-selectors-and-specificity</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/03-box-model</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/04-colors-and-units</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/05-typography-and-text</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/06-display-and-positioning</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/07-flexbox</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/08-css-grid</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/09-responsive-design</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/10-floats-and-positioning</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/11-backgrounds-and-gradients</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/12-borders-shadows-and-outlines</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/13-animations-and-transitions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/14-filters-blend-modes-and-masking</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/15-css-variables</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/16-logical-properties-and-writing-modes</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/17-modern-css-features</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/18-architecture-and-methodology</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/19-performance</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/20-browser-compatibility</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/21-preprocessors-and-build-tools</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css/22-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/css</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/02-variables-and-data-types</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/03-operators-and-expressions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/04-control-flow</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/05-functions-and-scope</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/06-collections</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/07-classes-and-objects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/08-null-safety</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/09-async-programming</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/10-isolates-and-concurrency</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/11-error-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/12-generics</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/13-packages-and-libraries</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/14-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/15-dart-for-the-web</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/16-flutter-essentials</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/17-server-side-dart</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/18-tooling-and-ecosystem</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart/19-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/dart</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/02-hello-world-and-go-command</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/03-variables-constants-and-types</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/04-basic-types-and-conversions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/05-functions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/06-control-flow</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/07-arrays-slices-and-strings</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/08-maps</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/09-structs</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/10-pointers</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/11-methods-and-receivers</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/12-interfaces</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/13-type-assertions-and-switches</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/14-generics</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/15-error-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/16-goroutines</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/17-channels</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/18-select-and-multiplexing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/19-sync-package</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/20-context</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/21-packages-and-modules</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/22-io-and-files</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/23-encoding</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/24-time-and-dates</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/25-testing-and-benchmarking</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/26-concurrency-patterns</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/27-profiling-and-performance</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go/28-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/go</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/js/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/js/02-variables-and-data-types</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/js/03-operators-and-expressions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
@@ -168,6 +256,37 @@
   <url><loc>https://learn.itsash.in/scala/10-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/scala/11-java-interoperability</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/scala</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/02-select-basics-and-filtering</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/03-sorting-and-pagination</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/04-joins</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/05-aggregation-and-group-by</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/06-subqueries</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/07-common-table-expressions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/08-set-operations</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/09-window-functions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/10-data-types-and-null</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/11-tables-and-ddl</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/12-constraints-and-keys</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/13-indexes-and-performance</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/14-insert-update-delete</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/15-transactions-and-isolation</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/16-views-and-materialized-views</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/17-date-and-time</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/18-json-and-arrays</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/19-recursive-queries</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/20-full-text-search</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/21-triggers-and-events</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/22-stored-procedures-and-functions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/23-sequences-and-identifiers</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/24-security-and-roles</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/25-normalization</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/26-query-optimization</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/27-advanced-patterns</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/28-database-administration</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/29-common-pitfalls</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql/30-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/sql</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/vue/01-introduction-and-setup</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/vue/02-template-syntax-and-directives</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/vue/03-reactivity-fundamentals</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
