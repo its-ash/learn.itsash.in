@@ -234,7 +234,7 @@ func getLogger(verbose bool) Logger {
 	return &nullLogger{}
 }
 ```
-
+::
 Now `l == nil` is `true`, and the caller's nil check works.
 
 **The lesson**: returning a nil concrete pointer wraps it in a non-nil interface. To return a "nil" interface, return `nil` directly. This is the #1 interface gotcha — and it's invisible because the method may work (if nil-safe) until someone adds a field access.

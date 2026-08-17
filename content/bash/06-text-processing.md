@@ -19,7 +19,7 @@ grep -B 2 "error" log.txt        # 2 lines before
 grep -C 2 "error" log.txt        # 2 lines around
 grep -q "error" log.txt          # quiet (exit status only, no output)
 ```
-
+::
 ### Basic vs extended regex
 
 - `grep` (BRE): `.`, `*`, `[...]`, `^`, `$`, `\{n,m\}`, `\(\)`, `\|` (escaped).
@@ -42,7 +42,7 @@ sed '/pattern/d' file.txt        # delete matching lines
 sed '5d' file.txt                # delete line 5
 sed 's/  */ /g' file.txt         # collapse multiple spaces to one
 ```
-
+::
 ### `sed` with different delimiters
 
 ::code-wrapper{language="bash"}
@@ -50,7 +50,7 @@ sed 's/  */ /g' file.txt         # collapse multiple spaces to one
 sed 's|/usr/local/bin|/opt/bin|g'   # | delimiter (for paths with /)
 sed 's#old#new#g'                    # # delimiter
 ```
-
+::
 When the pattern contains `/` (paths), use a different delimiter (`|`, `#`, `:`).
 
 ## `awk` (field processing)
@@ -68,7 +68,7 @@ awk '/error/ {print}' log.txt          # matching lines
 awk 'NR > 1' file.txt                  # skip header
 awk '{print NF}' file.txt              # number of fields per line
 ```
-
+::
 `awk` is powerful:
 - `$0` = whole line, `$1`/`$2` = fields, `NF` = field count, `NR` = line number.
 - `-F` sets the field separator.
@@ -84,7 +84,7 @@ cut -d: -f1 /etc/passwd      # usernames (first field, : delimited)
 cut -c1-10 file.txt          # characters 1-10
 cut -c-5 file.txt            # first 5 characters
 ```
-
+::
 `cut` is simpler than `awk` for fixed-delimiter field extraction.
 
 ## `sort` and `uniq`
@@ -105,7 +105,7 @@ sort file.txt | uniq -c       # count occurrences
 sort file.txt | uniq -d       # duplicate lines only
 sort file.txt | uniq -u       # unique lines only (no duplicates)
 ```
-
+::
 `uniq` removes *adjacent* duplicate lines — pipe through `sort` first to group duplicates. `uniq -c` counts occurrences (frequency).
 
 ## `tr` (translate characters)
@@ -119,7 +119,7 @@ echo "hello" | tr -d 'l'                 # heo (delete)
 echo "hello world" | tr -s ' '           # hello world (squeeze repeats)
 echo "hello" | tr -dc 'a-z'              # only a-z (delete complement)
 ```
-
+::
 `tr` operates on characters (not patterns). Useful for case conversion, deleting characters, squeezing repeats.
 
 ## `head` and `tail`
@@ -134,7 +134,7 @@ tail -n 20 file.txt          # last 20 lines
 tail -f log.txt              # follow (stream new lines)
 tail -n +5 file.txt          # from line 5 to end
 ```
-
+::
 `tail -f` streams a file (for logs). `tail -n +N` skips the first N-1 lines.
 
 ## `wc` (word count)
@@ -147,7 +147,7 @@ wc -w file.txt       # words only
 wc -c file.txt       # bytes only
 wc -m file.txt       # characters only
 ```
-
+::
 ## `paste` and `column`
 
 ::code-wrapper{language="bash"}
@@ -157,7 +157,7 @@ paste -d',' file1 file2         # comma-delimited
 column -t file.txt              # align columns (pretty print)
 column -s',' -t file.csv        # CSV as table
 ```
-
+::
 ## Pipelines
 
 Combine tools with `|`:
@@ -179,7 +179,7 @@ awk 'length > 80' file.txt
 # Find the largest files
 du -s * | sort -rn | head -10
 ```
-
+::
 Pipelines chain tools — each command's stdout is the next's stdin. This is the Unix philosophy: small tools, composed.
 
 ## 💡 Tips & Tricks
@@ -225,7 +225,7 @@ The fix — `sort` before `uniq` (to group duplicates together):
 ```bash
 sort file.txt | uniq > deduped.txt
 ```
-
+::
 `sort` groups identical lines adjacently, then `uniq` removes the duplicates.
 
 Or, use `sort -u` (sort + dedup in one):
@@ -233,13 +233,13 @@ Or, use `sort -u` (sort + dedup in one):
 ```bash
 sort -u file.txt > deduped.txt
 ```
-
+::
 If you need to preserve the original order of first occurrences, use `awk`:
 
 ```bash
 awk '!seen[$0]++' file.txt > deduped.txt
 ```
-
+::
 This prints each line only the first time it's seen (using an associative array to track seen lines), preserving order.
 
 **The lesson**: `uniq` only removes adjacent duplicates. Always `sort | uniq` (or `sort -u`) to dedup. For order-preserving dedup, `awk '!seen[$0]++'`.

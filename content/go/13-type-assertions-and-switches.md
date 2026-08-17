@@ -156,7 +156,7 @@ var d Data
 json.Unmarshal([]byte(`{"count": 42}`), &d)
 // d.Count == 42
 ```
-
+::
 Option 4 (typed struct) is the idiomatic way for known schemas — it avoids the `interface{}`/type-assertion dance entirely. Use `interface{}` only for dynamic/unknown schemas.
 
 **The lesson**: `json.Unmarshal` into `interface{}` makes numbers `float64` (not `int`). Type-asserting to `int` panics. Assert to `float64` and convert, use `UseNumber`, or unmarshal into a struct.

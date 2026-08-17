@@ -19,7 +19,7 @@ ls -lt               # by modification time (newest first)
 ls -lh               # human-readable sizes
 ls -R                # recursive
 ```
-
+::
 ## File Operations
 
 ::code-wrapper{language="bash"}
@@ -38,7 +38,7 @@ mkdir -p path/to/dir      # create parents (no error if exists)
 touch file.txt            # create empty file / update timestamp
 ln -s target linkname     # symbolic link
 ```
-
+::
 ### Safe `rm`
 
 `rm -rf` is dangerous (a typo like `rm -rf $var/ *` with empty `$var` → `rm -rf / *`). Mitigations:
@@ -61,7 +61,7 @@ chown user file       # change owner
 chown user:group file # owner + group
 chgrp group file      # change group
 ```
-
+::
 ### Octal permissions
 
 - 7 = rwx (4+2+1)
@@ -88,7 +88,7 @@ cmd >> file 2>&1      # append both
 cmd 2> /dev/null      # discard stderr
 cmd > /dev/null 2>&1  # discard all output
 ```
-
+::
 ### File descriptors
 
 - 0 = stdin, 1 = stdout, 2 = stderr.
@@ -97,7 +97,7 @@ cmd > /dev/null 2>&1  # discard all output
 ```bash
 cmd 2>&1 | grep "error"   # pipe stderr (and stdout) to grep
 ```
-
+::
 Order matters: `cmd 2>&1 > file` sends stderr to the old stdout (terminal), then stdout to file — stderr still goes to terminal. `cmd > file 2>&1` sends stdout to file, then stderr to the new stdout (file) — both to file.
 
 ### stdin redirection
@@ -112,7 +112,7 @@ EOF
 
 cmd <<< "string"      # here-string (single string as stdin)
 ```
-
+::
 ### Heredocs
 
 ::code-wrapper{language="bash"}
@@ -127,7 +127,7 @@ cat <<'EOF'
 $USER is literal
 EOF
 ```
-
+::
 `<<EOF` — heredoc (multi-line input). `<<'EOF'` (quoted) — no variable expansion. `<<-EOF` — strips leading tabs (for indentation).
 
 ## Finding Files
@@ -150,7 +150,7 @@ find . -exec grep -l "pattern" {} +   # grep in each found file
 find . -exec chmod 644 {} \;      # run command on each (one per file)
 find . -exec chmod 644 {} +       # batch (multiple files per command, faster)
 ```
-
+::
 `-exec ... {} \;` runs the command once per file. `-exec ... {} +` batches (faster). `{}` is the file placeholder.
 
 ### Safe `find` with spaces
@@ -162,7 +162,7 @@ find . -name "*.txt" -print0 | while IFS= read -r -d '' file; do
 	echo "Found: $file"
 done
 ```
-
+::
 `-print0` separates with null bytes; `read -d ''` reads null-delimited. The only safe way to handle arbitrary filenames.
 
 ### `fd` (modern alternative)
@@ -174,7 +174,7 @@ fd -e py              # by extension
 fd -H pattern         # include hidden
 fd -t f pattern       # files only
 ```
-
+::
 `fd` (install separately) is faster, defaults to regex, respects `.gitignore`. Consider it for interactive use.
 
 ## Globbing (recap)
@@ -184,7 +184,7 @@ fd -t f pattern       # files only
 *.txt               # .txt files
 **/*.py             # recursive (shopt -s globstar)
 ```
-
+::
 ## `stat` and `file`
 
 ::code-wrapper{language="bash"}
@@ -192,7 +192,7 @@ fd -t f pattern       # files only
 stat file.txt       # file metadata (size, times, permissions)
 file file.txt       # file type (text, binary, image, etc.)
 ```
-
+::
 ## Disk Usage
 
 ::code-wrapper{language="bash"}
@@ -202,7 +202,7 @@ du -sh *            # size of each item in current dir
 du -sh * | sort -rh # largest first
 df -h               # disk space (human-readable)
 ```
-
+::
 ## Temp Files
 
 ::code-wrapper{language="bash"}
@@ -211,7 +211,7 @@ tmpfile=$(mktemp)                # create a temp file
 tmpdir=$(mktemp -d)              # create a temp directory
 trap 'rm -f "$tmpfile"; rm -rf "$tmpdir"' EXIT   # cleanup on exit
 ```
-
+::
 **Always use `mktemp`** (not `$RANDOM` or predictable names) and `trap` for cleanup. Avoid `/tmp/myscript.$$` (predictable, symlink attacks).
 
 ## 💡 Tips & Tricks
@@ -261,13 +261,13 @@ The fix — redirect stdout first, then stderr:
 ```bash
 cmd > output.txt 2>&1   # stdout to file, then stderr to the new stdout (file)
 ```
-
+::
 Or use Bash's `&>`:
 
 ```bash
 cmd &> output.txt   # both stdout and stderr to file (Bash shorthand)
 ```
-
+::
 Now:
 1. `> output.txt` — stdout (fd 1) → file.
 2. `2>&1` — stderr (fd 2) → the current stdout (fd 1), which is now the file.

@@ -281,7 +281,7 @@ function M.funcB()
 end
 return M
 ```
-
+::
 Solution: delay the require or use a different pattern:
 
 ::code-wrapper{language="lua"}

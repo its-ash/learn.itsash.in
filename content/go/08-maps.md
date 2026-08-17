@@ -164,14 +164,14 @@ u := users[1]      // copy out
 u.Active = true    // modify the copy
 users[1] = u       // assign back
 ```
-
+::
 Or store pointers (then the map value is a pointer, which is addressable):
 
 ```go
 users := map[int]*User{1: {"Alice", false}}
 users[1].Active = true   // OK — users[1] is a *User, and the pointed-to struct is modifiable
 ```
-
+::
 The pointer approach is more efficient for large structs (no copy) but adds allocation (the struct lives on the heap) and requires nil-checking (a map of pointers can have nil values).
 
 **The lesson**: map values aren't addressable (entries can move during rehashing). To modify a struct field in a map, copy out, modify, assign back — or store `*Struct` values.

@@ -252,7 +252,7 @@ SELECT name FROM customers WHERE city <> 'NYC' OR city IS NULL;
 -- If "not NYC" means "known to be a city other than NYC" (NULLs excluded):
 SELECT name FROM customers WHERE city <> 'NYC';
 ```
-
+::
 `IS DISTINCT FROM` is the NULL-safe "not equal" — it treats NULL and NULL as *not* distinct (so `NULL IS DISTINCT FROM NULL` = FALSE), and NULL and `'NYC'` as distinct (TRUE). It's the cleanest expression of "different from X, counting NULL as a real value." Its only downside is that it can't use a plain B-tree index, so on large tables the `OR city IS NULL` form (which can use an index on `city` plus a scan for NULLs) may be faster.
 
 **The lesson**: `<>` and `!=` silently drop NULLs. If NULL is a meaningful category in your data (not just "missing"), use `IS DISTINCT FROM` or explicitly handle `IS NULL`.

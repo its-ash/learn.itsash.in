@@ -18,7 +18,7 @@ void greet(String name) {
 	print('Hello, $name');
 }
 ```
-
+::
 `=>` is shorthand for `{ return expr; }` — use for single-expression functions. `void` means no return value.
 
 ## Parameters
@@ -30,7 +30,7 @@ void greet(String name) {
 int add(int a, int b) => a + b;
 add(2, 3);   // 5
 ```
-
+::
 ### Optional positional (in `[...]`)
 
 ::code-wrapper{language="dart"}
@@ -41,7 +41,7 @@ String greet(String name, [String? title]) {
 greet('Alice');           // 'Alice'
 greet('Alice', 'Dr.');    // 'Dr. Alice'
 ```
-
+::
 Optional positional params are in `[...]`, nullable (or with a default). They must come after required params.
 
 ### Named parameters (in `{...}`)
@@ -53,7 +53,7 @@ createUser(name: 'Alice', age: 30);
 createUser(age: 30, name: 'Alice');   // order doesn't matter
 createUser();                          // both null
 ```
-
+::
 Named params are in `{...}`, passed by name. They're optional by default.
 
 ### Required named params (`required`)
@@ -64,7 +64,7 @@ void createUser({required String name, required int age}) { ... }
 createUser(name: 'Alice', age: 30);   // ✓
 // createUser(name: 'Alice');          // ✗ age is required
 ```
-
+::
 `required` makes a named param mandatory.
 
 ### Default values
@@ -77,7 +77,7 @@ void greet(String name, {String greeting = 'Hello'}) {
 greet('Alice');                      // 'Hello, Alice'
 greet('Alice', greeting: 'Hi');      // 'Hi, Alice'
 ```
-
+::
 Defaults apply to optional params (positional or named). The default must be a compile-time constant.
 
 ## `var` in parameters
@@ -88,7 +88,7 @@ Dart 3 allows `var` or explicit type:
 ```dart
 int add(var a, var b) => a + b;   // a, b are inferred (but no type annotation)
 ```
-
+::
 Prefer explicit types for public APIs; `var` is fine for private/local.
 
 ## First-Class Functions
@@ -104,7 +104,7 @@ void apply(Function fn) {   // Function as a parameter
 
 apply(() => print('Called'));
 ```
-
+::
 Functions are objects (type `Function`). You can pass them, return them, store them.
 
 ### Typedefs (function types)
@@ -116,7 +116,7 @@ typedef IntOperation = int Function(int a, int b);
 IntOperation add = (a, b) => a + b;
 IntOperation multiply = (a, b) => a * b;
 ```
-
+::
 `typedef` names a function type — clearer than writing `int Function(int, int)` everywhere. Use for callbacks and higher-order functions.
 
 ## Closures
@@ -134,7 +134,7 @@ var add10 = makeAdder(10);
 add5(3);    // 8
 add10(3);   // 13
 ```
-
+::
 Each call to `makeAdder` captures its own `increment`. Closures keep the captured variables alive.
 
 ## Scope
@@ -159,7 +159,7 @@ void outer() {
 	// print(innerVar);   // ✗ out of scope
 }
 ```
-
+::
 Nested functions can access variables from all enclosing scopes. The scope is nested visually (by braces).
 
 ## `async` and `await` (brief; chapter 11 in depth)
@@ -176,7 +176,7 @@ void main() async {
 	print(user);
 }
 ```
-
+::
 `async` marks a function as asynchronous; it returns a `Future`. `await` waits for a `Future` to complete. See chapter 11 for details.
 
 ## Generators (`sync*` / `async*`)
@@ -196,7 +196,7 @@ Stream<int> asyncNaturals() async* {
 	}
 }
 ```
-
+::
 `sync*` returns an `Iterable` (lazy, sync); `yield` produces a value. `async*` returns a `Stream` (lazy, async); `yield` produces a value. Generators are lazy — values are produced on demand.
 
 ## `call()` method
@@ -214,7 +214,7 @@ class Multiplier {
 var triple = Multiplier(3);
 triple(5);   // 15 — calls triple.call(5)
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use named parameters (`{...}`) for functions with many optional params or boolean flags — `createUser(name: 'Alice', admin: true)` is clearer than `createUser('Alice', null, true)`. Named params self-document at the call site.
@@ -270,7 +270,7 @@ for (var i = 0; i < 3; i++) {
 }
 print(callbacks.map((f) => f()).toList());   // [0, 1, 2]
 ```
-
+::
 Or use `for-in` with a collection (each item is fresh):
 
 ```dart
@@ -278,7 +278,7 @@ for (var i in [0, 1, 2]) {
 	callbacks.add(() => i);   // i is the list item, fresh per iteration? Actually same issue
 }
 ```
-
+::
 Actually, `for-in` in Dart also reuses the loop variable. The safe pattern is the `final captured = i;` inside the loop body.
 
 **The lesson**: Dart's `for` loop variable is a single variable reassigned each iteration. Closures capture it by reference, so all closures see the final value. To capture per-iteration, assign to a fresh `final` local inside the loop body.

@@ -22,7 +22,7 @@ x=5
 y=3
 ((result = x + y))   # result = 16 + 3 = 19
 ```
-
+::
 `((...))` evaluates arithmetic. Variables don't need `$` inside. It returns exit status 0 (true) if the result is non-zero, 1 (false) if zero. Use for all integer math.
 
 ### `$((...))` (arithmetic expansion)
@@ -36,7 +36,7 @@ echo "$((17 % 5))"     # 2 (modulo)
 echo "$((17 / 5))"     # 3 (integer division, truncated)
 echo "$((-5 / 2))"     # -2 (truncates toward zero, not floor)
 ```
-
+::
 `$((...))` expands to the result (you can use it in a command). Integer division truncates toward zero. `**` is exponentiation.
 
 ### Operators
@@ -56,7 +56,7 @@ echo "${name/Alice/Bob}"  # Bob (replace first)
 echo "${name//i/I}"       # AlIce (replace all)
 echo "${name^^}"          # ALICE (uppercase, Bash 4+)
 ```
-
+::
 ## Test (`[...]/[[...]]`)
 
 ### `[... ]` (POSIX `test`)
@@ -68,7 +68,7 @@ if [ -f "file.txt" ]; then echo "exists"; fi
 if [ "$str" = "hello" ]; then echo "match"; fi
 if [ -z "$var" ]; then echo "empty"; fi
 ```
-
+::
 ### `[[... ]]` (Bash extension — preferred)
 
 ::code-wrapper{language="bash"}
@@ -80,7 +80,7 @@ if [[ $str == h* ]]; then echo "starts with h"; fi   # pattern matching (no rege
 if [[ $str =~ ^[0-9]+$ ]]; then echo "digits only"; fi  # regex
 if [[ -z $var ]]; then echo "empty"; fi
 ```
-
+::
 `[[... ]]` is safer and more powerful than `[... ]`:
 - No word-splitting/globbing (no need to quote `$x`).
 - `==` and `=` are equivalent (use `==` for clarity).
@@ -132,7 +132,7 @@ current_dir=$(pwd)
 file_count=$(ls | wc -l)
 echo "Today is $(date +%Y-%m-%d)"
 ```
-
+::
 `$(...)` runs a command and substitutes its output. Preferred over backticks `` `...` `` (nestable, readable).
 
 ## Process Substitution `<(...) >(...)`
@@ -147,7 +147,7 @@ while read line; do
 	echo "$line"
 done < <(grep "error" log.txt)
 ```
-
+::
 `<(...)` creates a temporary file descriptor for a command's output. `>(...)` for input. Avoids temp files.
 
 ## Brace Expansion
@@ -160,7 +160,7 @@ echo file{1..3}.txt      # file1.txt file2.txt file3.txt
 echo {foo,bar,baz}       # foo bar baz
 mkdir -p project/{src,lib,test}   # creates project/src, project/lib, project/test
 ```
-
+::
 Brace expansion generates strings — ranges (`{1..5}`), lists (`{a,b,c}`), prefixes/suffixes. Expanded *before* other expansions (doesn't require files to exist, unlike globs).
 
 ## Tilde Expansion
@@ -171,7 +171,7 @@ echo ~           # /home/user (home directory)
 echo ~root       # /root (root's home)
 cd ~/Documents   # home/Documents
 ```
-
+::
 ## Globbing (Filename Expansion)
 
 ::code-wrapper{language="bash"}
@@ -182,20 +182,20 @@ file?.txt       # file1.txt, fileA.txt (single char)
 file[0-9].txt   # file0.txt … file9.txt (char class)
 **/*.py         # recursive (with shopt -s globstar)
 ```
-
+::
 ::code-wrapper{language="bash"}
 ```bash
 shopt -s globstar   # enable ** for recursive
 echo **/*.py        # all .py files, recursively
 ```
-
+::
 If no files match, the glob is passed literally (unless `nullglob` is set):
 
 ::code-wrapper{language="bash"}
 ```bash
 shopt -s nullglob   # no match → empty (not literal)
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `((...))` for arithmetic (not `expr` or `[... ]` with `-eq`) — `((x++))` and `((x > 5))` are clear, fast (no subprocess), and Bash-native. `$((...))` expands the result for use in a command.
@@ -251,7 +251,7 @@ if [[ $x == "hello" ]]; then
 	echo "match"
 fi
 ```
-
+::
 With quotes, `"$x"` becomes an empty string `""`, so `[ "" = "hello" ]` is a valid test (false). With `[[ ]]`, word-splitting doesn't happen, so `$x` (empty) is safe without quotes.
 
 **The lesson**: in `[... ]` (POSIX test), always quote variables: `"$x"`. An unquoted empty variable disappears, causing syntax errors (`[ = "hello" ]`). `[[... ]]` (Bash) is safer — no word-splitting, no quoting required. Prefer `[[ ]]` in Bash scripts.

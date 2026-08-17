@@ -295,7 +295,7 @@ FROM orders
 GROUP BY day
 ORDER BY day;
 ```
-
+::
 `ordered_on AT TIME ZONE 'America/New_York'` converts the `TIMESTAMPTZ` to a `TIMESTAMP` (wall time in New York), then `date_trunc('day', ...)` truncates that wall time to New York midnight. The result is stable regardless of the session's `TimeZone` setting.
 
 **The lesson**: `date_trunc('day', ts)` truncates in the **session zone**, which may not be the business zone. For reports that must group by "business day in New York," convert to the business zone (`AT TIME ZONE 'America/New_York'`) before truncating, so the result doesn't depend on the session's `TimeZone`.

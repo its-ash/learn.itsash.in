@@ -235,7 +235,7 @@ func reverse(s string) string {
 }
 fmt.Println(reverse("Hello, 世界"))   // "界世 ,olleH"
 ```
-
+::
 `[]rune(s)` decodes the UTF-8 into a slice of code points; reversing that slice preserves each character; `string(r)` re-encodes to UTF-8.
 
 **The lesson**: Go strings are byte sequences (usually UTF-8). For character-level manipulation, work in `[]rune`; for byte-level (network, hashing), work in `[]byte`. Reversing bytes breaks multi-byte characters.

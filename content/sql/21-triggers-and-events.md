@@ -245,7 +245,7 @@ CREATE TRIGGER touch_modified_at
   WHEN (NEW IS DISTINCT FROM OLD)   -- only fire if something actually changed
   EXECUTE FUNCTION update_modified_at();
 ```
-
+::
 `NEW IS DISTINCT FROM OLD` is false when the new and old rows are identical (it's NULL-safe, unlike `NEW <> OLD`), so the trigger skips no-op updates. This avoids spurious `modified_at` bumps and saves the function-call overhead on updates that don't change anything.
 
 **The lesson**: `UPDATE` fires the trigger even if no columns changed — PostgreSQL writes a new row version regardless (MVCC). Use `WHEN (NEW IS DISTINCT FROM OLD)` to make "modified_at" reflect actual modifications, not statement execution.

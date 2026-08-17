@@ -250,7 +250,7 @@ ON CONFLICT (key) DO UPDATE SET value = counters.value + EXCLUDED.value;
 INSERT INTO counters (key, value) VALUES ('visits', 1)
 ON CONFLICT (key) DO UPDATE SET value = counters.value + 1;
 ```
-
+::
 `counters.value` is the existing row's value; `EXCLUDED.value` is the value from the `VALUES` clause (the "excluded" insert that lost the conflict). For an increment-on-conflict, you want the existing value plus the proposed increment — `counters.value + EXCLUDED.value`.
 
 **The lesson**: `DO UPDATE SET col = <literal>` overwrites; `DO UPDATE SET col = table.col + EXCLUDED.col` accumulates. Always reference `EXCLUDED` for the proposed values and the table name for existing values; don't restate the literal.

@@ -13,7 +13,7 @@ String? maybeName;        // nullable, can be null
 maybeName = null;         // ✓
 maybeName = 'Bob';        // ✓
 ```
-
+::
 `String` can never be null. `String?` can be null or a `String`. The compiler tracks this and prevents null-dereference errors.
 
 ## Null-Aware Operators (recap)
@@ -25,7 +25,7 @@ maybeName = 'Bob';        // ✓
 String? name;
 int? length = name?.length;   // null (name is null, no call)
 ```
-
+::
 ### `??` (if-null)
 
 ::code-wrapper{language="dart"}
@@ -33,7 +33,7 @@ int? length = name?.length;   // null (name is null, no call)
 String? name;
 String display = name ?? 'Anonymous';   // 'Anonymous'
 ```
-
+::
 ### `??=` (null-aware assignment)
 
 ::code-wrapper{language="dart"}
@@ -41,7 +41,7 @@ String display = name ?? 'Anonymous';   // 'Anonymous'
 String? name;
 name ??= 'Alice';   // name is 'Alice' (was null)
 ```
-
+::
 ### `!` (null assertion)
 
 ::code-wrapper{language="dart"}
@@ -49,7 +49,7 @@ name ??= 'Alice';   // name is 'Alice' (was null)
 String? name = getText();
 print(name!.length);   // asserts non-null, throws if null
 ```
-
+::
 `!` promotes `T?` to `T`. Throws `TypeError` at runtime if null. Use sparingly.
 
 ## Flow Analysis and Type Promotion
@@ -66,7 +66,7 @@ if (name != null) {
 }
 print(name?.length);     // name is still String? outside the if
 ```
-
+::
 Inside the `if (name != null)` block, `name` is promoted to `String` — no `!` or `?.` needed.
 
 ### `if (x is T)` promotion
@@ -78,7 +78,7 @@ if (x is String) {
 	print(x.length);   // ✓ x promoted to String
 }
 ```
-
+::
 ### Early return
 
 ::code-wrapper{language="dart"}
@@ -88,7 +88,7 @@ String process(String? input) {
 	return input.toUpperCase();   // ✓ input promoted to String after the null check
 }
 ```
-
+::
 After an early return on null, the rest of the function has `input` promoted to `String`.
 
 ## `late` and null safety
@@ -105,7 +105,7 @@ class Widget {
 	}
 }
 ```
-
+::
 `late` tells the compiler "I'll assign this before it's read." If you read before assignment, it throws `LateInitializationError`.
 
 ### `late final` with initializer (lazy)
@@ -116,7 +116,7 @@ class Config {
 	late final String value = _load();   // runs on first read, then cached
 }
 ```
-
+::
 ## `required` and null safety
 
 For function parameters, `required` makes a named param mandatory (and non-nullable):
@@ -126,7 +126,7 @@ For function parameters, `required` makes a named param mandatory (and non-nulla
 void createUser({required String name, int? age}) { ... }
 createUser(name: 'Alice');   // ✓ age is optional (nullable)
 ```
-
+::
 Without `required`, a non-nullable named param would need a default (or be nullable).
 
 ## The `Null` type
@@ -146,7 +146,7 @@ List<int>? b;                     // list nullable, elements non-null
 List<int?> c = [1, null, 3];      // list non-null, elements nullable
 List<int?>? d;                    // both nullable
 ```
-
+::
 ### Accessing nullable collection
 
 ::code-wrapper{language="dart"}
@@ -156,7 +156,7 @@ list?.length;      // null (list is null)
 list?.first;       // null (list is null)
 list?.add(1);      // no-op (list is null)
 ```
-
+::
 `?.` on the list accesses only if it's non-null.
 
 ## `Object?` vs `Object`
@@ -171,7 +171,7 @@ Object a = 'hello';   // ✓
 Object? b = 'hello';  // ✓
 b = null;             // ✓
 ```
-
+::
 ## Null safety and JSON
 
 JSON from `dart:convert` produces `Map<String, dynamic>` — values are `dynamic` (which is nullable-ish). Parse carefully:
@@ -186,7 +186,7 @@ final age = json['age'] as int;             // cast
 final name2 = json['name'] as String?;      // String? (null if missing)
 final age2 = (json['age'] as num?)?.toInt(); // int? (null if missing)
 ```
-
+::
 Use `as Type?` (nullable cast) then handle the null, rather than `as Type` (throws on null).
 
 ## Migrating to null safety
@@ -255,7 +255,7 @@ class Service {
 	}
 }
 ```
-
+::
 The local `cached` can't be changed by other methods, so the promotion holds. After the null check, `cached` is `String` (non-null) for the rest of the block.
 
 **The lesson**: Dart's type promotion works for local variables, not class fields (fields can be mutated by other code between the check and use). To promote a nullable field, assign it to a local first, then check the local.

@@ -13,7 +13,7 @@ CSS Grid is a two-dimensional layout model — it arranges items in rows *and* c
 	gap: 1rem;
 }
 ```
-
+::
 ## Track Sizing
 
 ### `fr` units
@@ -26,7 +26,7 @@ grid-template-columns: 1fr 1fr 1fr;   /* three equal columns */
 grid-template-columns: 1fr 2fr;       /* 1:2 ratio */
 grid-template-columns: 200px 1fr;     /* fixed + fluid */
 ```
-
+::
 `fr` is for distributing *free* space (after fixed tracks and content-min sizes). `1fr 1fr` = equal columns.
 
 ### `repeat()`
@@ -38,7 +38,7 @@ grid-template-columns: repeat(3, 200px);        /* three 200px columns */
 grid-template-columns: repeat(auto-fill, 250px);    /* as many 250px columns as fit */
 grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));  /* responsive */
 ```
-
+::
 ### `auto-fill` vs `auto-fit`
 
 - `auto-fill` — creates as many tracks as fit; empty tracks remain (space is distributed to them).
@@ -54,7 +54,7 @@ grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));  /* responsive */
 	gap: 1rem;
 }
 ```
-
+::
 This gives a responsive grid: 250px+ cards, as many per row as fit, stretching to fill. No media queries.
 
 ### `minmax()`
@@ -63,7 +63,7 @@ This gives a responsive grid: 250px+ cards, as many per row as fit, stretching t
 ```css
 grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
 ```
-
+::
 `minmax(min, max)` — each column is at least 250px and at most 1fr (grows to fill). Prevents columns from getting too small or too large.
 
 ## Placing Items
@@ -77,14 +77,14 @@ grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
 	grid-row: 1 / 2;      /* row 1 */
 }
 ```
-
+::
 Grid lines are 1-indexed. `1 / 3` means "start at line 1, end at line 3" (spanning 2 tracks). `span 2` means "span 2 tracks from the start":
 
 ::code-wrapper{language="css"}
 ```css
 .item { grid-column: 1 / span 2; }   /* same as 1 / 3 */
 ```
-
+::
 ### By name
 
 ::code-wrapper{language="css"}
@@ -94,7 +94,7 @@ Grid lines are 1-indexed. `1 / 3` means "start at line 1, end at line 3" (spanni
 }
 .item { grid-column: sidebar-start / sidebar-end; }
 ```
-
+::
 ### Grid areas
 
 ::code-wrapper{language="css"}
@@ -111,7 +111,7 @@ Grid lines are 1-indexed. `1 / 3` means "start at line 1, end at line 3" (spanni
 .content { grid-area: content; }
 .footer  { grid-area: footer; }
 ```
-
+::
 `grid-template-areas` names cells — a visual layout in CSS. `.` for empty cells. Each named area must form a rectangle.
 
 ## Alignment
@@ -128,7 +128,7 @@ Grid lines are 1-indexed. `1 / 3` means "start at line 1, end at line 3" (spanni
 	align-items: stretch;     /* same values, cross-axis */
 }
 ```
-
+::
 ### `justify-content` / `align-content` (the grid within the container)
 
 ::code-wrapper{language="css"}
@@ -138,7 +138,7 @@ Grid lines are 1-indexed. `1 / 3` means "start at line 1, end at line 3" (spanni
 	align-content: space-between;
 }
 ```
-
+::
 These apply when the grid is smaller than the container (e.g., fixed-size tracks with leftover space).
 
 ### Per-item: `justify-self` / `align-self`
@@ -147,7 +147,7 @@ These apply when the grid is smaller than the container (e.g., fixed-size tracks
 ```css
 .item { justify-self: center; }   /* override justify-items for this item */
 ```
-
+::
 ## `gap`
 
 Same as flexbox — `gap`, `row-gap`, `column-gap` space the tracks.
@@ -164,7 +164,7 @@ If items are placed outside the defined tracks, implicit tracks are created:
 	grid-auto-flow: row;              /* fill row by row (default) */
 }
 ```
-
+::
 `grid-auto-flow: dense` fills gaps (later items can go in earlier gaps, potentially out of order).
 
 ## Subgrid (2023+)
@@ -176,7 +176,7 @@ A grid item can use the parent's tracks:
 .container { grid-template-columns: 1fr 2fr 1fr; }
 .item { display: grid; grid-template-columns: subgrid; }   /* uses parent's 3 columns */
 ```
-
+::
 Subgrid lets nested grids align with the parent's tracks — useful for complex aligned layouts (forms, tables of data). Browser support: 2023+ in all major browsers.
 
 ## Common Patterns
@@ -196,7 +196,7 @@ Subgrid lets nested grids align with the parent's tracks — useful for complex 
 	min-height: 100vh;
 }
 ```
-
+::
 ### Responsive card grid (no media queries)
 
 ::code-wrapper{language="css"}
@@ -207,7 +207,7 @@ Subgrid lets nested grids align with the parent's tracks — useful for complex 
 	gap: 1rem;
 }
 ```
-
+::
 ### 12-column grid
 
 ::code-wrapper{language="css"}
@@ -220,7 +220,7 @@ Subgrid lets nested grids align with the parent's tracks — useful for complex 
 .col-6 { grid-column: span 6; }
 .col-4 { grid-column: span 4; }
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `repeat(auto-fit, minmax(250px, 1fr))` for responsive card grids — it gives a grid that's as many 250px+ columns as fit, stretching to fill, with no media queries. This is the modern responsive grid pattern, replacing float/flexbox hacks.
@@ -265,7 +265,7 @@ The fix — use `minmax(0, 1fr)` to allow the columns to shrink below content si
 ```css
 .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 ```
-
+::
 Or set `min-width: 0` on the items and add `overflow-wrap: break-word` for the text. `minmax(0, 1fr)` tells the grid the column can shrink to 0 (below content), so the `1fr` distributes space evenly.
 
 **The lesson**: `1fr` has a minimum of `auto` (content size), so a column with long content won't shrink, squeezing others. Use `minmax(0, 1fr)` for columns that should share space evenly regardless of content.

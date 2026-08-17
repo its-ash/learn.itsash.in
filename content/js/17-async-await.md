@@ -20,7 +20,7 @@ function fetchUser(id) {
 // Usage
 fetchUser(1).then(user => console.log(user))
 ```
-
+::
 ::
 
 ## Error Handling
@@ -39,7 +39,7 @@ async function fetchData() {
   }
 }
 ```
-
+::
 ::
 
 ## Sequential vs Concurrent
@@ -67,7 +67,7 @@ async function dependent() {
   return orders
 }
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

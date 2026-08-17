@@ -14,7 +14,7 @@ else
 	echo "No config"
 fi
 ```
-
+::
 The exit status of the command decides: 0 (success) → `then`, non-zero → `elif`/`else`. `[[... ]]` returns 0 for true.
 
 ### `if` with commands
@@ -29,7 +29,7 @@ if cd "$dir" 2>/dev/null; then
 	echo "Now in $dir"
 fi
 ```
-
+::
 Any command works in `if` — its exit status decides. `grep -q` returns 0 if it found a match.
 
 ### `&&` and `||` (short-circuit)
@@ -40,7 +40,7 @@ Any command works in `if` — its exit status decides. `grep -q` returns 0 if it
 [[ -f file.txt ]] || echo "missing"       # if false, echo
 mkdir -p dir && cd dir && echo "ready"    # chain (all must succeed)
 ```
-
+::
 Short-circuit: `&&` runs the next if the previous succeeded; `||` runs if it failed. Use for simple one-liners.
 
 ## Loops
@@ -61,7 +61,7 @@ for arg in "$@"; do
 	echo "Arg: $arg"
 done
 ```
-
+::
 ### `for` (C-style)
 
 ::code-wrapper{language="bash"}
@@ -74,7 +74,7 @@ for ((i = 0, j = 10; i < 5; i++, j--)); do
 	echo "$i $j"
 done
 ```
-
+::
 ### `while`
 
 ::code-wrapper{language="bash"}
@@ -85,7 +85,7 @@ while ((count < 5)); do
 	((count++))
 done
 ```
-
+::
 ### `while read` (line by line)
 
 ::code-wrapper{language="bash"}
@@ -107,7 +107,7 @@ line 1
 line 2
 EOF
 ```
-
+::
 **Always use `IFS= read -r line`**:
 - `IFS=` — don't trim leading/trailing whitespace.
 - `-r` — don't interpret backslashes (literal).
@@ -122,7 +122,7 @@ until ping -c 1 example.com &>/dev/null; do
 done
 echo "Server is up"
 ```
-
+::
 `until` loops while the condition is *false* (opposite of `while`).
 
 ### `break` and `continue`
@@ -144,7 +144,7 @@ for i in {1..3}; do
 	done
 done
 ```
-
+::
 ## `case`
 
 ::code-wrapper{language="bash"}
@@ -165,7 +165,7 @@ case "$1" in
 		;;
 esac
 ```
-
+::
 `case` matches a pattern (`start`, `stop`, `restart|reload` (alternation), `*` (default)). Each clause ends with `;;`. Patterns support globs (`*`, `?`, `[...]`).
 
 ### Pattern matching
@@ -179,7 +179,7 @@ case "$file" in
 	*)           echo "Other" ;;
 esac
 ```
-
+::
 ## `select` (menus)
 
 ::code-wrapper{language="bash"}
@@ -193,7 +193,7 @@ select fruit in apple banana cherry "quit"; do
 	esac
 done
 ```
-
+::
 `select` creates a numbered menu. `PS3` is the prompt. The chosen item is in `$fruit`, the number in `$REPLY`.
 
 ## Exit Status
@@ -213,7 +213,7 @@ exit 0    # success
 exit 1    # failure
 exit 2    # specific error code
 ```
-
+::
 `$?` is the exit status (0 = success, 1-255 = failure). `exit` sets the script's exit status.
 
 ## 💡 Tips & Tricks
@@ -279,7 +279,7 @@ while IFS= read -r line; do
 	echo "[$line]"
 done < input.txt
 ```
-
+::
 - `IFS=` — empty IFS, so no trimming (leading/trailing whitespace preserved).
 - `-r` — don't interpret backslashes (a `\` in the line stays literal).
 
@@ -288,7 +288,7 @@ Output:
 [  hello]
 [world]
 ```
-
+::
 **The lesson**: `read line` (default) trims whitespace via `IFS`. For reading lines verbatim, use `IFS= read -r line` — `IFS=` prevents trimming, `-r` prevents backslash interpretation. This is the canonical way to read lines in Bash.
 
 </details>

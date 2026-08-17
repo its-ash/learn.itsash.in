@@ -33,7 +33,7 @@ describe('greet', () => {
   })
 })
 ```
-
+::
 ::
 
 ## Mocking
@@ -53,7 +53,7 @@ someFunction()
 expect(spy).toHaveBeenCalledWith('hello')
 spy.mockRestore()
 ```
-
+::
 ::
 
 ## TDD Cycle

@@ -283,7 +283,7 @@ GROUP BY c.id, c.name
 ORDER BY avg_order DESC, c.id
 LIMIT 10;
 ```
-
+::
 **The lessons**: right-table filters go in `ON` for a `LEFT JOIN`; `AVG` of NULLs is NULL (use `COALESCE` if you want 0); `ORDER BY` for pagination needs a unique tie-breaker.
 
 </details>

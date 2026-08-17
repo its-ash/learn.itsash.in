@@ -47,7 +47,7 @@ Create a reusable reset + base stylesheet (chapter 1, 18).
 	}
 }
 ```
-
+::
 **Goal**: a `reset.css` + `base.css` you can drop into any project.
 
 ## Project 2 — Responsive Navbar
@@ -76,7 +76,7 @@ Build a responsive navbar (chapters 2, 7, 9, 13).
 	</ul>
 </nav>
 ```
-
+::
 ::code-wrapper{language="css"}
 ```css
 .nav {
@@ -131,7 +131,7 @@ Build a responsive navbar (chapters 2, 7, 9, 13).
 	.nav__toggle:checked ~ .nav__menu { transform: scaleY(1); }
 }
 ```
-
+::
 **Goal**: a navbar that's responsive with a CSS-only mobile menu and animated underlines.
 
 ## Project 3 — CSS Grid Dashboard
@@ -184,7 +184,7 @@ Build a dashboard layout (chapters 8, 9, 11).
 }
 .card__body { padding: 1rem; }
 ```
-
+::
 **Goal**: a grid dashboard with responsive areas, auto-fit cards, and theming.
 
 ## Project 4 — Glassmorphism Login Card
@@ -241,7 +241,7 @@ body {
 	.login { animation: none; }
 }
 ```
-
+::
 **Goal**: a glassmorphism card with blur, animated entrance, and accessible focus states.
 
 ## Project 5 — Pure CSS Tooltip System
@@ -293,7 +293,7 @@ Build a reusable tooltip system (chapters 6, 13, 15).
 	transform: translateX(-50%) translateY(0) scale(1);
 }
 ```
-
+::
 **Goal**: a no-JS tooltip with animation and variants.
 
 ## Project 6 — Animated CSS Loader Collection
@@ -337,7 +337,7 @@ Build 4+ CSS-only loaders (chapter 13).
 	.loader-spin, .loader-dots span { animation: none; }
 }
 ```
-
+::
 **Goal**: a set of loaders using different animation techniques.
 
 ## Project 7 — Full Landing Page (Capstone)
@@ -390,7 +390,7 @@ Use this checklist to review your CSS:
 - [ ] `@supports` for progressive enhancement
 - [ ] Semantic HTML, sufficient contrast
 ```
-
+::
 ## Summary
 
 You've applied the full CSS toolkit — from a reset and navbar to a grid dashboard, glassmorphism card, tooltips, loaders, and a capstone landing page. You can structure (`@layer`, BEM), layout (flex/grid, responsive, container queries), theme (variables, dark mode), animate (transform/opacity), optimize (`content-visibility`, fonts), and ensure accessibility and i18n. You now have a production-quality CSS foundation.

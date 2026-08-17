@@ -18,14 +18,14 @@ p {
 	font-stretch: condensed;   /* if the font supports it */
 }
 ```
-
+::
 ### `font-family` and fallbacks
 
 ::code-wrapper{language="css"}
 ```css
 font-family: "Helvetica Neue", Arial, sans-serif;
 ```
-
+::
 The browser tries each font in order, falling back to the next if unavailable. The last should be a generic family (`serif`, `sans-serif`, `monospace`, `cursive`, `fantasy`, `system-ui`) — guaranteed to work. Quote multi-word names (`"Helvetica Neue"`).
 
 ### System font stack
@@ -34,7 +34,7 @@ The browser tries each font in order, falling back to the next if unavailable. T
 ```css
 font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 ```
-
+::
 Uses the OS's native UI font — no download, native feel. Good default for most sites.
 
 ### `@font-face` (custom fonts)
@@ -52,7 +52,7 @@ Uses the OS's native UI font — no download, native feel. Good default for most
 
 body { font-family: "MyFont", sans-serif; }
 ```
-
+::
 `font-display: swap` shows the fallback font immediately and swaps when the web font loads (avoiding invisible text). Use `woff2` (best compression); `woff` as fallback. Avoid `ttf`/`otf` (larger).
 
 ### Font weights and variable fonts
@@ -71,7 +71,7 @@ Standard weights: 100 (thin), 300 (light), 400 (regular), 500 (medium), 600 (sem
 
 p { font-weight: 450; }   /* any value in the range */
 ```
-
+::
 ## Font Size
 
 ::code-wrapper{language="css"}
@@ -81,7 +81,7 @@ font-size: 16px;       /* absolute — doesn't respect user's setting */
 font-size: 1.2em;      /* relative to parent — compounds */
 font-size: clamp(1rem, 2vw + 0.5rem, 1.5rem);  /* fluid */
 ```
-
+::
 Default root size is 16px in most browsers. `1rem` = 16px (unless the user changed their setting, which `rem` respects).
 
 ## Line Height
@@ -92,7 +92,7 @@ line-height: 1.5;       /* unitless — 1.5× the font-size (preferred) */
 line-height: 24px;      /* fixed — doesn't scale with font-size */
 line-height: 1.5em;     /* relative to the element's font-size */
 ```
-
+::
 **Use unitless** — `1.5` (not `1.5em` or `24px`). Unitless scales with each element's font-size; `em`/`px` don't adapt to child font-sizes. 1.5 is a good default for body text; 1.2-1.3 for headings.
 
 ## Text Properties
@@ -112,7 +112,7 @@ p {
 	hyphens: auto;              /* hyphenate (needs lang attribute) */
 }
 ```
-
+::
 ### Truncating text (ellipsis)
 
 ::code-wrapper{language="css"}
@@ -123,7 +123,7 @@ p {
 	text-overflow: ellipsis;
 }
 ```
-
+::
 Three properties together — no wrap, clip overflow, show `…`. Works on single-line text.
 
 ### Multi-line truncation
@@ -137,7 +137,7 @@ Three properties together — no wrap, clip overflow, show `…`. Works on singl
 	overflow: hidden;
 }
 ```
-
+::
 `line-clamp: 3` shows 3 lines then `…`. Modern browsers support `line-clamp` without the `-webkit-` prefix in most cases, but keep it for compatibility.
 
 ## `white-space`
@@ -158,7 +158,7 @@ Three properties together — no wrap, clip overflow, show `…`. Works on singl
 ```css
 text-align: justify;   /* stretch lines to full width */
 ```
-
+::
 `justify` can create "rivers" of whitespace, especially with short words. Use `text-align: left` for body text (better readability); `justify` only for print-like layouts. `text-align-last: center` controls the last line of justified text.
 
 ## Vertical Alignment
@@ -169,7 +169,7 @@ vertical-align: middle;   /* in table cells or inline elements */
 vertical-align: top;
 vertical-align: baseline; /* default */
 ```
-
+::
 `vertical-align` only applies to inline elements (and table cells) — it doesn't vertically center block elements. For block centering, use flexbox (`align-items: center`) or grid.
 
 ## 💡 Tips & Tricks
@@ -217,7 +217,7 @@ The fix — use a unitless `line-height`, which scales with each element's font-
 body { line-height: 1.5; font-size: 1rem; }
 h1 { font-size: 3rem; }   /* line-height is 1.5 × 48px = 72px — no overlap */
 ```
-
+::
 Unitless `line-height` is computed per-element (1.5 × the element's font-size), so `h1` gets 72px and body text gets 24px — both proportional. A fixed `20px` or `1.5em` (computed on the parent) would both cause the overlap.
 
 **The lesson**: `line-height` with a unit (`px`/`em`) is a fixed value that's inherited as-is — it doesn't scale with the child's font-size. Unitless `line-height` scales per-element. Always use unitless for `line-height`.

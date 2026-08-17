@@ -15,7 +15,7 @@ apt install bats                 # Debian/Ubuntu (may be older)
 git clone https://github.com/bats-core/bats-core.git
 cd bats-core && ./install.sh "$HOME"
 ```
-
+::
 ## Your First Test
 
 `test/strings_test.bats`:
@@ -34,7 +34,7 @@ cd bats-core && ./install.sh "$HOME"
 	[[ "${#str}" -eq 5 ]]
 }
 ```
-
+::
 ### Run
 
 ::code-wrapper{language="bash"}
@@ -44,7 +44,7 @@ bats test/strings_test.bats
 #  ✓ string length
 #  2 tests, 0 failures
 ```
-
+::
 ## Testing a Script's Functions
 
 `lib/math.sh`:
@@ -59,7 +59,7 @@ is_even() {
 	(( $1 % 2 == 0 ))
 }
 ```
-
+::
 `test/math_test.bats`:
 
 ::code-wrapper{language="bash"}
@@ -85,7 +85,7 @@ source "$(dirname "$BATS_TEST_FILENAME")/../lib/math.sh"
 	[[ "$status" -ne 0 ]]
 }
 ```
-
+::
 `source` the library, test each function. `run` captures a command's output (`$status`, `$output`).
 
 ## `run` and `$status`/`$output`
@@ -104,7 +104,7 @@ source "$(dirname "$BATS_TEST_FILENAME")/../lib/math.sh"
 	[[ "$output" == *"Usage"* ]]
 }
 ```
-
+::
 `run cmd args` executes the command, capturing `status` (exit code) and `output` (stdout+stderr). Test both.
 
 ## Assertions with `bats-assert`
@@ -128,7 +128,7 @@ load '/usr/local/bats-assert/load.bash'
 	assert_failure
 }
 ```
-
+::
 `bats-assert` makes tests more readable (vs. raw `[[ ]]`).
 
 ## Setup and Teardown
@@ -151,7 +151,7 @@ teardown() {
 	[[ -s "$tmpfile" ]]
 }
 ```
-
+::
 `setup` runs before each test; `teardown` after. Use for temp files, fixtures.
 
 ## Testing `set -e` Scripts
@@ -171,7 +171,7 @@ Scripts with `set -e` exit on the first error — test the exit status:
 	[[ "$status" -eq 0 ]]
 }
 ```
-
+::
 ## Skipping Tests
 
 ::code-wrapper{language="bash"}
@@ -182,7 +182,7 @@ Scripts with `set -e` exit on the first error — test the exit status:
 	assert_success
 }
 ```
-
+::
 `skip "reason"` marks a test as skipped (doesn't run, shows as `# skip`).
 
 ## Parameterized Tests (with `bats-loop` or loops)
@@ -198,7 +198,7 @@ Scripts with `set -e` exit on the first error — test the exit status:
 	done
 }
 ```
-
+::
 Or generate `.bats` files from a template (for separate test per case).
 
 ## Mocking
@@ -217,7 +217,7 @@ Mock a command by creating a function with the same name:
 	[[ "$output" == *"git failed"* ]]
 }
 ```
-
+::
 Override a command with a function (and `export -f` for subshells). Restore in `teardown` if needed.
 
 ## CI Integration
@@ -235,7 +235,7 @@ jobs:
 			- run: sudo apt install bats
 			- run: bats test/
 ```
-
+::
 Run `bats test/` in CI. TAP output integrates with most CI systems.
 
 ## ShellCheck in CI
@@ -244,7 +244,7 @@ Run `bats test/` in CI. TAP output integrates with most CI systems.
 ```yaml
 - run: shellcheck *.sh lib/*.sh
 ```
-
+::
 Always run ShellCheck alongside tests — it catches what tests might miss (quoting, `set -e` gaps, etc.).
 
 ## 💡 Tips & Tricks
@@ -297,7 +297,7 @@ The fix — use `run` and check `$output`:
 	[[ "$output" == "5" ]]
 }
 ```
-
+::
 Or test directly (without `run`):
 
 ```bash
@@ -306,7 +306,7 @@ Or test directly (without `run`):
 	[[ "$result" == "5" ]]
 }
 ```
-
+::
 Pick one approach. `run` is better for testing commands (it captures exit status and output cleanly). Direct `$(...)` is fine for pure functions.
 
 **The lesson**: don't mix `run` and direct calls in the same test. Use `run` + check `$status`/`$output`, OR capture directly (`result=$(...)`) + check. Calling the function twice is wasteful and can cause side-effect bugs.

@@ -239,7 +239,7 @@ func fetch(ctx context.Context, url string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 ```
-
+::
 Now the timer is stopped as soon as `fetch` returns (whether the call succeeded, failed, or timed out), preventing the leak.
 
 **The lesson**: always `defer cancel()` for `WithTimeout`/`WithDeadline`/`WithCancel`. Discarding `cancel` leaks the timer and context resources. `go vet` and `govet` (with the `lostcancel` analyzer) flag this.

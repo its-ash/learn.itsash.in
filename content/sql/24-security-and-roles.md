@@ -243,7 +243,7 @@ ALTER TABLE orders FORCE ROW LEVEL SECURITY;
 -- The owner role creates the schema; a separate app role (with grants, no ownership) runs queries.
 -- Then RLS applies to the app role automatically.
 ```
-
+::
 Option 2 is the principled fix — the app role shouldn't own the tables (ownership is for migrations/schema management; the app role is for data access). With a separate app role that has `SELECT`/`INSERT`/`UPDATE` grants but not ownership, RLS applies automatically, and `FORCE ROW LEVEL SECURITY` isn't needed.
 
 Also check: is the app role a superuser, or does it have `BYPASSRLS`? Both bypass RLS. The app role must be a regular role with no bypass privileges.

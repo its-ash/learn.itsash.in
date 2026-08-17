@@ -250,7 +250,7 @@ func main() {   // lowercase, exactly "main"
 	fmt.Println("Hello")
 }
 ```
-
+::
 **The lesson**: Go's entry point is `func main()` (exactly) in `package main` (exactly). Case matters — `Main`/`MAIN` are not `main`.
 
 </details>

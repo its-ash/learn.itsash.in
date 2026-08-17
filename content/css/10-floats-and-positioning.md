@@ -10,7 +10,7 @@ Floats were the layout tool before flexbox/grid. They're still used for text wra
 ```css
 img { float: left; margin: 0 1rem 1rem 0; }
 ```
-
+::
 `float: left`/`right` takes the element out of flow and wraps text around it. `float: none` (default).
 
 ### Clearing floats
@@ -29,7 +29,7 @@ Floated elements don't contribute to their parent's height (they're out of flow)
 /* Modern: flow-root */
 .parent { display: flow-root; }   /* contains floats, no hack needed */
 ```
-
+::
 `display: flow-root` establishes a block formatting context, containing floats — the modern replacement for the clearfix hack. Use it when you must use floats.
 
 ### When to still use floats
@@ -45,7 +45,7 @@ Rarely — for text wrapping around an image (their original purpose). For layou
 .modal { position: fixed; z-index: 1000; }
 .backdrop { position: fixed; z-index: 999; }
 ```
-
+::
 Higher `z-index` = in front. `z-index` only applies to positioned elements (`relative`/`absolute`/`fixed`/`sticky`) — not `static`.
 
 ### Stacking contexts
@@ -70,7 +70,7 @@ parent1 (z-index: 1)
   child (z-index: 9999)  — still below parent2 (z-index: 2)
 parent2 (z-index: 2)
 ```
-
+::
 This is the #1 z-index confusion: "I set `z-index: 9999` but it's still behind." The fix — raise the ancestor's `z-index`, or remove the stacking-context-creating property from the ancestor.
 
 ### Debugging stacking
@@ -91,7 +91,7 @@ In DevTools, the "Layers" panel (Chrome) shows the stacking contexts. Or inspect
 .img { clip-path: polygon(0 0, 100% 0, 100% 100%); }  /* triangle */
 .img { clip-path: inset(10px round 5px); }             /* inset with rounded corners */
 ```
-
+::
 `clip-path` clips to any shape — circles, polygons, SVG paths. Unlike `overflow: hidden`, it can clip to non-rectangular shapes. Animatable for effects.
 
 ### `clip` (deprecated)
@@ -104,7 +104,7 @@ In DevTools, the "Layers" panel (Chrome) shows the stacking contexts. Or inspect
 ```css
 .modal { isolation: isolate; }   /* creates a stacking context without positioning */
 ```
-
+::
 `isolation: isolate` creates a stacking context without needing `position`/`z-index`/`transform` — useful for isolating a component's stacking (its children's `z-index` don't leak out).
 
 ## 💡 Tips & Tricks
@@ -162,7 +162,7 @@ The fix — give `.app` a `z-index` higher than the dropdown, or move the modal 
 	<div class="modal">...</div>   <!-- outside .app, at root level -->
 </body>
 ```
-
+::
 **The lesson**: a stacking-context-creating ancestor (`transform`, `opacity`, `position: fixed`, etc.) traps descendants' `z-index` within the ancestor's context. A high `z-index` inside a low-`z-index` (or auto) context can't beat a lower `z-index` at a higher level. Fix the ancestor's `z-index` or move the element outside the context.
 
 </details>

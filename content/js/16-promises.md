@@ -23,7 +23,7 @@ promise
   .catch(error => console.error(error))
   .finally(() => console.log('Cleanup'))  // always runs
 ```
-
+::
 ::
 
 ## Chaining
@@ -44,7 +44,7 @@ Promise.resolve(5)
   .then(x => x * 2)    // 30
   .then(x => console.log(x))  // 30
 ```
-
+::
 ::
 
 ## `Promise.all` / `race` / `allSettled` / `any`
@@ -74,7 +74,7 @@ Promise.race([slowFetch(), timeout(5000)])
 Promise.any([mightFail(), mightFail(), reliable()])
   .then(result => console.log('First success:', result))
 ```
-
+::
 ::
 
 ## Static Helpers
@@ -85,7 +85,7 @@ Promise.resolve(42)       // already fulfilled
 Promise.reject(new Error('nope'))  // already rejected
 Promise.all([p1, p2, p3]) // all must fulfill
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

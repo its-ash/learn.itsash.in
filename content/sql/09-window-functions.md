@@ -288,7 +288,7 @@ SELECT
   ) AS running_total
 FROM orders;
 ```
-
+::
 With `ROWS`, each row's frame ends at that specific row, so the running total accumulates one row at a time, even across same-day orders. To make the row order deterministic within ties, add a tie-breaker (`ORDER BY ordered_on, id`).
 
 **The lesson**: `RANGE` (the default) includes peers; `ROWS` doesn't. For running totals that should accumulate row-by-row, always specify `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the default `RANGE` silently sums all tied rows together.

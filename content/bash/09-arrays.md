@@ -25,7 +25,7 @@ echo "${#fruits[@]}"     # 4 (count excludes the gap)
 fruits=()                # empty array
 echo "${#fruits[@]}"     # 0
 ```
-
+::
 ### Iterating
 
 ::code-wrapper{language="bash"}
@@ -39,7 +39,7 @@ for i in "${!fruits[@]}"; do
 	echo "$i: ${fruits[$i]}"
 done
 ```
-
+::
 **Always quote `"${arr[@]}"`** — it preserves each element as a separate item (even with spaces). `${arr[@]}` (unquoted) word-splits. `"${arr[*]}"` joins into one string.
 
 ## Associative Arrays (Bash 4+)
@@ -72,7 +72,7 @@ fi
 # Delete
 unset 'ages[Bob]'
 ```
-
+::
 ### Associative array of arrays (workaround)
 
 Bash doesn't support nested arrays. Use a naming convention:
@@ -88,7 +88,7 @@ for username in "${!users[@]}"; do
 	echo "$name, $age, $role"
 done
 ```
-
+::
 ## `read -a` (read into an array)
 
 ::code-wrapper{language="bash"}
@@ -105,7 +105,7 @@ echo "${nums[@]}"     # 1 2 3 4 5
 IFS=',' read -a items <<< "a,b,c"
 echo "${items[@]}"    # a b c
 ```
-
+::
 ## `mapfile` / `readarray` (read lines into an array)
 
 ::code-wrapper{language="bash"}
@@ -120,7 +120,7 @@ for file in "${files[@]}"; do
 	echo "$file"
 done
 ```
-
+::
 `mapfile -t` reads lines into an array (stripping the trailing newline). `-t` is important (without it, lines include the newline). Bash 4+.
 
 ## Converting Between Strings and Arrays
@@ -137,7 +137,7 @@ fruits=("apple" "banana" "cherry")
 str="${fruits[*]}"    # "apple banana cherry" (IFS-joined)
 str=$(IFS=','; echo "${fruits[*]}")   # "apple,banana,cherry" (custom IFS)
 ```
-
+::
 ## Slicing Arrays
 
 ::code-wrapper{language="bash"}
@@ -147,7 +147,7 @@ echo "${arr[@]:1:2}"    # 2 3 (from index 1, 2 elements)
 echo "${arr[@]:2}"      # 3 4 5 (from index 2 to end)
 echo "${arr[@]: -2}"    # 4 5 (last 2 — note the space before -)
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `"${arr[@]}"` (quoted) to expand/iterate array elements — it preserves each element as a separate item, even with spaces. `"${arr[*]}"` joins into one string; unquoted `${arr[@]}` word-splits. Always quote `[@]`.
@@ -197,7 +197,7 @@ for file in "${files[@]}"; do
 	echo "Processing $file"
 done
 ```
-
+::
 `"${files[@]}"` expands to all elements, each as a separate item (preserving spaces). The loop iterates `my file.txt`, `other file.txt`, `third.txt` (three iterations, each a full filename).
 
 **The lesson**: `for x in $arr` (unquoted) is wrong — it expands only the first element and word-splits it. Always use `for x in "${arr[@]}"` (quoted `[@]`) to iterate all elements, each preserved as a separate item (even with spaces).

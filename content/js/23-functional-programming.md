@@ -15,7 +15,7 @@ const badAdd = (arr, val) => { arr.push(val); return arr }  // ❌ mutates
 // Composition — build from small functions
 const pipe = (...fns) => x => fns.reduce((v, f) => f(v), x)
 ```
-
+::
 ::
 
 ## Immutability Patterns
@@ -33,7 +33,7 @@ const user = { name: 'Alice', age: 30 }
 const updated = { ...user, age: 31 }  // shallow update
 const { age, ...rest } = user          // delete key (age removed from rest)
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

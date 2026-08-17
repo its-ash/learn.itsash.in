@@ -248,7 +248,7 @@ The fix — after any data load with explicit IDs, advance the sequence past the
 SELECT setval(pg_get_serial_sequence('users', 'id'),
               (SELECT MAX(id) FROM users));
 ```
-
+::
 This sets the sequence to `max(id)`, so the next `nextval` returns `max(id) + 1` — no collision.
 
 For an `IDENTITY` column, the equivalent:
@@ -257,7 +257,7 @@ For an `IDENTITY` column, the equivalent:
 ALTER TABLE users ALTER COLUMN id RESTART WITH (SELECT MAX(id) + 1 FROM users);
 -- Or compute max first, then RESTART with the literal.
 ```
-
+::
 **The lesson**: explicit-ID inserts don't advance the sequence. After a data load/migration/COPY that supplies IDs, always reset the sequence to `max(id)`, or the next auto-generated insert collides.
 
 </details>

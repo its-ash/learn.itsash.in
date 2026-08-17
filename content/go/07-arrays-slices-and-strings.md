@@ -256,7 +256,7 @@ func filterEven(s []int) []int {
 // Option 3: Go 1.21+ slices.DeleteFunc
 s = slices.DeleteFunc(s, func(v int) bool { return v%2 != 0 })
 ```
-
+::
 **The lesson**: removing elements from a slice while iterating forward with `range` skips elements (indices shift). Build a new slice (idiomatic) or iterate backwards. `slices.DeleteFunc` (Go 1.21+) is the cleanest.
 
 </details>

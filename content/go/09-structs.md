@@ -205,7 +205,7 @@ func main() {
 	s.Log("hello")   // OK
 }
 ```
-
+::
 Or provide a constructor:
 
 ```go
@@ -213,7 +213,7 @@ func NewService() *Service {
 	return &Service{Logger: &Logger{}}
 }
 ```
-
+::
 Or embed the value (not the pointer) if `Logger` doesn't need pointer receivers:
 
 ```go
@@ -223,7 +223,7 @@ type Service struct {
 s := Service{}
 s.Log("hello")   // OK — Logger is a zero-value Logger, not nil
 ```
-
+::
 But value embedding requires the type to be usable with a zero value (and copies the value into `Service`). Pointer embedding is common for shared dependencies (a logger, a database) that should be injected.
 
 **The lesson**: embedding a pointer (`*T`) leaves the embedded field as `nil` unless initialized — promoted method calls on a nil embedded pointer panic. Initialize embedded pointers in the literal or via a constructor.

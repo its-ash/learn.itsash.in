@@ -247,7 +247,7 @@ if errors.As(err, &e) {   // ✅ &e is **MyError
 	fmt.Println(e.Code)   // 42
 }
 ```
-
+::
 `errors.As` walks the error chain, finds the `*MyError`, and assigns it to `e` (via the `**MyError` pointer `&e`). Without `&`, `errors.As` has no address to write to and either panics or returns false (depending on the Go version — modern Go panics with "errors.As target must be a non-nil pointer").
 
 **The lesson**: `errors.As(err, &target)` — always pass the address of the target variable, not the variable itself. `target` must be a pointer to the error type you want to extract.

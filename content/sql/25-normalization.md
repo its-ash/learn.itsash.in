@@ -251,7 +251,7 @@ JOIN product_categories pc ON pc.product_id = p.id
 JOIN categories c ON c.id = pc.category_id
 WHERE c.name = 'tech';
 ```
-
+::
 This is indexable (the `category_id` index), has integrity (FKs + the `categories.name UNIQUE` constraint), supports category metadata, and makes renames a one-row update. For a simpler variant if you don't need category metadata, a PostgreSQL `TEXT[]` array column with a GIN index (`categories TEXT[]`, `WHERE 'tech' = ANY(categories)`) is a reasonable middle ground.
 
 **The lesson**: delimited strings for multi-valued attributes defeat indexes, integrity, and queries. Use a junction table (normalized) or an array column with a GIN index (PostgreSQL, lighter).

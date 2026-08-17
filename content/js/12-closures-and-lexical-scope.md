@@ -23,7 +23,7 @@ counter()  // 3
 // `count` is captured by the closure — not accessible from outside
 // console.log(count)  // ReferenceError
 ```
-
+::
 ::
 
 ## Lexical Scope
@@ -49,7 +49,7 @@ function outer() {
 const fn = outer()
 fn()  // "inner outer global" — inner remembers outerVar even after outer returned
 ```
-
+::
 ::
 
 ## Practical Uses
@@ -82,7 +82,7 @@ account.deposit(50)   // 150
 account.withdraw(30)  // 120
 // account.balance    // undefined — truly private!
 ```
-
+::
 ::
 
 ### Function Factories (Currying)
@@ -103,7 +103,7 @@ triple(5)   // 15
 // Arrow version
 const multiplierArrow = factor => n => n * factor
 ```
-
+::
 ::
 
 ### Memoization
@@ -128,7 +128,7 @@ const slowFib = memoize(n =>
 )
 slowFib(40)  // fast — cached results
 ```
-
+::
 ::
 
 ### Event Handlers with State
@@ -144,7 +144,7 @@ function createToggleButton(button) {
   })
 }
 ```
-
+::
 ::
 
 ## Edge Cases
@@ -173,7 +173,7 @@ for (var i = 0; i < 3; i++) {
 }
 // Output: 0, 1, 2
 ```
-
+::
 ::
 
 ### Memory Considerations
@@ -204,7 +204,7 @@ function setupBetter() {
   }
 }
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

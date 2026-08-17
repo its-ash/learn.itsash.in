@@ -49,7 +49,7 @@ case <-timer.C:
 	fmt.Println("timeout")
 }
 ```
-
+::
 ## Done/Cancellation Pattern
 
 ::code-wrapper{language="go"}
@@ -107,7 +107,7 @@ case v := <-ch1:   // both ready — picked randomly
 case v := <-ch2:
 }
 ```
-
+::
 There's no priority. If you need priority, use nested selects (check the priority case first with a non-blocking `select`, then fall back).
 
 ## For-Select Loop (the Standard Pattern)
@@ -174,7 +174,7 @@ func worker(input <-chan int, quit <-chan struct{}) {
 	}
 }
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `for { select { ... } }` as the standard concurrent loop — process inputs (or timeouts, or cancellation) until done. Always include a `<-done`/`<-ctx.Done()` case so the goroutine can exit; a `select` loop without an exit path is a leak.
@@ -240,7 +240,7 @@ func worker(input <-chan int, done <-chan struct{}) {
 	}
 }
 ```
-
+::
 Now the `select` blocks on either `input` or `done` — whichever becomes ready first. If `done` is closed while the worker is waiting for input, the `<-done` case fires and the worker exits. The `default` was wrong — it prevented blocking on `done`.
 
 **The lesson**: `default` makes `select` non-blocking, which prevents waiting on `done`. For cancellation that works even when the main work is idle, block on both (input and done) without `default`.

@@ -232,7 +232,7 @@ for {
 	process(line)
 }
 ```
-
+::
 Here, `ReadString` returns the last line *with* `io.EOF` (no trailing `\n`), and the `break` discards it.
 
 The fix — process the line before breaking, or check for non-empty line:
@@ -251,7 +251,7 @@ for {
 	}
 }
 ```
-
+::
 Or just use `bufio.Scanner`, which handles this correctly — the `Scan` loop processes the last line regardless of trailing newline.
 
 **The lesson**: `bufio.Scanner` correctly handles files without a trailing newline. The `ReadString` + `EOF` pattern is the one that drops the last line — process the line before checking `EOF`, or use `Scanner`.

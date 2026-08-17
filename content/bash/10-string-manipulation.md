@@ -9,7 +9,7 @@ Bash has powerful string operations via parameter expansion — often replacing 
 str="hello world"
 echo "${#str}"   # 11 (length)
 ```
-
+::
 ## Substring
 
 ::code-wrapper{language="bash"}
@@ -20,7 +20,7 @@ echo "${str:6}"      # world (from 6 to end)
 echo "${str: -5}"    # world (last 5 — note the space before -)
 echo "${str:1:3}"    # ell (from 1, 3 chars)
 ```
-
+::
 `${var:offset:length}` — substring from `offset`, `length` chars. If `length` omitted, to the end. Negative `offset` counts from the end (space before `-` to avoid default-expansion parsing).
 
 ## Replace
@@ -33,7 +33,7 @@ echo "${str//l/L}"          # heLLo worLd (all matches)
 echo "${str/#hello/HELLO}"  # HELLO world (prefix only)
 echo "${str/%world/WORLD}"  # hello WORLD (suffix only)
 ```
-
+::
 - `${var/pattern/replacement}` — replace first match.
 - `${var//pattern/replacement}` — replace all matches.
 - `${var/#pattern/repl}` — only if at the start.
@@ -56,7 +56,7 @@ str="  hello  "
 echo "${str#"${str%%[![:space:]]*}"}"   # "hello  " (leading)
 echo "${str%"${str##*[![:space:]]}"}"   # "  hello" (trailing)
 ```
-
+::
 - `${var#pattern}` — remove shortest prefix.
 - `${var##pattern}` — remove longest prefix.
 - `${var%pattern}` — remove shortest suffix.
@@ -73,7 +73,7 @@ echo "${file%.gz}"     # /path/to/file.tar (remove .gz extension)
 echo "${file%.*}"      # /path/to/file.tar (remove last extension)
 echo "${file%%.*}"     # /path/to/file (remove all extensions)
 ```
-
+::
 ## Case Conversion (Bash 4+)
 
 ::code-wrapper{language="bash"}
@@ -88,7 +88,7 @@ echo "${str~~}"   # hELLO wORLD (toggle case)
 # Specific chars
 echo "${str^^[aeiou]}"   # hEllO wOrld (uppercase vowels only)
 ```
-
+::
 ## Default Values (recap)
 
 ::code-wrapper{language="bash"}
@@ -99,7 +99,7 @@ echo "${var:=default}"    # "default" and assigns to var
 echo "${var:?error msg}"  # error and exit if unset/empty
 echo "${var:+set}"        # "set" if var is non-empty, else empty
 ```
-
+::
 ## Splitting
 
 ::code-wrapper{language="bash"}
@@ -114,7 +114,7 @@ echo "${arr[2]}"   # c
 IFS=',' read -r first second third <<< "a,b,c"
 echo "$first $second $third"   # a b c
 ```
-
+::
 ## Joining
 
 ::code-wrapper{language="bash"}
@@ -138,7 +138,7 @@ join_by() {
 
 join_by ", " "${arr[@]}"   # apple, banana, cherry
 ```
-
+::
 Bash has no built-in join — write a function or use `IFS`:
 
 ::code-wrapper{language="bash"}
@@ -150,7 +150,7 @@ joined="${arr[*]}"
 IFS=$oldIFS
 echo "$joined"   # a,b,c
 ```
-
+::
 ## Comparison
 
 ::code-wrapper{language="bash"}
@@ -162,7 +162,7 @@ echo "$joined"   # a,b,c
 [[ -z "$a" ]]         # empty
 [[ -n "$a" ]]         # non-empty
 ```
-
+::
 ## Pattern Matching (regex)
 
 ::code-wrapper{language="bash"}
@@ -180,7 +180,7 @@ if [[ $str =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]]; then
 	echo "Day: ${BASH_REMATCH[3]}"
 fi
 ```
-
+::
 `[[ $str =~ regex ]]` — extended regex. `BASH_REMATCH` is an array: `[0]` is the full match, `[1]`/`[2]` are groups. Don't quote the regex (quoting makes it literal).
 
 ## `printf` for Formatting
@@ -193,7 +193,7 @@ printf "%x\n" 255      # ff (hex)
 printf "%o\n" 8        # 10 (octal)
 printf "%.2f\n" 3.14159   # 3.14 (2 decimals)
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use parameter expansion over `sed`/`awk` for simple string ops — `${str:0:5}` (substring), `${str//old/new}` (replace), `${str##*/}` (basename), `${str%.txt}` (remove extension), `${#str}` (length). Faster (no subprocess) and safer (no regex pitfalls).
@@ -225,7 +225,7 @@ file="archive.tar.gz"
 ext="${file##*.}"
 echo "$ext"   # gz (wanted .tar.gz or gz?)
 ```
-
+::
 And for the basename:
 
 ::code-wrapper{language="bash"}
@@ -256,7 +256,7 @@ echo "$base"
 ext="${file#*.}"     # tar.gz (removes the first extension prefix)
 echo "$ext"
 ```
-
+::
 - `${file%%.*}` — removes the longest suffix starting with `.` → `archive`.
 - `${file#*.}` — removes the shortest prefix up to the first `.` → `tar.gz`.
 

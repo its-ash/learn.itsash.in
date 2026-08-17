@@ -27,7 +27,7 @@ void main() {
 	print('Fetching...');   // runs first (async)
 }
 ```
-
+::
 ### `Future` constructors
 
 - `Future.value(x)` — completed with `x`.
@@ -53,7 +53,7 @@ Future<void> main() async {
 	print('User: $user');
 }
 ```
-
+::
 - `async` marks a function as asynchronous; it returns a `Future`.
 - `await` waits for a `Future` to complete, unwrapping its value.
 - An `async` function's return value is wrapped in a `Future` (`Future<T>` for `T` return, `Future<void>` for `void`).
@@ -71,7 +71,7 @@ for (var url in urls) {
 // Parallel (all at once, wait for all)
 var results = await Future.wait(urls.map(fetch));
 ```
-
+::
 `await` in a loop is sequential (one at a time). For parallel, use `Future.wait` on a list of futures.
 
 ## Error handling
@@ -91,7 +91,7 @@ Future<void> main() async {
 	}
 }
 ```
-
+::
 `try`/`catch` works with `await` — the thrown error is caught. Use `on SpecificException catch (e)` for typed catches.
 
 ### `Future.catchError` vs `try`/`catch`
@@ -102,7 +102,7 @@ Prefer `try`/`catch` with `await` (clearer). `catchError` is for `.then()` chain
 ```dart
 fetchUser().then((u) => print(u)).catchError((e) => print(e));
 ```
-
+::
 ## `Completer`
 
 A `Completer` lets you manually complete a `Future` (bridge callback-based APIs to `Future`):
@@ -115,7 +115,7 @@ Future<String> fromCallback() {
 	return completer.future;
 }
 ```
-
+::
 Use when a library gives you a callback but you want a `Future`. Rare in modern Dart (most APIs are `Future`-based).
 
 ## `Stream`
@@ -137,7 +137,7 @@ void main() async {
 	}
 }
 ```
-
+::
 ### Stream methods
 
 ::code-wrapper{language="dart"}
@@ -150,7 +150,7 @@ stream.first;   // Future (first element)
 stream.toList();   // Future<List> (all elements)
 stream.forEach((e) => print(e));   // Future (iterates all)
 ```
-
+::
 ### `await for`
 
 ::code-wrapper{language="dart"}
@@ -160,7 +160,7 @@ await for (var event in stream) {
 	if (event == 'done') break;   // exit early
 }
 ```
-
+::
 `await for` is like `for-in` for streams — awaits each element. The loop exits when the stream closes (or `break`).
 
 ### `async*` generators
@@ -175,7 +175,7 @@ Stream<int> gen() async* {
 	yield* Stream.fromIterable([3, 4]);
 }
 ```
-
+::
 ### Single-subscription vs broadcast streams
 
 - **Single-subscription** (default) — one listener; listening twice throws. Most streams are this.
@@ -187,7 +187,7 @@ var broadcast = stream.asBroadcastStream();
 broadcast.listen(print);
 broadcast.listen(print);   // ✓ both listeners
 ```
-
+::
 ## `StreamController`
 
 A `StreamController` lets you manually add events to a stream:
@@ -200,7 +200,7 @@ controller.add(1);   // prints 1
 controller.add(2);   // prints 2
 controller.close();  // closes the stream
 ```
-
+::
 Use for creating custom streams (event sources, bridges to callback APIs).
 
 ## `Future` vs `Stream`
@@ -222,7 +222,7 @@ runZonedGuarded(() {
 	print('Uncaught: $error');
 });
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `async`/`await` (not `.then()` chains) — linear, readable async code. `await` makes the code look synchronous while staying non-blocking. Use `.then()` only for simple one-step chains.
@@ -278,7 +278,7 @@ Future<void> main() async {
 	print(results);   // [a, b, c] in input order
 }
 ```
-
+::
 Now all three fetches start immediately and run concurrently. The total time is ~1 second (the slowest one), not 3 seconds.
 
 If the fetches depend on each other (b needs a's result), keep them sequential. But for independent operations, `Future.wait` is much faster.

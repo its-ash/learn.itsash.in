@@ -8,7 +8,7 @@ Responsive design makes layouts adapt to different screen sizes. Media queries a
 ```html
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 ```
-
+::
 This is required for responsive design on mobile — without it, mobile browsers render at a desktop width (980px) and zoom out, making the page tiny. Always include this in `<head>`.
 
 ## Media Queries
@@ -43,7 +43,7 @@ This is required for responsive design on mobile — without it, mobile browsers
 	.no-print { display: none; }
 }
 ```
-
+::
 ### Common breakpoints
 
 There's no fixed standard, but common breakpoints:
@@ -55,7 +55,7 @@ Tablet:  640px–1024px
 Desktop: > 1024px
 Wide:    > 1280px
 ```
-
+::
 Choose breakpoints based on *your content*, not device sizes — if the layout breaks at 720px, that's your breakpoint, not 768px.
 
 ## Mobile-First
@@ -77,7 +77,7 @@ Write the mobile styles as the base, then add media queries for larger screens:
 	.container { padding: 3rem; max-width: 1200px; }
 }
 ```
-
+::
 Mobile-first uses `min-width` (progressive enhancement) — styles accumulate for larger screens. Desktop-first (`max-width`, graceful degradation) is the older pattern; mobile-first is preferred (mobile is the default, larger screens get more).
 
 ## Fluid Layouts (no media queries)
@@ -98,7 +98,7 @@ grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
 /* Responsive flex wrapping */
 flex-wrap: wrap;
 ```
-
+::
 `clamp()`, `auto-fit`/`minmax`, and `flex-wrap` handle many responsive cases without breakpoints — use them first, reach for media queries when the layout fundamentally changes.
 
 ## Container Queries
@@ -115,7 +115,7 @@ Container queries style an element based on its *container's* size, not the view
 	.card { display: grid; grid-template-columns: 1fr 2fr; }
 }
 ```
-
+::
 `container-type: inline-size` makes `.sidebar` a query container; `@container (min-width: 400px)` applies when the container is at least 400px wide. The card adapts to its container, not the viewport — reusable across layouts.
 
 ### Container query units
@@ -124,7 +124,7 @@ Container queries style an element based on its *container's* size, not the view
 ```css
 .card { font-size: clamp(1rem, 3cqi, 2rem); }   /* 3% of container inline size */
 ```
-
+::
 `cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax` — container query units (percentage of the container's size). Like `vw`/`vh` but relative to the container.
 
 ## Responsive Images
@@ -137,7 +137,7 @@ Container queries style an element based on its *container's* size, not the view
      sizes="(max-width: 600px) 480px, 800px"
      alt="...">
 ```
-
+::
 `srcset` + `sizes` let the browser pick the right image size — no CSS needed. `picture` for art direction (different images at different sizes):
 
 ::code-wrapper{language="html"}
@@ -147,7 +147,7 @@ Container queries style an element based on its *container's* size, not the view
 	<img src="narrow.jpg" alt="...">
 </picture>
 ```
-
+::
 ### `object-fit` and `aspect-ratio`
 
 ::code-wrapper{language="css"}
@@ -159,7 +159,7 @@ img {
 	object-position: center;
 }
 ```
-
+::
 `object-fit: cover` fills the box, cropping overflow (like `background-size: cover` for `<img>`). `contain` fits entirely (letterboxing). `aspect-ratio` maintains a ratio without padding hacks.
 
 ## 💡 Tips & Tricks
@@ -223,7 +223,7 @@ The deeper fix — use mobile-first (`min-width`), so the base is mobile and lar
 	.container { padding: 2rem; max-width: 1200px; }
 }
 ```
-
+::
 This avoids the "does 768px match `max-width: 768px`?" confusion and is the preferred pattern.
 
 **The lesson**: check the actual viewport width in DevTools (device toolbar), and prefer mobile-first (`min-width`) to avoid boundary confusion. A tablet reporting 800px CSS width won't match `max-width: 768px`.

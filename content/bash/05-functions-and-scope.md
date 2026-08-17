@@ -19,7 +19,7 @@ function greet() {
 # Call it
 greet "Alice"   # Hello, Alice!
 ```
-
+::
 Both syntaxes work. The `greet() { ... }` form is more portable (POSIX-compatible without `function`).
 
 ## Arguments
@@ -43,7 +43,7 @@ sum() {
 
 sum 1 2 3 4   # 10
 ```
-
+::
 Functions get their own `$1`, `$2`, `$@`, `$#` (independent of the script's args). `$0` is still the script name (not the function name) in most shells.
 
 ## Return Values
@@ -64,7 +64,7 @@ if is_even 4; then
 	echo "even"
 fi
 ```
-
+::
 `return` sets the exit status (0 = success). Use this for boolean-like functions.
 
 ### Returning values via stdout
@@ -80,7 +80,7 @@ get_date() {
 today=$(get_date)
 echo "$today"   # 2024-01-15
 ```
-
+::
 ### Returning values via a variable name (nameref)
 
 ::code-wrapper{language="bash"}
@@ -95,7 +95,7 @@ parse_version() {
 parse_version out "1.2.3"
 echo "$out"   # 1_2_3
 ```
-
+::
 `local -n` (nameref) lets a function set a variable in the caller's scope — cleaner than echoing and capturing for complex data.
 
 ## `local` Variables
@@ -112,7 +112,7 @@ counter   # 1
 counter   # 1 (count is reset each call, local)
 echo "$count"   # (empty — count is local)
 ```
-
+::
 **Always use `local`** for function variables — without it, they're global (polluting the scope, clobbering existing variables).
 
 ### `local` and recursion
@@ -132,7 +132,7 @@ factorial() {
 
 factorial 5   # 120
 ```
-
+::
 `local` makes each recursive call have its own `n` and `sub`.
 
 ## Dynamic Scoping
@@ -152,7 +152,7 @@ inner() {
 
 outer   # outer
 ```
-
+::
 In lexical scoping (most languages), `inner` wouldn't see `x`. In Bash's dynamic scoping, `inner` sees `outer`'s `x` (because `outer` called `inner`). This is surprising but useful.
 
 ## Exporting Functions
@@ -164,7 +164,7 @@ export -f my_func   # available in subshells and child processes
 
 bash -c 'my_func'   # hello (works in a child process)
 ```
-
+::
 `export -f` makes a function available to child processes. Rarely needed (mostly for `xargs`/`find`/subshells).
 
 ## Recursion
@@ -181,7 +181,7 @@ fib() {
 
 fib 10   # 55
 ```
-
+::
 Recursion works but is slow in Bash (subprocess per `$()`). Use it sparingly — Bash isn't designed for heavy computation.
 
 ## Arrays as Arguments
@@ -199,7 +199,7 @@ print_args() {
 arr=("apple" "banana" "cherry")
 print_args "${arr[@]}"   # passes all elements as separate args
 ```
-
+::
 Or use a nameref (Bash 4.3+):
 
 ::code-wrapper{language="bash"}
@@ -214,7 +214,7 @@ process_array() {
 my_arr=("a" "b" "c")
 process_array my_arr   # pass by name
 ```
-
+::
 ## Signal Traps (a related use of functions)
 
 ::code-wrapper{language="bash"}
@@ -229,7 +229,7 @@ trap cleanup EXIT INT TERM   # run cleanup on exit, Ctrl-C, or kill
 
 # ... script logic ...
 ```
-
+::
 `trap` registers a function to run on a signal (EXIT, INT (Ctrl-C), TERM, etc.). Use for cleanup (temp files, lock files).
 
 ## 💡 Tips & Tricks
@@ -289,7 +289,7 @@ increment() {
 	echo "$count"
 }
 ```
-
+::
 With `local count=0`, each call resets `count` to 0, then increments to 1. The counter never goes above 1.
 
 The fix — initialize the global once (outside the function), and don't use `local`:
@@ -304,7 +304,7 @@ increment() {
 increment   # 1
 increment   # 2
 ```
-
+::
 Or, if you want the counter encapsulated, use a file or a nameref pattern. The key is: don't re-initialize with `local` inside the function if you want the value to persist.
 
 **The lesson**: `local count=0` inside a function resets `count` to 0 on each call (local scope). For a persistent counter, use a global (initialized outside the function) and don't `local` it. Or use a file/external state. Understand `local` scope vs global persistence.

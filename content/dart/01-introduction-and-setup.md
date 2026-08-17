@@ -19,14 +19,14 @@ Dart is a client-optimized language for fast apps on any platform — web, mobil
 brew tap dart-lang/dart
 brew install dart
 ```
-
+::
 ### Windows (Chocolatey)
 
 ::code-wrapper{language="powershell"}
 ```powershell
 choco install dart-sdk
 ```
-
+::
 ### Linux (apt)
 
 ::code-wrapper{language="bash"}
@@ -34,14 +34,14 @@ choco install dart-sdk
 sudo apt-get update
 sudo apt-get install dart
 ```
-
+::
 ### Verify
 
 ::code-wrapper{language="bash"}
 ```bash
 dart --version
 ```
-
+::
 ## Your First Dart Program
 
 Create `hello.dart`:
@@ -52,14 +52,14 @@ void main() {
 	print('Hello, Dart!');
 }
 ```
-
+::
 ### Run it
 
 ::code-wrapper{language="bash"}
 ```bash
 dart run hello.dart
 ```
-
+::
 Every Dart program starts with `main()`. `print()` writes to stdout with a newline. Statements end with `;`.
 
 ## AOT vs JIT
@@ -88,7 +88,7 @@ my_app/
 ├── pubspec.yaml    # project config and dependencies
 └── analysis_options.yaml  # linter rules
 ```
-
+::
 `bin/main.dart` is the entry point for a console app. `lib/` holds the reusable library code.
 
 ## `pub` — the Dart Package Manager
@@ -102,7 +102,7 @@ dart pub add http   # add a dependency
 dart pub upgrade    # upgrade dependencies
 dart pub publish    # publish to pub.dev
 ```
-
+::
 Dependencies are declared in `pubspec.yaml`:
 
 ::code-wrapper{language="yaml"}
@@ -116,7 +116,7 @@ dependencies:
 dev_dependencies:
 	test: ^1.24.0
 ```
-
+::
 Packages are hosted on [pub.dev](https://pub.dev). `^1.0.0` means `>=1.0.0 <2.0.0` (compatible with 1.x).
 
 ## `dart create`
@@ -129,7 +129,7 @@ dart create my_app
 cd my_app
 dart run
 ```
-
+::
 This creates the structure above and a "Hello, World!" in `bin/my_app.dart`.
 
 ## Tooling
@@ -161,7 +161,7 @@ void main(List<String> arguments) {
 	}
 }
 ```
-
+::
 `main(List<String> arguments)` receives command-line args. `$name` and `$i` are string interpolation. `final` is a runtime constant (single-assignment).
 
 ## 💡 Tips & Tricks
@@ -204,7 +204,7 @@ void main() {
 	print("Hello, Dart!");
 }
 ```
-
+::
 **The lesson**: Dart is a C-family language — statements end with semicolons. Forgetting the `;` is a common error for developers coming from Python or Go (which don't require them).
 
 </details>

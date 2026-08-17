@@ -247,7 +247,7 @@ type Number interface {
 	~int | ~float64
 }
 ```
-
+::
 Now `Score` (underlying type `int`) satisfies `~int`, and `Sum(scores)` works.
 
 **The lesson**: `int` in a constraint matches only the predeclared `int`; `~int` matches `int` and any named type with underlying type `int` (`type Score int`, `type UserID int64`, etc.). Use `~` when you want named types based on the constraint's types to be accepted.

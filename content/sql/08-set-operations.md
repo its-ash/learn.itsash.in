@@ -206,7 +206,7 @@ SELECT COUNT(DISTINCT city) FROM (
   SELECT city FROM suppliers
 ) all_cities;
 ```
-
+::
 `UNION` is cleaner here — it dedups once during the combine, and `COUNT(*)` then counts the deduped rows. `COUNT(DISTINCT)` over `UNION ALL` works but pays both the `UNION ALL` concatenation *and* a separate hash-sort for `DISTINCT` — usually slower than `UNION` + `COUNT(*)`.
 
 **The lesson**: `UNION ALL` keeps duplicates; `UNION` removes them. When you want "distinct values across inputs," use `UNION`, not `UNION ALL` + `COUNT(*)`.

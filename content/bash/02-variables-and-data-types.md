@@ -14,7 +14,7 @@ empty=""
 # ❌ wrong (spaces matter)
 # name = "Alice"    # bash: name: command not found
 ```
-
+::
 **No spaces around `=`** — `name="Alice"` assigns; `name = "Alice"` runs the command `name` with args `=` and `"Alice"`. This is the #1 Bash beginner mistake.
 
 ## Variable Expansion
@@ -26,7 +26,7 @@ echo "$name_len"    # (empty — no such variable)
 echo "${name}_suffix"  # Alice_suffix (braces delimit the name)
 echo "$name's"      # Alice's (apostrophe is OK, but braces are safer)
 ```
-
+::
 Use `${name}` when followed by characters that could be part of a variable name (`${name}_suffix`), or for clarity. Without braces, Bash greedily takes the longest valid variable name.
 
 ## Quoting (Critical)
@@ -44,7 +44,7 @@ files="a.txt b.txt c.txt"
 for f in $files; do echo "$f"; done    # iterates 3 files (word-split)
 for f in "$files"; do echo "$f"; done  # iterates 1 string ("a.txt b.txt c.txt")
 ```
-
+::
 - **Double quotes `"..."`** — variables expand, but no word-splitting/globbing. **Always quote variables.**
 - **Single quotes `'...'`** — literal, no expansion. Use for fixed strings with `$`, `"`, etc.
 - **No quotes** — variables expand AND word-split/glob. Usually a bug.
@@ -67,7 +67,7 @@ x="hello"          # x is 0 (non-numeric string → 0)
 x=5
 x=$((x + 3))       # 8
 ```
-
+::
 `declare -i` makes arithmetic evaluation automatic on assignment. `=$((...))` is arithmetic expansion (always available).
 
 ### Arrays (indexed)
@@ -86,7 +86,7 @@ for fruit in "${fruits[@]}"; do
 	echo "$fruit"
 done
 ```
-
+::
 Always quote `"${arr[@]}"` (preserves elements with spaces). `"${arr[*]}"` joins with IFS (usually space) — usually not what you want.
 
 ### Associative Arrays (Bash 4+)
@@ -106,7 +106,7 @@ for name in "${!ages[@]}"; do
 	echo "$name is ${ages[$name]}"
 done
 ```
-
+::
 `declare -A` creates an associative array (key-value). `${!arr[@]}` gets keys. Requires Bash 4+ (not macOS default 3.2).
 
 ### Read-only (`declare -r` / `readonly`)
@@ -116,7 +116,7 @@ done
 declare -r PI=3.14159
 # PI=3   # ✗ bash: PI: readonly variable
 ```
-
+::
 ### Exported (environment variables)
 
 ::code-wrapper{language="bash"}
@@ -124,7 +124,7 @@ declare -r PI=3.14159
 export MY_VAR="hello"   # available to child processes
 PATH="$PATH:/my/bin"    # extend PATH
 ```
-
+::
 `export` makes the variable an environment variable (inherited by child processes). Without `export`, it's a shell variable (not inherited).
 
 ## Default Values and Parameter Expansion
@@ -153,7 +153,7 @@ echo "${name^^}"          # all uppercase
 echo "${name,}"           # first char lowercase
 echo "${name,,}"          # all lowercase
 ```
-
+::
 Parameter expansion is powerful — defaults, length, substring, replace, case. Master it; it replaces many `sed`/`awk` calls.
 
 ## Special Variables
@@ -178,7 +178,7 @@ Parameter expansion is powerful — defaults, length, substring, replace, case. 
 for arg in "$@"; do echo "$arg"; done   # iterates each arg (preserves spaces)
 for arg in "$*"; do echo "$arg"; done   # one string (all args joined by IFS)
 ```
-
+::
 **Always use `"$@"` (with quotes)** to pass all args — it preserves each arg as a separate element, even with spaces. `"$*"` joins them into one string.
 
 ## Scope
@@ -193,7 +193,7 @@ my_func() {
 my_func
 echo "$x"   # 10
 ```
-
+::
 Use `local` to keep a variable local to a function:
 
 ::code-wrapper{language="bash"}
@@ -204,7 +204,7 @@ my_func() {
 my_func
 echo "$x"   # (empty — x is local)
 ```
-
+::
 **Always use `local` for function variables** — avoids polluting the global scope and clobbering existing variables.
 
 ## Reading Input
@@ -228,7 +228,7 @@ echo  # newline after the prompt
 # Read with a timeout
 read -t 5 -p "Enter (5s): " answer   # empty if timeout
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: always quote variable expansions (`"$var"`) — prevents word-splitting and globbing, which are the source of most Bash bugs (spaces in filenames, special characters). Only omit quotes when you explicitly want word-splitting (rare; use arrays instead).
@@ -281,7 +281,7 @@ for file in *.txt; do
 	echo "Processing $file"
 done
 ```
-
+::
 The glob `*.txt` expands to the actual filenames, each as a separate element (even with spaces). No `ls`, no word-splitting.
 
 Or, for recursive or complex cases, use `find` with `-print0` and `read -d ''`:
@@ -291,7 +291,7 @@ while IFS= read -r -d '' file; do
 	echo "Processing $file"
 done < <(find . -name "*.txt" -print0)
 ```
-
+::
 `-print0` separates filenames with null bytes (the only character not allowed in a filename); `read -d ''` reads null-delimited. This handles any filename (spaces, newlines, special chars).
 
 **The lesson**: don't parse `ls` (fragile, breaks on spaces). Use globs (`for file in *.txt`) or `find -print0` + `read -d ''` for filenames. Always quote `"$file"`. See chapter 04 for more.

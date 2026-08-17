@@ -240,7 +240,7 @@ LEFT JOIN orders o
  AND o.ordered_on >= '2024-01-01'
 GROUP BY c.name;
 ```
-
+::
 Now customers with no (matching) orders still appear, with `SUM` of zero rows = NULL, which `COALESCE` turns into 0.
 
 **The lesson**: conditions on the right table go in `ON` for a `LEFT JOIN` that should preserve all left rows; conditions in `WHERE` filter the *final* rows and silently demote `LEFT JOIN` to `INNER JOIN`.

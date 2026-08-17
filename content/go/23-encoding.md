@@ -247,7 +247,7 @@ var d Data
 json.Unmarshal([]byte(`{"count": 42}`), &d)
 fmt.Println("count:", d.Count)   // 42
 ```
-
+::
 Option 3 (typed struct) is the idiomatic way for known schemas — it avoids the `any`/type-assertion dance entirely and gives exact types. Use `any` only for dynamic/unknown schemas, and then prefer `json.Number`.
 
 **The lesson**: `json.Unmarshal` into `any` makes numbers `float64`. Asserting to `int` fails. Assert to `float64` and convert, use `json.Number`, or unmarshal into a struct.

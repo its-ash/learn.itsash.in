@@ -28,7 +28,7 @@ CSS in `<head>` (via `<link>`) is render-blocking — the browser waits for the 
 	<noscript><link rel="stylesheet" href="full.css"></noscript>
 </head>
 ```
-
+::
 Tools like `critical` (npm) extract above-the-fold CSS automatically.
 
 ## Selectors and Performance
@@ -43,7 +43,7 @@ Modern browsers match selectors **right-to-left** (from the key selector). The r
 /* Right-to-left: find every .title, check if it's in .card and .card:hover */
 .card:hover .title { ... }
 ```
-
+::
 ### Selector performance tips
 - **Avoid universal selectors as keys**: `* { ... }` and `[class] { ... }` match every element.
 - **Avoid deep descendant combinators**: `.a .b .c .d .e` checks 4 ancestors for every `.e`.
@@ -69,7 +69,7 @@ items.forEach((item, i) => {
 	item.style.width = widths[i] + 10 + 'px';          // all writes
 });
 ```
-
+::
 This is mostly a JS concern, but CSS properties that trigger layout (`width`, `height`, `margin`, `padding`, `top`/`left`) contribute.
 
 ## What Triggers What
@@ -99,7 +99,7 @@ Animate `transform` and `opacity` (compositor-only). Avoid animating layout prop
 .modal { will-change: transform, opacity; }   /* before opening */
 .modal { will-change: auto; }                 /* after, remove it */
 ```
-
+::
 ## `content-visibility: auto`
 
 ::code-wrapper{language="css"}
@@ -109,7 +109,7 @@ Animate `transform` and `opacity` (compositor-only). Avoid animating layout prop
 	contain-intrinsic-size: 0 50px;  /* placeholder size */
 }
 ```
-
+::
 `content-visibility: auto` skips rendering (layout, paint) for off-screen elements — huge performance win for long lists/feeds. `contain-intrinsic-size` gives a placeholder size so the scrollbar is accurate. Browser support: Chrome 85+, Safari 18+, Firefox 125+.
 
 ## `contain`
@@ -120,7 +120,7 @@ Animate `transform` and `opacity` (compositor-only). Avoid animating layout prop
 	contain: layout paint style;   /* isolate this subtree */
 }
 ```
-
+::
 `contain` tells the browser the element's internals don't affect the rest of the page — optimization. Values: `layout`, `paint`, `style`, `size`, `strict` (all), `content` (all except `size`). Use on isolated components (cards, widgets).
 
 ## Font Performance
@@ -205,7 +205,7 @@ The fix — use `transform` (compositor-only, GPU, no layout):
 	transform: translateX(-100%);   /* slide out, no layout */
 }
 ```
-
+::
 `transform: translateX(-100%)` moves the sidebar visually without changing its layout size — no layout, no paint (compositor-only), 60fps. The main content's layout is unchanged (you may need to also animate the main content's `transform` or use `margin` carefully).
 
 Or for a collapsible width that affects the main content, use the `grid-template-columns` trick (animate `1fr` → `0fr`), which is smoother than `width`:
@@ -221,7 +221,7 @@ Or for a collapsible width that affects the main content, use the `grid-template
 }
 .sidebar { overflow: hidden; }
 ```
-
+::
 `grid-template-columns: 250px 1fr` → `0fr 1fr` is interpolable and transitions, resizing the sidebar and main content smoothly. Browser support: Chrome 107+, Safari 16+, Firefox 66+.
 
 **The lesson**: animating `width` (or `height`, `margin`, `top`) triggers layout each frame — expensive, janky. Use `transform` (compositor-only) or `grid-template-columns: Xfr → Yfr` (interpolable, smooth) for collapsible panels.

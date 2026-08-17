@@ -277,13 +277,13 @@ This is by design: `CHECK` constraints only reject rows where the expression is 
 ALTER TABLE products ALTER COLUMN price SET NOT NULL;
 ALTER TABLE products ADD CONSTRAINT price_positive CHECK (price > 0);
 ```
-
+::
 Or combine them in the CHECK with an explicit NULL test (less idiomatic):
 
 ```sql
 ALTER TABLE products ADD CONSTRAINT price_positive CHECK (price IS NOT NULL AND price > 0);
 ```
-
+::
 The separate `NOT NULL` + `CHECK` form is clearer and the `NOT NULL` produces a more specific error message ("null value in column price violates not-null constraint") than a generic CHECK violation.
 
 **The lesson**: `CHECK` constraints allow NULLs (UNKNOWN passes). Use `NOT NULL` to forbid NULL, and `CHECK` to enforce a domain on non-NULL values.

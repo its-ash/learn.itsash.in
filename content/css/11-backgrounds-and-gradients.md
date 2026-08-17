@@ -20,7 +20,7 @@ CSS backgrounds are powerful — images, gradients, positioning, and layering.
 	background: #f0f0f0 url("bg.png") no-repeat center / cover;
 }
 ```
-
+::
 ### Multiple backgrounds
 
 Comma-separate for multiple layers — first is on top:
@@ -31,7 +31,7 @@ Comma-separate for multiple layers — first is on top:
 	background: url("overlay.png") no-repeat center, linear-gradient(to right, red, blue);
 }
 ```
-
+::
 Each layer can have its own `image`/`repeat`/`position`/`size`/etc. `background-color` is the bottom layer (one only).
 
 ### `background-size`
@@ -51,7 +51,7 @@ background-position: 50% 50%;       /* percentages */
 background-position: 10px 20px;     /* lengths */
 background-position: right 10px bottom 20px;  /* offset from edges */
 ```
-
+::
 ### `background-attachment`
 
 - `scroll` (default) — scrolls with the page.
@@ -76,7 +76,7 @@ background-position: right 10px bottom 20px;  /* offset from edges */
 	color: transparent;
 }
 ```
-
+::
 ## Gradients
 
 ### `linear-gradient`
@@ -89,7 +89,7 @@ background: linear-gradient(red 0%, green 50%, blue 100%);  /* with stops */
 background: linear-gradient(red, blue 20%, green);          /* stop positions */
 background: linear-gradient(to right, red 0%, red 50%, blue 50%, blue 100%);  /* hard stop */
 ```
-
+::
 ### `radial-gradient`
 
 ::code-wrapper{language="css"}
@@ -98,7 +98,7 @@ background: radial-gradient(circle, red, blue);
 background: radial-gradient(circle at top left, red, blue);
 background: radial-gradient(50% 50%, red, blue);
 ```
-
+::
 ### `conic-gradient`
 
 ::code-wrapper{language="css"}
@@ -106,7 +106,7 @@ background: radial-gradient(50% 50%, red, blue);
 background: conic-gradient(red, yellow, green, blue, red);
 background: conic-gradient(from 45deg, red, blue);
 ```
-
+::
 Conic gradients sweep around a center point — useful for pie charts and color wheels.
 
 ### Repeating gradients
@@ -116,7 +116,7 @@ Conic gradients sweep around a center point — useful for pie charts and color 
 background: repeating-linear-gradient(45deg, red, red 10px, blue 10px, blue 20px);
 background: repeating-conic-gradient(red 0 30deg, blue 30deg 60deg);
 ```
-
+::
 ## Gradient Tips
 
 - Gradients are images (`background-image`), so they layer with other backgrounds and respect `background-size`/`position`.
@@ -173,7 +173,7 @@ Actually, the most likely real bug: **the shorthand comes first, then `backgroun
 	background: url("bg.png");     /* ❌ shorthand resets size to auto! */
 }
 ```
-
+::
 Here the shorthand *resets* `background-size` to `auto` (overriding the earlier `cover`), so the image is at its natural size (tiny) and tiles (default `repeat`).
 
 The fix — put `background-size` *after* the shorthand, or include it in the shorthand:
@@ -185,7 +185,7 @@ The fix — put `background-size` *after* the shorthand, or include it in the sh
 /* Option 2: in the shorthand (with /) */
 .box { background: url("bg.png") no-repeat center / cover; }
 ```
-
+::
 **The lesson**: the `background` shorthand resets *all* background properties to defaults. Setting `background-size` before the shorthand is overridden. Set it after, or include it in the shorthand (`position / size`).
 
 </details>

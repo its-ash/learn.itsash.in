@@ -167,7 +167,7 @@ for _, u := range users {
 	fmt.Println(u)   // "User: Alice"
 }
 ```
-
+::
 Or implement `String()` on a custom map type (rare) or use a custom formatter.
 
 **The lesson**: `fmt` calls `String()` on the value you pass, not on nested values inside containers. A `map[K]V` prints its values with default formatting, not `V.String()`.

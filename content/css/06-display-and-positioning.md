@@ -26,7 +26,7 @@ div { display: block; }      /* full width, new line */
 span { display: inline; }    /* content width, in line */
 button { display: inline-block; }  /* in line, but width/height work */
 ```
-
+::
 - **Block** elements stack vertically; `width`/`height`/all margins work.
 - **Inline** elements flow horizontally; `width`/`height`/vertical margin/padding don't work (they're ignored or don't affect layout).
 - **`inline-block`** combines inline flow with block sizing — useful for buttons, badges, and inline UI elements that need `width`/`height`.
@@ -59,7 +59,7 @@ For animations, use `opacity` (transitionable); for removal, `display: none`; fo
 	left: 20px;  /* moves right 20px */
 }
 ```
-
+::
 The element stays in normal flow (its space is reserved), but it's visually offset. `relative` is also used to establish a containing block for `absolute` children.
 
 ### `position: absolute`
@@ -72,7 +72,7 @@ The element stays in normal flow (its space is reserved), but it's visually offs
 	top: 0; right: 0;   /* top-right corner of .parent */
 }
 ```
-
+::
 `absolute` is positioned relative to the nearest ancestor with `position: relative/absolute/fixed/sticky` (or the initial containing block — the viewport — if none). It's removed from flow (no space reserved).
 
 ### `position: fixed`
@@ -84,7 +84,7 @@ The element stays in normal flow (its space is reserved), but it's visually offs
 	top: 0; left: 0; right: 0;   /* full-width, fixed at the top */
 }
 ```
-
+::
 `fixed` is positioned relative to the viewport — it stays in place during scroll. ⚠️ An ancestor with a `transform`, `filter`, `perspective`, or `will-change` becomes the containing block instead of the viewport (a common surprise).
 
 ### `position: sticky`
@@ -96,7 +96,7 @@ The element stays in normal flow (its space is reserved), but it's visually offs
 	top: 0;   /* sticks to the top when scrolled past */
 }
 ```
-
+::
 `sticky` is `relative` until the element reaches the specified offset during scroll, then it becomes `fixed` at that offset. It "sticks" within its parent's bounds (unsticks when the parent scrolls out). Useful for sticky headers, section headers, and sidebars.
 
 ⚠️ `sticky` requires the parent to have a height greater than the sticky element, and no ancestor with `overflow: hidden`/`auto`/`scroll` (or the sticky is relative to the scroll container, which may not be what you want).
@@ -113,7 +113,7 @@ The element stays in normal flow (its space is reserved), but it's visually offs
 /* Logical */
 .box { inset-block: 10px; inset-inline: 20px; }
 ```
-
+::
 `inset` is the shorthand for all four. `inset-block`/`inset-inline` are the logical (writing-mode-aware) versions. For `position: absolute/fixed` with all four set, `width`/`height` are derived from the insets (if not set).
 
 ## `z-index` and Stacking Contexts (preview)
@@ -122,7 +122,7 @@ The element stays in normal flow (its space is reserved), but it's visually offs
 ```css
 .modal { position: fixed; z-index: 1000; }
 ```
-
+::
 `z-index` controls the stacking order of positioned elements (higher = in front). It only applies to positioned elements (not `static`). Chapter 10 covers stacking contexts in depth — the main gotcha is that a new stacking context (from `transform`, `opacity < 1`, `position: fixed`, etc.) traps children's `z-index` within the parent's context.
 
 ## Normal Flow
@@ -179,7 +179,7 @@ The fix — remove the `transform` from the ancestor that wraps the fixed elemen
 	<div class="page">...</div>
 </body>
 ```
-
+::
 Any of `transform`, `filter`, `perspective`, `will-change` (with one of these values), `contain: paint`, or `backdrop-filter` on an ancestor creates a containing block for `fixed` descendants. This is a common surprise when adding an animation to a wrapper.
 
 **The lesson**: `position: fixed` is relative to the viewport *unless* an ancestor has a `transform`/`filter`/`perspective` — then it's relative to that ancestor. If a fixed element starts scrolling, check ancestors for transforms.

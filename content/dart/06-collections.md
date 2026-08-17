@@ -11,7 +11,7 @@ List<String> fruits = ['apple', 'banana'];
 var empty = <int>[];              // typed empty list
 var fixed = List<int>.filled(5, 0);   // [0, 0, 0, 0, 0]
 ```
-
+::
 ### Access and modify
 
 ::code-wrapper{language="dart"}
@@ -28,7 +28,7 @@ list.removeAt(0);      // remove by index
 list.contains('a');    // true
 list.indexOf('c');     // 2
 ```
-
+::
 ### List methods
 
 ::code-wrapper{language="dart"}
@@ -44,7 +44,7 @@ list.indexOf('c');     // 2
 [1, 2, 3].join(', ');                         // '1, 2, 3'
 [1, 2, 3].sublist(1);                         // [2, 3]
 ```
-
+::
 `map`/`where` return lazy `Iterable`s — call `.toList()` to materialize. `sort` is in-place (returns void). `fold` has an initial value; `reduce` doesn't (throws on empty).
 
 ### Const lists
@@ -54,7 +54,7 @@ list.indexOf('c');     // 2
 const colors = ['red', 'green'];   // compile-time constant, immutable, canonicalized
 // colors.add('blue');              // ✗ const lists are immutable
 ```
-
+::
 ### Spread and collection-if/for
 
 ::code-wrapper{language="dart"}
@@ -69,7 +69,7 @@ var withAd = [
 	for (var i = 0; i < 3; i++) 'item$i',   // collection-for
 ];
 ```
-
+::
 Collection-if and collection-for build lists conditionally/programmatically — no `addAll` or `if`-then-`add` boilerplate.
 
 ## Sets
@@ -81,7 +81,7 @@ Set<int> numbers = {1, 2, 3};
 var empty = <int>{};            // typed empty set (NOT {} which is a Map)
 var dupes = {1, 1, 2, 2, 3};   // {1, 2, 3} (duplicates removed)
 ```
-
+::
 ### Set operations
 
 ::code-wrapper{language="dart"}
@@ -95,7 +95,7 @@ a.contains(2);         // true
 a.add(4);              // {1, 2, 3, 4}
 a.remove(1);           // {2, 3, 4}
 ```
-
+::
 Sets are unordered (the default `LinkedHashSet` preserves insertion order, but you shouldn't rely on it). Use Sets for uniqueness and set operations (union, intersection).
 
 ## Maps
@@ -117,7 +117,7 @@ ages.length;         // 3
 ages.remove('Bob');
 ages.forEach((k, v) => print('$k: $v'));
 ```
-
+::
 Accessing a missing key returns `null` (not an error) — the value type is `int?` when accessed via `[]`. The default `Map` is `LinkedHashMap` (insertion order preserved).
 
 ### Map iteration
@@ -133,7 +133,7 @@ for (var value in ages.values) { ... }
 
 ages.forEach((key, value) { ... });
 ```
-
+::
 ## Type safety and generics
 
 ::code-wrapper{language="dart"}
@@ -144,7 +144,7 @@ List<int> numbers = [1, 2, 3];
 Map<String, int> scores = {'a': 1};
 // scores['b'] = 'two';   // ✗ type error
 ```
-
+::
 Collections are typed — the element type is enforced. `List<dynamic>` or `Map<dynamic, dynamic>` (the default for `[]`/`{}` without type args) allows any type but loses type safety.
 
 ## `Iterable` vs `List`
@@ -158,7 +158,7 @@ iter.length;   // ✗ Iterable has no length (actually, it does — but it itera
 var list = iter.toList();   // [2, 4, 6]
 list.length;   // 3
 ```
-
+::
 Lazy `Iterable`s are efficient (no intermediate list) but re-iterate each time. `.toList()` caches.
 
 ## Immutable collections
@@ -174,7 +174,7 @@ final mutable = [1, 2, 3];
 final readonly = List.unmodifiable(mutable);
 // readonly.add(4);   // ✗ throws UnsupportedError
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `map`/`where`/`fold`/`any`/`every` (functional methods) over manual loops — `[1,2,3].map((e) => e * 2).toList()` is clearer than a `for` loop building a list. Call `.toList()` to materialize lazy `Iterable`s.
@@ -229,7 +229,7 @@ var numbers = [3, 1, 2];
 numbers.sort();
 print(numbers);  // [1, 2, 3]
 ```
-
+::
 `[...numbers]` creates a copy (spread), and `..sort()` (cascade) sorts it and returns the list. This gives a sorted copy without mutating the original.
 
 **The lesson**: Dart's `List.sort()` is in-place and returns `void` (like Java, unlike Python's `sorted()`). To get a sorted copy, spread to a new list and cascade-sort: `[...list]..sort()`. Don't assign the result of `sort()`.

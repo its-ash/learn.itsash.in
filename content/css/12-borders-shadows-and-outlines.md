@@ -19,7 +19,7 @@ Borders, shadows, and outlines are the core of visual styling — edges, depth, 
 	border-left: 1px solid green;
 }
 ```
-
+::
 ### `border-style`
 
 - `solid`, `dashed`, `dotted`, `double`, `groove`, `ridge`, `inset`, `outset`, `none`, `hidden`.
@@ -36,7 +36,7 @@ border-radius: 50%;                          /* circle (on a square) */
 border-radius: 10px / 20px;                  /* elliptical (h/v) */
 border-top-left-radius: 10px;                /* single corner */
 ```
-
+::
 `50%` on a square makes a circle; on a rectangle, an ellipse. The `/` separates horizontal and vertical radii for elliptical corners.
 
 ## Box Shadows
@@ -49,7 +49,7 @@ box-shadow: 0 4px 6px 2px rgba(0,0,0,0.1) inset;  /* inset */
 box-shadow: 0 1px 2px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.1);  /* multiple, layered */
 box-shadow: none;                            /* remove */
 ```
-
+::
 ### Parameters
 
 - `offset-x` `offset-y` — shadow direction (required).
@@ -68,7 +68,7 @@ Layer shadows for depth (elevation):
 .elevation-2 { box-shadow: 0 3px 6px rgba(0,0,0,0.16), 0 3px 6px rgba(0,0,0,0.23); }
 .elevation-3 { box-shadow: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23); }
 ```
-
+::
 A tight ambient shadow + a diffuse key shadow = realistic depth. This is the Material Design pattern.
 
 ### Shadow performance
@@ -83,7 +83,7 @@ text-shadow: 2px 2px 4px rgba(0,0,0,0.5);    /* offset-x offset-y blur color */
 text-shadow: 0 0 10px #fff;                  /* glow */
 text-shadow: 1px 1px 0 #000, 2px 2px 0 #000; /* multiple, layered (3D text) */
 ```
-
+::
 No `inset` or `spread` for text-shadow. Multiple shadows create effects (3D text, neon glow).
 
 ## Outlines
@@ -95,7 +95,7 @@ button:focus-visible {
 	outline-offset: 2px;
 }
 ```
-
+::
 Outlines are *like* borders but:
 - Don't take up space (don't affect layout).
 - Can be non-rectangular (in some browsers).
@@ -113,7 +113,7 @@ Use `:focus-visible` (not `:focus`) for focus rings — it shows the outline onl
 button:focus { outline: none; }              /* ❌ removes keyboard focus too */
 button:focus-visible { outline: 2px solid blue; }  /* ✓ keyboard only */
 ```
-
+::
 Never remove `outline` without providing an alternative focus indicator — it's an accessibility violation.
 
 ## 💡 Tips & Tricks
@@ -168,7 +168,7 @@ button:focus-visible {
 	outline-offset: 2px;
 }
 ```
-
+::
 Or if using `box-shadow`, ensure no `overflow: hidden` ancestor clips it, or use `outline` which isn't clipped.
 
 **The lesson**: use `:focus-visible` (not `:focus`) for keyboard-only focus rings, and prefer `outline`/`outline-offset` (not clipped by `overflow: hidden`) for the focus indicator. Never remove `outline` without a visible replacement — keyboard users depend on it.

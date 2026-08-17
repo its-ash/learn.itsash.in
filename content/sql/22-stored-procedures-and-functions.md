@@ -337,7 +337,7 @@ CREATE INDEX users_full_name_idx ON users(full_name);
 -- The generated column is automatically updated on any change to first_name/last_name,
 -- so the index stays in sync.
 ```
-
+::
 **The lesson**: `IMMUTABLE` means "no table reads, no time dependence, no randomness." A function that reads a table is `STABLE` (or `VOLATILE`), and using it in an index produces stale results. For indexed computed values, use a generated column — the database maintains it on updates.
 
 </details>

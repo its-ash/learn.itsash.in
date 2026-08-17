@@ -211,7 +211,7 @@ start := time.Now()   // ✅ includes monotonic reading
 // ... work ...
 elapsed := time.Since(start)   // uses monotonic clock — accurate even if wall clock jumps
 ```
-
+::
 If you need a specific start time (e.g., from a parsed timestamp), you can't get monotonic accuracy — monotonic clocks can't be reconstructed from wall times. Measure elapsed time from `time.Now()` at the actual start.
 
 **The lesson**: `time.Since` uses the monotonic clock only if both times have a monotonic reading. `time.Now()` has one; `time.Date`/`time.Parse` don't. For elapsed-time measurement, always start with `time.Now()`.

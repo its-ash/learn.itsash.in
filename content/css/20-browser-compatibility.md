@@ -23,7 +23,7 @@ Vendor prefixes were the mechanism for experimental CSS features:
 	transition: all 0.3s ease;
 }
 ```
-
+::
 ### The prefix problem
 
 Prefixes were meant for experimentation, but developers used them in production. Browsers then had to support prefixed properties long after the standard stabilized. Modern CSS uses **prefix-free** features — browser support is now good enough that most CSS needs no prefix.
@@ -52,7 +52,7 @@ Don't hand-write prefixes — use **Autoprefixer** (PostCSS plugin) or a build t
 	]
 }
 ```
-
+::
 Autoprefixer reads this and adds only the prefixes needed for those browsers. This is the standard approach — let tooling handle prefixes.
 
 ## Feature Detection (`@supports`)
@@ -81,7 +81,7 @@ Autoprefixer reads this and adds only the prefixes needed for those browsers. Th
 	}
 }
 ```
-
+::
 ### `@supports` syntax
 
 ::code-wrapper{language="css"}
@@ -93,7 +93,7 @@ Autoprefixer reads this and adds only the prefixes needed for those browsers. Th
 @supports selector(:has(> *)) { ... }   /* selector support */
 @supports font-format(opentype) { ... } /* font format support */
 ```
-
+::
 Use `@supports` for progressive enhancement — provide a fallback, enhance if the feature is supported. Better than user-agent sniffing (which is fragile).
 
 ## Fallbacks and Progressive Enhancement
@@ -114,7 +114,7 @@ Put the fallback *before* the new property — if the new one is unsupported, th
 	grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
 }
 ```
-
+::
 If `display: grid` is unsupported, the browser ignores it and uses `display: block` (the earlier value). The cascade handles it — the last *supported* value wins.
 
 ### `@layer` for fallbacks
@@ -129,7 +129,7 @@ If `display: grid` is unsupported, the browser ignores it and uses `display: blo
 	.layout { display: grid; grid-template-rows: auto 1fr auto; }
 }
 ```
-
+::
 If `grid` is unsupported, the `fallback` layer's `flex` applies (the `base` layer's `grid` is ignored). Layer order ensures the enhanced version wins when supported.
 
 ## Internet Explorer and Old Browsers
@@ -207,7 +207,7 @@ Safari (older versions, and some current contexts) requires the `-webkit-` prefi
 	backdrop-filter: blur(10px);          /* standard */
 }
 ```
-
+::
 Without `-webkit-backdrop-filter`, Safari ignores the unprefixed `backdrop-filter` (in versions that need the prefix), and the glass effect doesn't appear — the card is just a translucent panel with no blur.
 
 The fix — include the `-webkit-` prefix (before the unprefixed, so the standard wins when supported). Or use Autoprefixer with a `browserslist` that includes Safari, which adds the prefix automatically.

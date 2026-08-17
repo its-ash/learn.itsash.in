@@ -57,7 +57,7 @@ greet.apply(user, ['Hi', '.'])   // "Hi, Alice."
 const boundGreet = greet.bind(user, 'Hey')
 boundGreet('?')  // "Hey, Alice?"
 ```
-
+::
 ::
 
 ### 4. `new` Binding
@@ -71,7 +71,7 @@ function User(name) {
 const alice = new User('Alice')
 alice.name  // "Alice"
 ```
-
+::
 ::
 
 ## Arrow Functions: Lexical `this`
@@ -107,7 +107,7 @@ const bad = {
   get: () => this.value  // undefined — `this` is NOT bad
 }
 ```
-
+::
 ::
 
 ## Binding Precedence
@@ -133,7 +133,7 @@ const instance = new BoundFoo('Bob')
 console.log(instance.name)  // "Bob" (new binding wins over bind)
 console.log(obj1.name)      // "Alice" (bind was ignored)
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

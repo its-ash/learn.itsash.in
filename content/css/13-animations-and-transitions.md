@@ -17,7 +17,7 @@ A transition smoothly interpolates a property change:
 	transform: scale(1.05);
 }
 ```
-
+::
 ### `transition` shorthand
 
 ::code-wrapper{language="css"}
@@ -27,7 +27,7 @@ transition: background 0.3s ease 0s;
 transition: all 0.3s ease;          /* ⚠️ avoid: animates unexpected properties */
 transition: background 0.3s, transform 0.2s;  /* multiple */
 ```
-
+::
 ### Timing functions
 
 - `ease` (default) — fast start, slow end.
@@ -43,7 +43,7 @@ transition: background 0.3s, transform 0.2s;  /* multiple */
 transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);  /* overshoot (bounce) */
 transition: opacity 0.5s steps(5, end);  /* 5 discrete steps */
 ```
-
+::
 ### What can be animated?
 
 Not all properties transition smoothly. Properties that can be interpolated:
@@ -62,7 +62,7 @@ Not all properties transition smoothly. Properties that can be interpolated:
 .menu { transition: transform 0.3s; transform: scaleY(0); transform-origin: top; }
 .menu.open { transform: scaleY(1); }
 ```
-
+::
 ## `@keyframes` Animations
 
 ::code-wrapper{language="css"}
@@ -85,7 +85,7 @@ Not all properties transition smoothly. Properties that can be interpolated:
 	animation: pulse 2s ease-in-out infinite;
 }
 ```
-
+::
 ### `animation` shorthand
 
 ::code-wrapper{language="css"}
@@ -94,7 +94,7 @@ animation: name duration timing-function delay iteration-count direction fill-mo
 animation: spin 1s linear infinite;
 animation: pulse 2s ease-in-out 0s infinite alternate;
 ```
-
+::
 ### Properties
 
 - `animation-name` — the `@keyframes` name.
@@ -135,7 +135,7 @@ Animate `transform` and `opacity` for 60fps. If you must animate layout properti
 ```css
 .modal { will-change: transform, opacity; }   /* hint to the browser */
 ```
-
+::
 `will-change` hints that a property will animate, letting the browser optimize. Use sparingly — adding it to too many elements wastes memory. Add it just before the animation, remove it after.
 
 ## `prefers-reduced-motion`
@@ -150,7 +150,7 @@ Animate `transform` and `opacity` for 60fps. If you must animate layout properti
 	}
 }
 ```
-
+::
 Respect the user's OS preference for reduced motion. Disable or shorten animations.
 
 ## 💡 Tips & Tricks
@@ -206,7 +206,7 @@ The fix — use `transform: scaleY()` (compositor-only, GPU-accelerated, no layo
 }
 .menu.open { transform: scaleY(1); }
 ```
-
+::
 Or use `grid-template-rows: 0fr` → `1fr` (a modern trick that transitions and fits content):
 
 ```css
@@ -218,7 +218,7 @@ Or use `grid-template-rows: 0fr` → `1fr` (a modern trick that transitions and 
 .menu-wrap.open { grid-template-rows: 1fr; }
 .menu { overflow: hidden; }
 ```
-
+::
 The `grid-template-rows: 0fr` → `1fr` trick animates the height to fit content, no fixed height needed, and `1fr` is interpolable (Chrome 107+, Safari 16+, Firefox 66+).
 
 **The lesson**: avoid animating `height` (triggers layout, and `auto` isn't interpolable). Use `transform: scaleY()` (GPU) or `grid-template-rows: 0fr → 1fr` (animates to content height).

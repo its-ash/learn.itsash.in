@@ -314,7 +314,7 @@ FROM orders
 GROUP BY customer_id
 HAVING SUM(amount) > 100;
 ```
-
+::
 **The lesson**: `WHERE` filters *input* rows (before grouping); `HAVING` filters *output* groups (after grouping). Use the raw expression in `HAVING` — aliases defined in `SELECT` aren't visible there either (though PostgreSQL is lenient and accepts the alias in `HAVING`; portability-wise, use the full expression).
 
 </details>

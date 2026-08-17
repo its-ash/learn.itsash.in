@@ -23,7 +23,7 @@ window.addEventListener('storage', (e) => {
   console.log(e.key, e.oldValue, e.newValue)
 })
 ```
-
+::
 ::
 
 ## Fetch API
@@ -53,7 +53,7 @@ const controller = new AbortController()
 fetch('/api/slow', { signal: controller.signal })
 setTimeout(() => controller.abort(), 5000)
 ```
-
+::
 ::
 
 ## IndexedDB
@@ -78,7 +78,7 @@ const tx = db.transaction('users', 'readwrite')
 tx.objectStore('users').add({ id: 1, name: 'Alice' })
 await new Promise(r => tx.oncomplete = r)
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

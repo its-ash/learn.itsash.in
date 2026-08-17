@@ -309,7 +309,7 @@ SELECT * FROM users WHERE email = 'Alice@example.com';
 ALTER TABLE users ALTER COLUMN email TYPE text COLLATE "und-x-icu";
 -- Now email = 'ALICE@...' matches 'alice@...' and the plain index works.
 ```
-
+::
 The expression index (option 1) is the most common solution — it's explicit and works regardless of collation. The collation approach (option 3) is elegant but requires ICU support and affects all queries on the column.
 
 **The lesson**: an index on `col` is not an index on `f(col)`. If you filter on a function of a column, index the function (expression index) or store the pre-computed value (generated column).

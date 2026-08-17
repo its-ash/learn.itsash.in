@@ -267,7 +267,7 @@ ALTER TABLE events ADD CONSTRAINT events_processed_at_not_null
 -- Step 4: validate the constraint (SHARE UPDATE EXCLUSIVE — reads/writes continue)
 ALTER TABLE events VALIDATE CONSTRAINT events_processed_at_not_null;
 ```
-
+::
 Or, in PostgreSQL 12+, `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT x` is still a rewrite — the safe path is the nullable + backfill + NOT VALID + validate pattern.
 
 **The lesson**: `NOT NULL` on a new column with existing rows requires the table to be rewritten/filled, holding an exclusive lock. For zero-downtime migrations, add the column nullable, backfill in batches, then add `NOT NULL` via a `NOT VALID` + `VALIDATE` constraint.

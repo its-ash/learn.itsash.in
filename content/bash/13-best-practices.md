@@ -43,7 +43,7 @@ trap cleanup EXIT
 # --- Entry point ---
 main "$@"
 ```
-
+::
 Structure: shebang → strict mode → constants → globals → functions → trap → entry (`main "$@"`). Define functions before calling them (Bash reads top-to-bottom).
 
 ## Naming Conventions
@@ -65,7 +65,7 @@ main() {
 
 main "$@"
 ```
-
+::
 Put logic in `main`, call it at the end with `"$@"`. This:
 - Keeps all logic in functions (testable, reusable).
 - Avoids top-level execution (which runs even if the script is `source`d).
@@ -79,7 +79,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly VERSION="1.0.0"
 # SCRIPT_DIR="other"  # ✗ bash: SCRIPT_DIR: readonly variable
 ```
-
+::
 Use `readonly` for constants — catches accidental reassignment.
 
 ## `SCRIPT_DIR` (script's directory)
@@ -88,7 +88,7 @@ Use `readonly` for constants — catches accidental reassignment.
 ```bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ```
-
+::
 This reliably gets the script's directory (even if called from elsewhere, or via symlink — for symlinks, resolve first). Use for paths relative to the script (config files, libraries).
 
 ## Sourcing Libraries
@@ -103,7 +103,7 @@ die() { log "ERROR: $*"; exit 1; }
 source "$(dirname "${BASH_SOURCE[0]}")/lib/utils.sh"
 log "Starting"
 ```
-
+::
 `source` (or `.`) runs a file in the current shell — functions and variables become available. Use for reusable libraries.
 
 ## Guard Against Re-Sourcing
@@ -116,7 +116,7 @@ _UTILS_SOURCED=1
 
 log() { ... }
 ```
-
+::
 Prevents re-defining functions if the file is sourced twice.
 
 ## `die` (error and exit)
@@ -130,7 +130,7 @@ die() {
 
 [[ -f "$file" ]] || die "File not found: $file"
 ```
-
+::
 A common idiom: print an error to stderr and exit. Use for fatal errors.
 
 ## `require` (check a command exists)
@@ -144,7 +144,7 @@ require() {
 require git
 require curl
 ```
-
+::
 ## Quoting Rules
 
 - **Always quote variable expansions**: `"$var"`, `"${arr[@]}"`, `"$(cmd)"`.
@@ -162,7 +162,7 @@ eval "echo $user_input"
 var="user_input"
 echo "${!var}"   # expands the variable named by $var
 ```
-
+::
 `eval` runs a string as a command — code injection risk. Use indirect expansion (`${!var}`), namerefs (`local -n`), or arrays instead.
 
 ## Check Required Args
@@ -174,7 +174,7 @@ if [[ $# -lt 1 ]]; then
 	exit 1
 fi
 ```
-
+::
 Always provide a `usage` function and call it on bad input.
 
 ## Idempotent Scripts
@@ -187,7 +187,7 @@ mkdir -p "$dir"           # no error if exists
 [[ -f "$file" ]] || touch "$file"
 [[ -d "$dir" ]] || mkdir "$dir"
 ```
-
+::
 `mkdir -p`, `touch`, `[[ -e ]] || create` — safe to rerun.
 
 ## Temp Files (recap)
@@ -197,7 +197,7 @@ mkdir -p "$dir"           # no error if exists
 tmpfile=$(mktemp)
 trap 'rm -f "$tmpfile"' EXIT
 ```
-
+::
 Always `mktemp` + `trap` cleanup. Never `/tmp/myscript.$$`.
 
 ## Output to stderr for Messages
@@ -207,7 +207,7 @@ Always `mktemp` + `trap` cleanup. Never `/tmp/myscript.$$`.
 echo "Processing..." >&2   # status/log to stderr
 echo "$result"             # data to stdout
 ```
-
+::
 Keep stdout for data (machine-parseable), stderr for messages (human). This lets `result=$(script.sh)` capture only data.
 
 ## 💡 Tips & Tricks
@@ -253,7 +253,7 @@ The fix — use `BASH_SOURCE[0]` (more reliable than `$0`, works when `source`d)
 ```bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ```
-
+::
 `BASH_SOURCE[0]` is the current file's path. For symlinks, resolve them:
 
 ```bash
@@ -265,13 +265,13 @@ while [[ -L "$SOURCE" ]]; do   # follow symlinks
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 ```
-
+::
 Or, if `realpath` is available (GNU coreutils / macOS 12.3+):
 
 ```bash
 SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 ```
-
+::
 **The lesson**: `$0` is the invocation path (may be a symlink). Use `BASH_SOURCE[0]` (works when `source`d) and resolve symlinks (`readlink` loop or `realpath`) for the real script directory. This matters when resources (config, libs) are relative to the script.
 
 </details>

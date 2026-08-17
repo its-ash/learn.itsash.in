@@ -40,7 +40,7 @@ func runWorkerPool(jobs []Job, numWorkers int) []Result {
 	return results
 }
 ```
-
+::
 Use a worker pool when you have many jobs and want to limit concurrency (e.g., to avoid overwhelming a database or API).
 
 ## Pipeline
@@ -92,7 +92,7 @@ for n := range evens {
 	fmt.Println(n)   // 4, 16
 }
 ```
-
+::
 Each stage runs concurrently, processing elements as they arrive. Each stage closes its output channel when the input is exhausted.
 
 ## Fan-Out, Fan-In
@@ -127,7 +127,7 @@ func fanOutFanIn(ctx context.Context, input <-chan int, workers int) <-chan int 
 	return out
 }
 ```
-
+::
 Multiple workers process the same input channel (fan-out); their outputs merge into `out` (fan-in, via the shared output channel + WaitGroup).
 
 ## Generator (channel-producing function)
@@ -151,7 +151,7 @@ for n := range counter(0, 5) {
 	fmt.Println(n)   // 0 1 2 3 4
 }
 ```
-
+::
 Generators turn a sequence into a channel, composable with other patterns.
 
 ## Done Channel / Cancellation
@@ -179,7 +179,7 @@ fmt.Println(<-out)   // 1
 fmt.Println(<-out)   // 2
 close(done)          // signal the generator to stop
 ```
-
+::
 Each stage checks `<-done` (or `<-ctx.Done()`) in its `select`, so closing `done` cascades through the pipeline. This is the foundation of graceful shutdown.
 
 ## Bounded Parallelism (semaphore with buffered channel)
@@ -201,7 +201,7 @@ func boundedParallel(items []Item, maxConcurrency int) {
 	wg.Wait()
 }
 ```
-
+::
 A buffered channel as a semaphore limits concurrent goroutines to `maxConcurrency`. Simpler than a worker pool for one-shot parallelism.
 
 ## Or-Done Channel
@@ -232,7 +232,7 @@ func orDone(done <-chan struct{}, c <-chan T) <-chan T {
 	return out
 }
 ```
-
+::
 Wraps a channel so reading from it cancels when `done` closes — used in pipelines to avoid leaking goroutines blocked on a send.
 
 ## Rate Limiting
@@ -249,7 +249,7 @@ for _, req := range requests {
 	handle(req)
 }
 ```
-
+::
 `x/time/rate` provides token-bucket rate limiting — `Wait` blocks until a token is available, enforcing a rate limit.
 
 ## 💡 Tips & Tricks
@@ -316,7 +316,7 @@ func gen(nums ...int) <-chan int {
 	return out
 }
 ```
-
+::
 Now after sending 1, 2, 3, the goroutine closes `out`, and the `range` loop ends cleanly.
 
 **The lesson**: a `for v := range ch` loop only ends when `ch` is closed. A generator (or any channel-producing function) must close its output when done, or the consumer hangs. Use `defer close(out)` at the top of the producing goroutine.

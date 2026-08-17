@@ -18,7 +18,7 @@ element.innerHTML = DOMPurify.sanitize(userHtml)
 const url = new URL(userInput)
 if (url.origin !== 'https://example.com') throw new Error('Invalid origin')
 ```
-
+::
 ::
 
 ## CSRF (Cross-Site Request Forgery)
@@ -34,7 +34,7 @@ fetch('/api/delete', {
   headers: { 'X-CSRF-Token': csrfToken }
 })
 ```
-
+::
 ::
 
 ## Input Validation
@@ -53,7 +53,7 @@ if (Number.isNaN(id)) throw new Error('Invalid ID')
 // Never eval() user input
 eval(userInput)  // ❌ arbitrary code execution
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

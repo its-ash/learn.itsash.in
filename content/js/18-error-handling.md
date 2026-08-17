@@ -15,7 +15,7 @@ try {
   cleanup()  // always runs
 }
 ```
-
+::
 ::
 
 ## Custom Errors
@@ -57,7 +57,7 @@ try {
   }
 }
 ```
-
+::
 ::
 
 ## Async Error Handling
@@ -89,7 +89,7 @@ fetchData()
   .then(process)
   .catch(err => console.error('Any error in chain:', err))
 ```
-
+::
 ::
 
 ## Best Practices
@@ -116,7 +116,7 @@ try {
   conn.close()  // always runs
 }
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

@@ -10,7 +10,7 @@ export const add = (a, b) => a + b
 export const subtract = (a, b) => a - b
 // private: anything not exported is private
 ```
-
+::
 ::
 
 ## Factory Pattern
@@ -31,7 +31,7 @@ function createUser(name, role) {
 const admin = createUser('Alice', 'admin')
 const user = createUser('Bob', 'user')
 ```
-
+::
 ::
 
 ## Observer / Pub-Sub
@@ -62,7 +62,7 @@ bus.on('update', handler)
 bus.emit('update', { count: 1 })
 bus.off('update', handler)
 ```
-
+::
 ::
 
 ## Singleton
@@ -87,7 +87,7 @@ class Database {
   connect() { this.#connected = true }
 }
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

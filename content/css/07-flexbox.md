@@ -11,7 +11,7 @@ Flexbox is a one-dimensional layout model — it arranges items in a row or colu
 	flex-direction: column;   /* or row | row-reverse | column-reverse */
 }
 ```
-
+::
 `display: flex` makes the container a flex container; its direct children become flex items.
 
 ### `flex-direction`
@@ -38,7 +38,7 @@ Flexbox is a one-dimensional layout model — it arranges items in a row or colu
 	justify-content: space-evenly;  /* equal space between and at edges */
 }
 ```
-
+::
 ### `align-items` — alignment along the cross axis
 
 ::code-wrapper{language="css"}
@@ -51,14 +51,14 @@ Flexbox is a one-dimensional layout model — it arranges items in a row or colu
 	align-items: baseline;    /* align by text baseline */
 }
 ```
-
+::
 ### `align-self` (per-item)
 
 ::code-wrapper{language="css"}
 ```css
 .item { align-self: center; }   /* overrides align-items for this item */
 ```
-
+::
 ### `align-content` (multi-line alignment)
 
 When items wrap to multiple lines, `align-content` aligns the *lines* on the cross axis:
@@ -67,7 +67,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 ```css
 .container { align-content: space-between; }
 ```
-
+::
 ## Wrapping
 
 ::code-wrapper{language="css"}
@@ -78,7 +78,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 	flex-wrap: wrap-reverse;
 }
 ```
-
+::
 `nowrap` (default) forces all items onto one line, shrinking them as needed. `wrap` lets them wrap to new lines when they don't fit.
 
 ## `gap`
@@ -93,7 +93,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 	column-gap: 2rem;
 }
 ```
-
+::
 `gap` is the modern way to space flex items — no more margin hacks or `:not(:last-child)` selectors.
 
 ## Flex Item Sizing
@@ -109,7 +109,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 	flex: none;        /* flex: 0 0 auto — don't grow/shrink, use width/height */
 }
 ```
-
+::
 ### The `flex` shorthand
 
 `flex: <grow> <shrink> <basis>`:
@@ -127,7 +127,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 .container { display: flex; }
 .item { flex: 1; }   /* all items share space equally */
 ```
-
+::
 `flex: 1` on all items makes them equal-width (in a row). Different `flex-grow` values proportion: `flex: 2` gets twice the space of `flex: 1`.
 
 ## Order
@@ -136,7 +136,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 ```css
 .item { order: 2; }   /* visual order (default 0; lower comes first) */
 ```
-
+::
 `order` reorders items visually without changing the DOM. ⚠️ The DOM order (for accessibility/tab order) doesn't change — `order` is visual only. Don't use it for meaningful reordering (use the DOM).
 
 ## Common Patterns
@@ -152,7 +152,7 @@ When items wrap to multiple lines, `align-content` aligns the *lines* on the cro
 	height: 100vh;
 }
 ```
-
+::
 The classic "center a thing" — flexbox makes it one line each way.
 
 ### Navbar (logo left, links right)
@@ -161,7 +161,7 @@ The classic "center a thing" — flexbox makes it one line each way.
 ```css
 .nav { display: flex; justify-content: space-between; align-items: center; }
 ```
-
+::
 ### Sidebar + content
 
 ::code-wrapper{language="css"}
@@ -170,7 +170,7 @@ The classic "center a thing" — flexbox makes it one line each way.
 .sidebar { flex: 0 0 250px; }   /* fixed 250px */
 .content { flex: 1; }           /* fill remaining */
 ```
-
+::
 ### Card grid (wrapping)
 
 ::code-wrapper{language="css"}
@@ -178,7 +178,7 @@ The classic "center a thing" — flexbox makes it one line each way.
 .grid { display: flex; flex-wrap: wrap; gap: 1rem; }
 .card { flex: 1 1 300px; }   /* grow/shrink, base 300px */
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `display: flex; justify-content: center; align-items: center;` for centering — it's the one-line-each-way centering solution (horizontal + vertical), replacing the old `margin: auto`/`position: absolute`/`transform` hacks. Set a height on the container for vertical centering to have space.
@@ -224,13 +224,13 @@ The fix — set `min-width: 0` (or `overflow: hidden`) on the flex items to allo
 .row { display: flex; }
 .item { flex: 1; min-width: 0; }   /* allow shrinking below content */
 ```
-
+::
 Or, for text content, allow word-breaking:
 
 ```css
 .item { flex: 1; min-width: 0; overflow-wrap: break-word; }
 ```
-
+::
 `min-width: 0` overrides the default `auto`, letting the item shrink as flex intends. This is one of the most common flexbox bugs — "my flex items won't shrink" is almost always `min-width: auto`.
 
 **The lesson**: flex items have `min-width: auto` by default (won't shrink below content). Set `min-width: 0` to allow shrinking, especially for items with long text content.

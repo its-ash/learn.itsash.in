@@ -212,7 +212,7 @@ WITH recent AS (
 )
 SELECT * FROM recent;
 ```
-
+::
 **The lesson**: `MATERIALIZED` is an optimization *fence* — it prevents predicate pushdown. Use it only when the CTE is expensive and reused; otherwise, let the planner inline so filters and joins can reach the underlying tables.
 
 </details>

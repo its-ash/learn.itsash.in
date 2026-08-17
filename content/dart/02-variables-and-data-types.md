@@ -12,7 +12,7 @@ final age = 30;              // runtime constant (int)
 const pi = 3.14159;          // compile-time constant (double)
 late String description;     // assigned later
 ```
-
+::
 ### `var` vs explicit type
 
 `var` infers the type from the initializer. Once inferred, the type is fixed — you can't assign a different type:
@@ -23,7 +23,7 @@ var x = 10;     // x is int
 x = 20;         // ✓
 // x = 'hi';    // ✗ type error: x is int
 ```
-
+::
 Use `var` for local variables with obvious types. Use explicit types for public APIs, unclear initializers, or when it improves readability.
 
 ### `final` vs `const`
@@ -39,7 +39,7 @@ final now = DateTime.now();   // ✓ runtime value
 const defaultName = 'Guest';  // ✓ literal
 final greeting = 'Hello, $defaultName';  // ✓ (string interpolation of a const)
 ```
-
+::
 `const` is deeper — if a `const` list/map contains `const` values, the whole structure is canonicalized (one instance shared). `final` only prevents reassignment, not deep mutation:
 
 ::code-wrapper{language="dart"}
@@ -50,7 +50,7 @@ list.add(4);       // ✓ final list is mutable
 const list2 = [1, 2, 3];   // const list (implicitly `const`)
 // list2.add(4);            // ✗ const lists are immutable
 ```
-
+::
 ### `late`
 
 `late` declares a non-nullable variable that will be assigned later — before first use:
@@ -68,7 +68,7 @@ void main() {
 	print(description);   // ✓ assigned before use
 }
 ```
-
+::
 `late` is useful for:
 - Fields that can't be initialized in the constructor but will be before use.
 - Expensive initializers that should run lazily (only when first read):
@@ -77,7 +77,7 @@ void main() {
 ```dart
 late final expensiveValue = computeExpensiveValue();   // runs only when first read
 ```
-
+::
 Reading a `late` variable before it's assigned throws `LateInitializationError`.
 
 ## Built-in Types
@@ -91,7 +91,7 @@ double price = 19.99;
 num anyNumber = 10;    // num is the supertype of int and double
 anyNumber = 5.5;       // ✓
 ```
-
+::
 `int` is 64-bit (arbitrary precision in web). `double` is IEEE 754 64-bit. `num` is the supertype. Integer literals can use `_` as a separator: `1_000_000`.
 
 ### Strings
@@ -105,7 +105,7 @@ line
 string''';                                  // triple-quoted
 String raw = r'C:\Users\name';              // raw string (no escapes)
 ```
-
+::
 Both `'...'` and `"..."` work (interchangeable). `$variable` or `${expression}` for interpolation. `r'...'` is raw (backslashes are literal). Triple quotes for multi-line.
 
 ### Booleans
@@ -115,7 +115,7 @@ Both `'...'` and `"..."` work (interchangeable). `$variable` or `${expression}` 
 bool isReady = true;
 bool isEmpty = false;
 ```
-
+::
 Dart uses **true booleans** for conditions — unlike JavaScript, `0`, `''`, `null`, `[]` are *not* falsy. Only `true` is truthy, only `false` is falsy.
 
 ### Lists (arrays)
@@ -127,7 +127,7 @@ var mixed = [1, 'two', 3.0];        // List<Object> (or List<dynamic>)
 var fruits = <String>['apple', 'banana'];
 var spread = [...fruits, 'cherry']; // spread
 ```
-
+::
 Lists are ordered, growable (by default), 0-indexed. `<Type>` before the literal specifies the type. `...` spreads another list.
 
 ### Sets
@@ -137,7 +137,7 @@ Lists are ordered, growable (by default), 0-indexed. `<Type>` before the literal
 Set<String> colors = {'red', 'green', 'blue'};
 var numbers = <int>{1, 2, 3};
 ```
-
+::
 Sets are unordered collections of unique items. `{}` alone is a `Map` (empty), not a Set — use `<Type>{}` or `Set()` for an empty Set.
 
 ### Maps
@@ -149,7 +149,7 @@ var empty = <String, int>{};       // typed empty map
 var value = ages['Alice'];         // 30 (nullable: null if missing)
 ages['Charlie'] = 35;              // add/update
 ```
-
+::
 Maps are key-value pairs. Keys are unique. Accessing a missing key returns `null` (hence the value type is nullable).
 
 ### `null`
@@ -161,7 +161,7 @@ Dart has **sound null safety** (since Dart 2.12). Types are non-nullable by defa
 String name = 'Alice';       // non-nullable, can't be null
 String? maybeName = null;    // nullable, can be null
 ```
-
+::
 See chapter 09 for null safety in depth.
 
 ### `dynamic` and `Object`
@@ -180,7 +180,7 @@ y.toUpperCase();    // ✓ (no static check; works at runtime)
 y = 10;
 y.foo();            // ✓ compiles, throws NoSuchMethodError at runtime
 ```
-
+::
 Prefer `Object` over `dynamic` when you want a general type — `Object` keeps static checks (you must cast to use methods).
 
 ## Type Conversion
@@ -200,7 +200,7 @@ int.tryParse('abc');    // null (no throw)
 3.toDouble();    // 3.0
 3.14.toInt();    // 3 (truncates)
 ```
-
+::
 `tryParse` returns `null` on failure (instead of throwing) — use it for user input.
 
 ## 💡 Tips & Tricks
@@ -258,7 +258,7 @@ void greet(String? name) {
 	}
 }
 ```
-
+::
 Or use null-aware operators:
 
 ```dart
@@ -266,7 +266,7 @@ void greet(String? name) {
 	print('Hello, ${name ?? 'stranger'}');
 }
 ```
-
+::
 **The lesson**: Dart uses true booleans for conditions — no truthy/falsy coercion (unlike JS). `if (x)` requires `x` to be `bool`. Compare explicitly (`!= null`, `isNotEmpty`) or use null-aware operators (`??`).
 
 </details>

@@ -50,7 +50,7 @@ void main(List<String> arguments) {
 	}
 }
 ```
-
+::
 **Goal**: a CLI tool with argument parsing, exhaustive switch, and error handling.
 
 ## Project 2 — Immutable Data Class with `freezed`
@@ -89,7 +89,7 @@ sealed class UserState with _$UserState {
 	const factory UserState.error(String message) = _Error;
 }
 ```
-
+::
 **Goal**: an immutable data class with `freezed`, JSON, and a sealed state.
 
 ## Project 3 — Async GitHub API Client
@@ -146,7 +146,7 @@ class ApiException implements Exception {
 	String toString() => 'ApiException: $message';
 }
 ```
-
+::
 **Goal**: an async API client with typed JSON, error handling, and parallel fetches.
 
 ## Project 4 — Stack and Queue with Generics and Tests
@@ -176,7 +176,7 @@ class Stack<T> {
 	int get length => _items.length;
 }
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 import 'package:test/test.dart';
@@ -213,7 +213,7 @@ void main() {
 	});
 }
 ```
-
+::
 **Goal**: generic collections with comprehensive tests.
 
 ## Project 5 — To-Do App (Flutter)
@@ -332,7 +332,7 @@ class _TodoListScreenState extends State<TodoListScreen> {
 	}
 }
 ```
-
+::
 **Goal**: a working Flutter app with state, persistence, and theming.
 
 ## Project 6 — REST API Server (`dart_frog`)
@@ -365,7 +365,7 @@ Response onRequest(Request request) {
 	return Response(statusCode: HttpStatus.methodNotAllowed);
 }
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 // routes/tasks/[id].dart
@@ -381,7 +381,7 @@ Response onRequest(RequestContext context, String id) {
 	return Response.json(body: task);
 }
 ```
-
+::
 **Goal**: a REST API with routing, JSON, and error handling.
 
 ## Project 7 — Full-Stack App (Capstone)
@@ -439,7 +439,7 @@ Build a full-stack app combining Dart (server) + Flutter (client) (all chapters)
 - [ ] `ListView.builder` for long lists (Flutter)
 - [ ] `mounted` check after `await` (Flutter)
 ```
-
+::
 ## Summary
 
 You've applied the full Dart toolkit — from a CLI tool and immutable data classes to an async API client, generic collections with tests, a Flutter to-do app, a REST API server, and a capstone full-stack app. You can write sound null-safe Dart, use `async`/`await` and isolates, build classes/generics/mixins, test thoroughly, build Flutter UIs, serve REST APIs, and manage the toolchain — a production-quality Dart foundation.

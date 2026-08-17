@@ -17,7 +17,7 @@ document.getElementById('app')
 document.getElementsByClassName('item')    // HTMLCollection (live!)
 document.getElementsByTagName('div')      // HTMLCollection (live!)
 ```
-
+::
 ::
 
 ## Creating and Modifying
@@ -57,7 +57,7 @@ document.body.prepend(div)
 div.remove()
 div.parentElement.removeChild(div)  // old way
 ```
-
+::
 ::
 
 ## Traversing
@@ -78,7 +78,7 @@ el.childNodes           // all nodes (including text)
 el.firstChild           // could be a text node
 el.nextSibling          // could be a text node
 ```
-
+::
 ::
 
 ## Best Practices
@@ -101,7 +101,7 @@ for (let i = 0; i < 100; i++) {
 }
 ul.appendChild(fragment)  // single reflow
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

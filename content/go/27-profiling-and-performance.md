@@ -38,7 +38,7 @@ go tool pprof cpu.out
 # Web UI
 go tool pprof -http=:8080 cpu.out
 ```
-
+::
 ### In a running server
 
 Import `net/http/pprof` and serve `/debug/pprof/`:
@@ -51,7 +51,7 @@ go func() {
 	log.Println(http.ListenAndServe("localhost:6060", nil))
 }()
 ```
-
+::
 Then profile the live server:
 
 ::code-wrapper{language="bash"}
@@ -60,7 +60,7 @@ go tool pprof http://localhost:6060/debug/pprof/profile   # 30s CPU profile
 go tool pprof http://localhost:6060/debug/pprof/heap      # heap allocations
 go tool pprof http://localhost:6060/debug/pprof/goroutine # goroutine stacks
 ```
-
+::
 ## Reading a CPU Profile
 
 `go tool pprof cpu.out`:
@@ -91,7 +91,7 @@ for _, w := range words {
 }
 s := b.String()
 ```
-
+::
 ### Preallocate slices and maps
 
 ::code-wrapper{language="go"}
@@ -110,7 +110,7 @@ for i := 0; i < 1000; i++ {
 
 m := make(map[string]int, 1000)   // hint, not limit
 ```
-
+::
 ### Avoid `[]byte`↔`string` conversions
 
 ::code-wrapper{language="go"}
@@ -125,7 +125,7 @@ bytes.Equal(a, b)
 // For contains, use strings.Contains (works on string directly)
 strings.Contains(s, substr)
 ```
-
+::
 ### Use `sync.Pool` for reusable buffers
 
 ::code-wrapper{language="go"}
@@ -139,7 +139,7 @@ defer bufPool.Put(buf)
 buf.Reset()
 // use buf
 ```
-
+::
 Reuse allocation-heavy objects (buffers, temp structs) across calls to reduce GC pressure.
 
 ### Pass large structs by pointer
@@ -152,7 +152,7 @@ func process(u User) { ... }
 // ✅ passes a pointer (8 bytes)
 func process(u *User) { ... }
 ```
-
+::
 But don't over-pointer small structs — the indirection can cost more than the copy.
 
 ## Escape Analysis
@@ -165,7 +165,7 @@ go build -gcflags="-m" main.go
 # "moved to heap: x" — x is heap-allocated (its address escapes)
 # "x does not escape" — x is stack-allocated
 ```
-
+::
 Common causes of escaping:
 - Returning a pointer to a local variable (escapes — necessary).
 - Storing a pointer in an interface (escapes — the compiler can't know the size).
@@ -180,7 +180,7 @@ go test -race ./...
 go run -race .
 go build -race -o myapp
 ```
-
+::
 The race detector finds data races (concurrent reads/writes without synchronization) at runtime. It has overhead (10-100x) — use in testing and CI, not production. A race detected by `-race` is a real bug; fix it before shipping.
 
 ## Goroutine Leaks (profiling)
@@ -190,7 +190,7 @@ The race detector finds data races (concurrent reads/writes without synchronizat
 go tool pprof http://localhost:6060/debug/pprof/goroutine
 (pprof) top
 ```
-
+::
 The goroutine profile shows the stack traces of all live goroutines. A growing number of stuck goroutines (blocked on a channel, a lock, an infinite loop) is a leak.
 
 ## Memory Leaks (heap profiling)
@@ -200,7 +200,7 @@ The goroutine profile shows the stack traces of all live goroutines. A growing n
 go tool pprof http://localhost:6060/debug/pprof/heap
 (pprof) top
 ```
-
+::
 The heap profile shows allocations. Use `alloc_space` (total) vs `inuse_space` (current) to distinguish "allocates a lot" (GC pressure) from "holds a lot" (leak):
 
 ::code-wrapper{language="bash"}
@@ -208,7 +208,7 @@ The heap profile shows allocations. Use `alloc_space` (total) vs `inuse_space` (
 go tool pprof -alloc_space http://localhost:6060/debug/pprof/heap   # total allocations
 go tool pprof -inuse_space http://localhost:6060/debug/pprof/heap   # currently held
 ```
-
+::
 ## Optimization Process
 
 1. **Benchmark first** — establish a baseline with `go test -bench=. -benchmem`.
@@ -274,7 +274,7 @@ The fix — measure and choose based on the benchmark. For small structs, value 
 // Revert to value receiver for small structs
 func (p Point) Dist() float64 { ... }
 ```
-
+::
 And run `go build -gcflags="-m"` to confirm `p` doesn't escape.
 
 **The lesson**: for small structs, value receivers avoid escape (heap allocation) and indirection, often outperforming pointer receivers. Don't assume pointers are faster — benchmark and check escape analysis. Pointers win for large structs (avoid copy) or mutation; values win for small, read-only structs.

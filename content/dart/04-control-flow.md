@@ -14,7 +14,7 @@ if (score >= 90) {
 	print('C or below');
 }
 ```
-
+::
 Conditions must be `bool` (no truthy/falsy). Curly braces are required for multi-statement blocks; optional (but discouraged) for single statements.
 
 ## Loops
@@ -27,7 +27,7 @@ for (var i = 0; i < 5; i++) {
 	print(i);
 }
 ```
-
+::
 Classic C-style `for`: init; condition; update.
 
 ### `for-in`
@@ -42,7 +42,7 @@ for (var entry in {'a': 1, 'b': 2}.entries) {
 	print('${entry.key}: ${entry.value}');
 }
 ```
-
+::
 `for-in` iterates any `Iterable`. For `Map`, iterate `.entries` (or `.keys`/`.values`).
 
 ### `while`
@@ -55,7 +55,7 @@ while (i < 5) {
 	i++;
 }
 ```
-
+::
 Checks the condition *before* each iteration. May run zero times.
 
 ### `do-while`
@@ -68,7 +68,7 @@ do {
 	i++;
 } while (i < 5);
 ```
-
+::
 Checks the condition *after* each iteration. Runs at least once.
 
 ## `break` and `continue`
@@ -81,7 +81,7 @@ for (var i = 0; i < 10; i++) {
 	print(i);               // 0, 1, 2, 4, 5, 6
 }
 ```
-
+::
 `break` exits the loop; `continue` skips to the next iteration.
 
 ### Labeled breaks
@@ -96,7 +96,7 @@ for (var i = 0; i < 3; i++) {
 	}
 }
 ```
-
+::
 Labels (`outer:`) let `break`/`continue` target an outer loop. Rarely used — usually a sign to refactor into a function (with `return`).
 
 ## `switch`
@@ -117,7 +117,7 @@ switch (color) {
 		print('Unknown');
 }
 ```
-
+::
 ### Exhaustiveness and `enum`
 
 Dart 3 added **exhaustive switches** for `enum`s and sealed types — the compiler ensures all cases are handled:
@@ -134,7 +134,7 @@ String action(TrafficLight light) {
 	};   // no default needed — all cases covered
 }
 ```
-
+::
 If you add a new enum value later, the compiler flags all non-exhaustive switches — a powerful refactoring safety net.
 
 ### Switch expressions (Dart 3)
@@ -148,7 +148,7 @@ final message = switch (status) {
 	_ => 'Unknown',   // _ is the wildcard (default)
 };
 ```
-
+::
 Switch expressions return a value (no `break` needed). `_` is the wildcard pattern (default). Use for mapping values concisely.
 
 ### Pattern matching (Dart 3)
@@ -164,7 +164,7 @@ switch (point) {
 		print('($x, $y)');
 }
 ```
-
+::
 ### Fallthrough
 
 Dart `switch` does *not* fall through by default — each case must `break`, `return`, `throw`, or `continue`. Empty cases (no body) fall through to the next:
@@ -181,7 +181,7 @@ switch (x) {
 		break;
 }
 ```
-
+::
 ## `assert`
 
 ::code-wrapper{language="dart"}
@@ -191,7 +191,7 @@ void withdraw(int amount) {
 	balance -= amount;
 }
 ```
-
+::
 `assert(condition, message)` checks a condition — throws `AssertionError` if false. **Only runs in debug mode** (JIT, development). In production (AOT), asserts are stripped. Use for development-time invariants, not runtime validation.
 
 ## `late` and control flow
@@ -208,7 +208,7 @@ if (condition) {
 }
 print(result);   // ✓ assigned in both branches
 ```
-
+::
 If a branch doesn't assign and is taken, reading `result` throws.
 
 ## 💡 Tips & Tricks
@@ -247,7 +247,7 @@ String label(Status s) {
 	}
 }
 ```
-
+::
 Later, `Status.cancelled` is added. What happens?
 
 <details>
@@ -269,7 +269,7 @@ String label(Status s) {
 	};   // exhaustive — compiler ensures all cases
 }
 ```
-
+::
 Now adding a new `Status` value causes a compile error here (non-exhaustive switch), and the developer must handle it. No silent bugs.
 
 **The lesson**: avoid `default` in `switch` over `enum`s — let Dart 3's exhaustiveness checking catch missing cases. Adding a new enum value then flags all switches that need updating. `default` defeats this safety net and causes silent mishandling.

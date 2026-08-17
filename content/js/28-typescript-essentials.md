@@ -27,7 +27,7 @@ type Callback = (data: User) => void
 type Result = { success: true; data: User } | { success: false; error: string }
 type Admin = User & { permissions: string[] }
 ```
-
+::
 ::
 
 ## Generics
@@ -50,7 +50,7 @@ function getLength<T extends { length: number }>(item: T): number {
 // Generic with default
 function create<T = string>(): T[] { return [] }
 ```
-
+::
 ::
 
 ## Type Narrowing
@@ -76,7 +76,7 @@ function speak(animal: Cat | Dog) {
   else animal.bark()
 }
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

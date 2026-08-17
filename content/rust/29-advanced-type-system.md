@@ -84,7 +84,7 @@ fn apply_any(f: impl for<'a> Fn(&'a [u8])) {
     f(&buf);
 }
 ```
-
+::
 ## Associated Types vs Generics
 
 ::code-wrapper{language="rust"}

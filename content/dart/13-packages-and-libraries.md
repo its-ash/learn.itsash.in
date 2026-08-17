@@ -17,7 +17,7 @@ import 'utils.dart' as utils;          // prefix (namespace)
 import 'lib.dart' show foo, bar;       // show only foo, bar
 import 'lib.dart' hide baz;            // hide baz
 ```
-
+::
 - `dart:` — SDK libraries (built-in, no package needed).
 - `package:` — packages from pub.dev (or local).
 - Relative paths — local files.
@@ -35,13 +35,13 @@ export 'user.dart';
 export 'post.dart';
 export 'comment.dart';
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 // user code
 import 'package:my_app/models.dart';   // gets User, Post, Comment
 ```
-
+::
 A barrel file (`models.dart`) aggregates multiple libraries — users import one file instead of many.
 
 ### `part` and `part of`
@@ -54,7 +54,7 @@ For splitting a single library across files:
 library my_lib;
 part 'my_lib_part.dart';
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 // my_lib_part.dart
@@ -62,7 +62,7 @@ part of my_lib;
 
 class Helper { ... }   // part of my_lib's namespace
 ```
-
+::
 `part` is for splitting one library into files (they share a namespace). Prefer multiple libraries with `import`/`export` — `part` is older and less flexible.
 
 ## Visibility (`_` prefix)
@@ -79,7 +79,7 @@ class MyClass {
 
 int _helper() => 42;   // library-private
 ```
-
+::
 `_internal` and `_helper` aren't accessible from other libraries (other files). `publicName` is. Dart has no `public`/`private`/`protected` keywords — `_` is the only privacy modifier, and it's library-level (not class-level).
 
 ## SDK Libraries
@@ -117,7 +117,7 @@ dev_dependencies:
 	test: ^1.24.0         # testing framework
 	lints: ^3.0.0         # linter rules
 ```
-
+::
 ### `dart pub` commands
 
 ::code-wrapper{language="bash"}
@@ -129,7 +129,7 @@ dart pub upgrade    # upgrade within constraints
 dart pub publish    # publish to pub.dev
 dart pub deps       # show dependency tree
 ```
-
+::
 ### Version constraints
 
 ::code-wrapper{language="yaml"}
@@ -140,7 +140,7 @@ dependencies:
 	http: 1.2.3            # exactly 1.2.3 (discouraged)
 	http: any              # any version (discouraged)
 ```
-
+::
 `^1.2.3` is the common form — allows patch and minor updates, but not major (breaking) changes.
 
 ### `pubspec.lock`
@@ -167,7 +167,7 @@ dependencies:
 dart create -t package my_package   # a library package
 cd my_package
 ```
-
+::
 This creates:
 ::code-wrapper{language="text"}
 ```text
@@ -178,7 +178,7 @@ my_package/
 ├── pubspec.yaml
 └── README.md
 ```
-
+::
 Put public code in `lib/`, export via `lib/my_package.dart`. Internal code goes in `lib/src/` (imported by `lib/`, not by users — `src/` is convention-private).
 
 ## Deferred Loading (web)
@@ -192,7 +192,7 @@ void main() async {
 	heavy.doWork();              // now available
 }
 ```
-
+::
 `deferred` loads the library on demand (via `loadLibrary()`). Useful for code-splitting on the web (smaller initial bundle). Only works on web (and Flutter mobile in some setups).
 
 ## 💡 Tips & Tricks
@@ -249,14 +249,14 @@ void main() {
 	var configB = app_b.Config();  // app_b's Config
 }
 ```
-
+::
 Or use `show`/`hide` to import only what you need:
 
 ```dart
 import 'package:app_a/config.dart' show Config;
 import 'package:app_b/config.dart' show Config as BConfig;  // alias doesn't work this way
 ```
-
+::
 Actually, `show`/`hide` don't alias — use `as` for an alias. The cleanest fix is `as` to namespace:
 
 ```dart
@@ -268,7 +268,7 @@ void main() {
 	var configB = b.Config();
 }
 ```
-
+::
 **The lesson**: when two libraries export the same name, use `as` to prefix one (or both) and access via the prefix (`a.Config`, `b.Config`). `show`/`hide` control which names are imported but don't alias; `as` provides the namespace.
 
 </details>

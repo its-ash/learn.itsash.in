@@ -176,7 +176,7 @@ for _, v := range items {
 	ptrs = append(ptrs, &v)
 }
 ```
-
+::
 Or iterate by index and take the address of the slice element (which *is* distinct per element):
 
 ```go
@@ -184,7 +184,7 @@ for i := range items {
 	ptrs = append(ptrs, &items[i])
 }
 ```
-
+::
 `&items[i]` points into the slice's backing array — each is a distinct address. But beware: if the slice is reallocated (append exceeds capacity), the pointers dangle (point to the old array). The `v := v` copy is safer.
 
 **The lesson**: pre-1.22, `range` reuses the loop variable; `&v` captures the address of the single variable (all pointers see the final value). Copy `v := v` per iteration, or use `&items[i]` (with care about slice reallocation). Go 1.22+ fixes this.

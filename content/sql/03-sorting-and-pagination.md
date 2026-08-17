@@ -222,7 +222,7 @@ FROM orders
 ORDER BY ordered_on DESC, id DESC
 LIMIT 10 OFFSET 10;
 ```
-
+::
 With a total order (`ordered_on, id`), every row has a deterministic position, and pagination is stable. Even better, use keyset pagination on `(ordered_on, id)` for O(1) page seeks.
 
 **The lesson**: `ORDER BY` on a non-unique column produces a *partial* order — tied rows are in arbitrary order and can drift between queries. Always add a unique tie-breaker for pagination.

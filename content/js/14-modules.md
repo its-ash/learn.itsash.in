@@ -14,7 +14,7 @@ export default class Calculator {
   add(a, b) { return a + b }
 }
 ```
-
+::
 ::
 
 ::code-wrapper{language="javascript" filename="main.js"}
@@ -39,7 +39,7 @@ import { square as sq } from './math.js'
 // Import for side effects only (no bindings)
 import './polyfill.js'
 ```
-
+::
 ::
 
 ## Dynamic Import
@@ -63,7 +63,7 @@ try {
   console.warn('Optional module failed to load')
 }
 ```
-
+::
 ::
 
 ## Re-exports
@@ -82,7 +82,7 @@ export { default as Calculator } from './math.js'
 // Rename during re-export
 export { square as sq } from './math.js'
 ```
-
+::
 ::
 
 ## `package.json` Configuration
@@ -101,7 +101,7 @@ export { square as sq } from './math.js'
   }
 }
 ```
-
+::
 ::
 
 ## Best Practices
@@ -119,7 +119,7 @@ export const version = '1.0.0'
 // ✅ Avoid circular dependencies — A imports B, B imports A
 // ✅ Use dynamic import for code splitting and lazy loading
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

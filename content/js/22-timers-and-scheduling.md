@@ -24,7 +24,7 @@ function scheduleNext() {
 }
 scheduleNext()
 ```
-
+::
 ::
 
 ## `requestAnimationFrame`
@@ -42,7 +42,7 @@ requestAnimationFrame(animate)
 const id = requestAnimationFrame(animate)
 cancelAnimationFrame(id)
 ```
-
+::
 ::
 
 ## Debounce & Throttle
@@ -73,7 +73,7 @@ function throttle(fn, limit) {
 input.addEventListener('input', debounce(searchAPI, 300))
 window.addEventListener('scroll', throttle(updateUI, 100))
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

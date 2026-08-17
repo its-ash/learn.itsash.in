@@ -62,7 +62,7 @@ $spacing: 1rem;
 	}
 }
 ```
-
+::
 ### Sass vs CSS variables
 
 Sass variables (`$var`) are compile-time constants — they can't change at runtime or respond to media queries (the compiled CSS has the final value). CSS variables (`--var`) are runtime and cascading.
@@ -85,7 +85,7 @@ $primary: #3498db;
 @forward 'variables';
 @forward 'mixins';
 ```
-
+::
 `@use` replaces `@import` (which is deprecated in Sass) — it's scoped (no global pollution) and loads once. `@forward` re-exports from a barrel file.
 
 ## Less
@@ -105,7 +105,7 @@ Less is similar to Sass, with a JS-like syntax:
 .mixin() { display: flex; }
 .hero { .mixin(); }
 ```
-
+::
 Less compiles in the browser (via less.js) or via build tools. Less popular than Sass now.
 
 ## Stylus
@@ -122,7 +122,7 @@ spacing = 1rem
 	.title
 		font-size 1.5rem
 ```
-
+::
 Niche but has its fans for the terse syntax.
 
 ## PostCSS
@@ -147,7 +147,7 @@ module.exports = {
 	],
 };
 ```
-
+::
 PostCSS is composable — pick the plugins for your needs. Many tools (Vite, Tailwind) use PostCSS under the hood.
 
 ## Build Tools
@@ -167,7 +167,7 @@ export default {
 	},
 };
 ```
-
+::
 Vite supports CSS, SCSS, Less, PostCSS out of the box — just install the preprocessor and import the file.
 
 ### webpack
@@ -186,7 +186,7 @@ module.exports = {
 	},
 };
 ```
-
+::
 webpack uses loaders to chain CSS processing — `sass-loader` (SCSS → CSS), `postcss-loader` (PostCSS), `css-loader` (resolve imports), `style-loader` (inject into DOM).
 
 ### Lightning CSS
@@ -203,14 +203,14 @@ CSS Modules scope class names locally (by file), avoiding collisions:
 .btn { padding: 0.5rem 1rem; }
 .primary { background: blue; }
 ```
-
+::
 ::code-wrapper{language="javascript"}
 ```javascript
 import styles from './Button.module.css';
 
 <button className={`${styles.btn} ${styles.primary}`}>Click</button>
 ```
-
+::
 The compiled class names are unique (`Button_btn__3a2f1`), scoping styles to the component. Popular with React.
 
 ## When to Use What
@@ -274,7 +274,7 @@ The compiled CSS is:
 ```css
 .button { background: blue; }
 ```
-
+::
 There's no media query — the `$primary: red` inside `@media` didn't persist outside it (Sass `@media` blocks have their own scope for variables), and even if it did, it's compile-time, so you can't have a different value at a different viewport.
 
 The fix — use CSS variables (runtime, media-query-responsive):
@@ -290,7 +290,7 @@ The fix — use CSS variables (runtime, media-query-responsive):
 }
 .button { background: var(--primary); }
 ```
-
+::
 Now `--primary` is `blue` on desktop and `red` on mobile (≤768px), at runtime. The browser applies the right value based on the viewport.
 
 **The lesson**: Sass variables are compile-time constants — they can't change at runtime or per media query. Use CSS variables (`--var`) for runtime theming and media-query-responsive values. Use Sass variables only for build-time math, loops, and mixins.

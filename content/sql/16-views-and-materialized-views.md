@@ -205,7 +205,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY dashboard_sales;
 -- And refresh more frequently — e.g., via pg_cron every hour
 -- SELECT cron.schedule('refresh-dashboard', '0 * * * *', 'REFRESH MATERIALIZED VIEW CONCURRENTLY dashboard_sales');
 ```
-
+::
 If `city` isn't unique in the result (e.g., the query groups by something else), add the grouping columns to the unique index. The unique index must cover a set of columns that uniquely identify each MV row.
 
 **The lesson**: `CONCURRENTLY` requires a unique index (it needs to identify rows to update them in place during a concurrent refresh). Create the unique index right after creating the MV, before the first concurrent refresh. And match the refresh frequency to the freshness requirement — nightly refresh gives up to 24h staleness.

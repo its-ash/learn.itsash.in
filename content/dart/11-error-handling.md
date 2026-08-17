@@ -12,7 +12,7 @@ throw FormatException('Bad input');
 throw ArgumentError('x must be positive');
 throw StateError('Not initialized');
 ```
-
+::
 Any object can be thrown (Dart doesn't require `Throwable`/`Exception` like Java). But convention: throw `Exception` or `Error` subtypes, not raw strings/numbers.
 
 ### `Exception` vs `Error`
@@ -32,7 +32,7 @@ try {
 // Error: don't catch (programming bug)
 final x = list[-1];   // RangeError — let it crash, fix the bug
 ```
-
+::
 ## Catching
 
 ::code-wrapper{language="dart"}
@@ -52,7 +52,7 @@ try {
 	cleanup();
 }
 ```
-
+::
 - `on SpecificType catch (e)` — catches a specific type.
 - `catch (e)` — catches anything (rarely a good idea; too broad).
 - `catch (e, stackTrace)` — also gets the stack trace.
@@ -68,7 +68,7 @@ try { ... }
 on SpecificException catch (e) { ... }   // first
 on Exception catch (e) { ... }            // later (broader)
 ```
-
+::
 If `Exception` (broader) came first, `SpecificException` would never be reached.
 
 ## Rethrowing
@@ -82,7 +82,7 @@ try {
 	rethrow;   // re-throws the original exception (preserves stack)
 }
 ```
-
+::
 `rethrow` re-throws the current exception, preserving the original stack trace. Use when you log/handle partially but want the caller to also handle.
 
 ### `throw` vs `rethrow`
@@ -105,7 +105,7 @@ class InvalidUserException implements Exception {
 
 throw InvalidUserException('Name is empty', field: 'name');
 ```
-
+::
 Convention:
 - Implement `Exception` (marker interface).
 - Have a `message` and useful fields.
@@ -123,7 +123,7 @@ class AssertionError extends Error {
 	String toString() => 'AssertionError: $message';
 }
 ```
-
+::
 Extend `Error` for programming bugs. Errors usually aren't caught.
 
 ## The `Error` hierarchy
@@ -147,7 +147,7 @@ void withdraw(int amount) {
 	balance -= amount;
 }
 ```
-
+::
 `assert` throws `AssertionError` in debug mode only. Stripped in production (AOT). Use for development-time invariants, not runtime validation.
 
 ## Error handling with `async`/`await`
@@ -164,7 +164,7 @@ Future<void> main() async {
 	}
 }
 ```
-
+::
 `try`/`catch` works with `await` — the `Future`'s error is caught. Errors from `await`ed futures propagate like synchronous throws.
 
 ## Uncaught errors
@@ -179,7 +179,7 @@ runZonedGuarded(() async {
 	print('Uncaught: $error\n$stack');
 });
 ```
-
+::
 ## Never catch what you can't handle
 
 Catching `catch (e)` (everything) and swallowing it hides bugs. Catch specific exceptions you can recover from; let unexpected errors crash (so you find and fix them).
@@ -194,7 +194,7 @@ try { riskyOp(); }
 on HttpException catch (e) { /* recover */ }
 // other exceptions propagate (visible)
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: throw `Exception` subtypes for recoverable conditions, `Error` subtypes for bugs — `HttpException`, `FormatException` (recoverable, catch them); `StateError`, `RangeError` (bugs, let them crash). Don't catch errors (hide bugs); catch exceptions (recover).
@@ -257,7 +257,7 @@ Future<void> process() async {
 	// StateError (bug) propagates — visible, fixable
 }
 ```
-
+::
 Now `HttpException` and `FormatException` (recoverable) are handled, but a `StateError` (bug in `parseData`) propagates — crashing with a stack trace, so the developer can find and fix it.
 
 **The lesson**: `catch (e)` (broad) catches bugs too, hiding them. Catch specific exceptions you can recover from (`on HttpException`, `on FormatException`). Let unexpected errors (bugs) propagate so they're visible and fixable. Don't swallow exceptions silently.

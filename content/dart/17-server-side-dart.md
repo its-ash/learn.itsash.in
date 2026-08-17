@@ -21,7 +21,7 @@ void main() async {
 	}
 }
 ```
-
+::
 `HttpServer.bind` starts a server; `await for` handles each request. Low-level — use a framework for real apps.
 
 ## `shelf` (Middleware Framework)
@@ -32,7 +32,7 @@ void main() async {
 ```bash
 dart pub add shelf
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 import 'package:shelf/shelf.dart';
@@ -60,7 +60,7 @@ void main() async {
 	print('Serving at http://${server.address.address}:${server.port}');
 }
 ```
-
+::
 `shelf_router` adds routing. `Pipeline` adds middleware (logging, auth, CORS) before the handler.
 
 ## `dart_frog` (Full-Stack Framework)
@@ -74,7 +74,7 @@ dart_frog create my_api
 cd my_api
 dart_frog dev   # dev server with hot reload
 ```
-
+::
 File-based routing — `routes/index.dart` handles `/`, `routes/users/[id].dart` handles `/users/:id`:
 
 ::code-wrapper{language="dart"}
@@ -86,7 +86,7 @@ Response onRequest(Request request) {
 	return Response(body: 'Hello, Dart Frog!');
 }
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 // routes/users/[id].dart
@@ -96,7 +96,7 @@ Response onRequest(RequestContext context, String id) {
 	return Response.json(body: {'id': id});
 }
 ```
-
+::
 ## File I/O
 
 ::code-wrapper{language="dart"}
@@ -124,7 +124,7 @@ final exists = await File('data.txt').exists();
 await File('data.txt').delete();
 await File('data.txt').copy('data_backup.txt');
 ```
-
+::
 `File` is for files; `Directory` for directories:
 
 ::code-wrapper{language="dart"}
@@ -134,7 +134,7 @@ await dir.create(recursive: true);   // mkdir -p
 final entries = await dir.list().toList();
 await dir.delete(recursive: true);
 ```
-
+::
 ## Environment and Args
 
 ::code-wrapper{language="dart"}
@@ -145,7 +145,7 @@ final port = int.parse(Platform.environment['PORT'] ?? '8080');
 final args = Platform.executableArguments;   // CLI args
 final script = Platform.script;              // the script URI
 ```
-
+::
 `Platform.environment` is env vars. `Platform.script` is the running script's URI.
 
 ## `args` Package (CLI Args)
@@ -154,7 +154,7 @@ final script = Platform.script;              // the script URI
 ```bash
 dart pub add args
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 import 'package:args/args.dart';
@@ -171,7 +171,7 @@ void main(List<String> arguments) {
 	if (verbose) print('Starting on port $port');
 }
 ```
-
+::
 `args` parses CLI flags/options. Use for CLI tools.
 
 ## Database
@@ -182,7 +182,7 @@ void main(List<String> arguments) {
 ```bash
 dart pub add postgres
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 import 'package:postgres/postgres.dart';
@@ -199,14 +199,14 @@ void main() async {
 	await conn.close();
 }
 ```
-
+::
 ### SQLite (`sqlite3`)
 
 ::code-wrapper{language="bash"}
 ```bash
 dart pub add sqlite3
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 import 'package:sqlite3/sqlite3.dart';
@@ -227,7 +227,7 @@ void main() {
 	db.dispose();
 }
 ```
-
+::
 ### ORM (`drift`)
 
 `drift` (formerly `moor`) is a reactive ORM for SQLite. Type-safe, with code generation.
@@ -255,7 +255,7 @@ Future<Response> createUser(Request request) async {
 	return Response.ok(jsonEncode({'created': name}));
 }
 ```
-
+::
 ## WebSockets
 
 ::code-wrapper{language="dart"}
@@ -278,7 +278,7 @@ void main() async {
 	}
 }
 ```
-
+::
 WebSockets enable real-time communication. The `web_socket_channel` package is the standard client.
 
 ## Deployment
@@ -293,7 +293,7 @@ WebSockets enable real-time communication. The `web_socket_channel` package is t
 dart compile exe bin/server.dart   # native executable
 ./bin/server                        # run it
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `shelf` (not raw `dart:io`) for server apps — middleware pipeline, routing (`shelf_router`), composable handlers. Cleaner than raw `HttpServer`. `dart_frog` for file-based routing (Next.js-like).
@@ -336,7 +336,7 @@ What's the problem?
 ```sql
 SELECT * FROM users WHERE name = ''; DROP TABLE users; --'
 ```
-
+::
 This executes `DROP TABLE users` — a catastrophic SQL injection. Even without a DROP, an attacker could read arbitrary data.
 
 The fix — use parameterized queries:
@@ -348,7 +348,7 @@ final results = await conn.query(
 	substitutionValues: {'name': name},
 );
 ```
-
+::
 The `@name` placeholder is substituted safely by the driver (escaping/parameter separation). The `name` value is never parsed as SQL — it's a data parameter.
 
 **The lesson**: never interpolate user input into SQL strings. Always use parameterized queries (`@name`/`?` placeholders + `substitutionValues`/args). SQL injection is a top security vulnerability. The parameterized query is the only safe way.

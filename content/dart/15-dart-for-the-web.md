@@ -10,7 +10,7 @@ Dart compiles to JavaScript (via `dart2js` or `dart compile js`) or WebAssembly 
 ```bash
 dart compile js -O2 -o out.js main.dart
 ```
-
+::
 `dart2js` compiles Dart to optimized JavaScript. `-O2`/`-O4` are optimization levels (higher = smaller/faster, less debuggable). Produces a single JS file + source map.
 
 ### `dart compile wasm` (experimental)
@@ -19,7 +19,7 @@ dart compile js -O2 -o out.js main.dart
 ```bash
 dart compile wasm -o out.wasm main.dart
 ```
-
+::
 Compiles to WebAssembly (Wasm). Faster execution, better typing (Dart's types map to Wasm's types). Still experimental — JS is the stable web target.
 
 ### Development server
@@ -28,7 +28,7 @@ Compiles to WebAssembly (Wasm). Faster execution, better typing (Dart's types ma
 ```bash
 dart run build_runner serve web:8000   # via build_runner
 ```
-
+::
 Or use `webdev`:
 
 ::code-wrapper{language="bash"}
@@ -36,7 +36,7 @@ Or use `webdev`:
 dart pub global activate webdev
 webdev serve
 ```
-
+::
 `webdev serve` provides a dev server with hot reload (JIT via DDC — Dart Development Compiler).
 
 ## DDC vs dart2js
@@ -62,7 +62,7 @@ void main() {
 	document.body!.append(div);
 }
 ```
-
+::
 `dart:html` provides DOM access (`querySelector`, `DivElement`, `window`, `document`, events). It's the web equivalent of `dart:io` (native).
 
 ### Events
@@ -74,7 +74,7 @@ input.onInput.listen((Event e) { ... });
 	form.onSubmit.listen((Event e) { e.preventDefault(); ... });
 	window.onResize.listen((Event e) { ... });
 ```
-
+::
 Events are `Stream`s — `onClick`, `onInput`, etc. are `Stream<Event>`. Use `.listen`, `await for`, or stream methods.
 
 ## `dart:js_interop` (JS interop)
@@ -94,7 +94,7 @@ void main() {
 	print(random());
 }
 ```
-
+::
 `@JS()` declares a JS function. `external` means the implementation is in JS. Call it like a Dart function.
 
 ### Extension types (Dart 3.3+)
@@ -112,7 +112,7 @@ extension type JSArray<T>._(JSObject _) implements JSObject {
 	external int get length;
 }
 ```
-
+::
 Extension types wrap JS objects with typed Dart interfaces — safer than `dynamic` JS interop. Use for structured JS interop (libraries, DOM extensions).
 
 ## JSON
@@ -129,7 +129,7 @@ var json = jsonEncode({'name': 'Alice', 'age': 30});
 var data = jsonDecode('{"name":"Alice","age":30}');
 print(data['name']);   // 'Alice' (dynamic)
 ```
-
+::
 `jsonDecode` returns `dynamic` (a `Map<String, dynamic>` for objects, `List<dynamic>` for arrays). Cast carefully (chapter 08).
 
 ### HTTP (web)
@@ -146,7 +146,7 @@ void main() async {
 	}
 }
 ```
-
+::
 The `http` package works on both web and native (uses `fetch`/`XMLHttpRequest` on web, `HttpClient` on native).
 
 ## Cross-Platform Code
@@ -158,21 +158,21 @@ For code that runs on both web and native, use conditional imports:
 // platform.dart
 export 'platform_web.dart' if (dart.library.io) 'platform_io.dart';
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 // platform_web.dart
 import 'dart:html';
 String get platform => 'web';
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 // platform_io.dart
 import 'dart:io';
 String get platform => 'io (${Platform.operatingSystem})';
 ```
-
+::
 The conditional import chooses `platform_web.dart` on web, `platform_io.dart` on native. The exported API must match.
 
 ## Web Limitations
@@ -192,7 +192,7 @@ flutter create my_app
 cd my_app
 flutter build web   # builds to build/web/
 ```
-
+::
 Flutter Web uses HTML/CSS/Canvas (or CanvasKit/Skia for better fidelity). The DOM is an implementation detail — you write Flutter widgets, not HTML.
 
 ## 💡 Tips & Tricks
@@ -244,13 +244,13 @@ The fix — use conditional imports to provide a web-specific implementation:
 // file_reader.dart (public API)
 export 'file_reader_io.dart' if (dart.library.html) 'file_reader_web.dart';
 ```
-
+::
 ```dart
 // file_reader_io.dart (native)
 import 'dart:io';
 Future<String> readFile(String path) async => File(path).readAsString();
 ```
-
+::
 ```dart
 // file_reader_web.dart (web)
 import 'dart:html';
@@ -260,7 +260,7 @@ Future<String> readFile(String path) async {
 	return response;
 }
 ```
-
+::
 The conditional import `if (dart.library.html) 'file_reader_web.dart'` chooses the web implementation when `dart:html` is available, else the native (`dart:io`) implementation. Both export the same `readFile` function.
 
 Or, use the `http` package for both (it abstracts the platform):
@@ -273,7 +273,7 @@ Future<String> readFile(String url) async {
 	return response.body;
 }
 ```
-
+::
 `http` works on both web (`fetch`) and native (`HttpClient`), so no conditional needed — if the "file" is a URL.
 
 **The lesson**: `dart:io` is native-only. For cross-platform code, use conditional imports (`export 'a.dart' if (dart.library.html) 'b.dart'`) to provide platform-specific implementations, or use a cross-platform package like `http` that abstracts the platform.

@@ -25,7 +25,7 @@ const throttle = (fn, ms) => {
   }
 }
 ```
-
+::
 ::
 
 ## Lazy Loading
@@ -50,7 +50,7 @@ const observer = new IntersectionObserver((entries) => {
 })
 document.querySelectorAll('img[data-src]').forEach(img => observer.observe(img))
 ```
-
+::
 ::
 
 ## Memory Leaks
@@ -80,7 +80,7 @@ document.body.appendChild(el)
 document.body.removeChild(el)
 // el still referenced in JS → can't be GC'd if variable persists
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

@@ -14,7 +14,7 @@ npm audit                # check for vulnerabilities
 npm run script-name      # run package.json script
 npx pkg                  # run without installing
 ```
-
+::
 ::
 
 ## ESLint & Prettier
@@ -31,7 +31,7 @@ npx pkg                  # run without installing
   }
 }
 ```
-
+::
 ::
 
 ::code-wrapper{language="json" filename=".prettierrc"}
@@ -44,7 +44,7 @@ npx pkg                  # run without installing
   "printWidth": 80
 }
 ```
-
+::
 ::
 
 ## Vite
@@ -54,7 +54,7 @@ npx pkg                  # run without installing
 npm create vite@latest my-app -- --template vanilla
 cd my-app && npm install && npm run dev
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

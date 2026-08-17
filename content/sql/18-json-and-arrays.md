@@ -251,7 +251,7 @@ SET enable_seqscan = off;
 EXPLAIN SELECT * FROM events WHERE payload->>'type' = 'click';
 -- Now it should show an index scan — if it's still slow, the index isn't the issue.
 ```
-
+::
 If forcing the index makes it *slower*, the planner was right to seq-scan — the predicate isn't selective. If forcing makes it *faster*, the planner's stats are off — run `ANALYZE events` to refresh them.
 
 Other possible causes:

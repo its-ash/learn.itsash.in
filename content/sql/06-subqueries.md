@@ -269,7 +269,7 @@ WHERE NOT EXISTS (
     AND oi.product_id = 5
 );
 ```
-
+::
 `NOT EXISTS` checks "no row exists matching this customer and product 5" — it returns TRUE when the subquery is empty, regardless of NULLs anywhere. It also lets the planner use a hash anti-join.
 
 **The lesson**: `NOT IN` with a subquery over nullable columns is a latent bug — it works until a NULL appears, then silently returns nothing. Use `NOT EXISTS` for "not in another table" semantics.

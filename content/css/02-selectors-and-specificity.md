@@ -93,7 +93,7 @@ Some properties inherit (`color`, `font-*`, `line-height`, `text-align`, `list-s
 body { font-family: sans-serif; color: #333; }   /* inherits to all text */
 div { border: 1px solid black; }                  /* doesn't inherit */
 ```
-
+::
 - `inherit` — explicitly inherit (`border: inherit;`).
 - `initial` — reset to the property's initial value.
 - `unset` — inherit if inheritable, else initial.
@@ -164,7 +164,7 @@ Specificity beats source order. To override, the green rule needs specificity �
 /* or */
 #sidebar .btn { background: green; }         /* same specificity, later in source — wins */
 ```
-
+::
 The deeper fix: avoid ID selectors for styling. If `#sidebar` were `.sidebar` (a class), the specificity would be (0,0,2,0) vs (0,0,1,0), and adding a class (`.btn.green`) would override cleanly. IDs in selectors create override battles.
 
 **The lesson**: an ID in a selector gives it specificity that classes can't override. Use class-based selectors for styling to keep specificity flat and overridable.

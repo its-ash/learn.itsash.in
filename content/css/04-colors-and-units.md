@@ -26,7 +26,7 @@ color: red; color: transparent; color: currentColor; color: inherit;
 color: oklch(0.6 0.2 25);             /* lightness, chroma, hue — perceptually uniform */
 color: color(display-p3 1 0 0);       /* wide-gamut color space */
 ```
-
+::
 ### Which to use?
 
 - **Hex** — most common, concise. Use for opaque colors.
@@ -79,7 +79,7 @@ font-size: calc(1rem + 0.5vw);      /* responsive font */
 padding: calc(1rem * 2);
 width: calc(min(100%, 600px));      /* nested (or use min() directly) */
 ```
-
+::
 `calc()` lets you combine units in arithmetic. Always spaces around `+`/`-` (required); `*`/`/` don't need spaces but can have them.
 
 ## `min()`, `max()`, `clamp()`
@@ -95,7 +95,7 @@ font-size: max(1rem, 2vw);          /* never smaller than 1rem */
 /* clamp(min, preferred, max) */
 font-size: clamp(1rem, 2vw + 1rem, 3rem);  /* fluid between 1rem and 3rem */
 ```
-
+::
 `clamp()` is the modern responsive pattern — a fluid value with min/max bounds, no media queries needed.
 
 ## Recommended Defaults
@@ -151,7 +151,7 @@ The fix — use `dvh` (dynamic viewport height) or `svh` (small viewport height)
 /* or */
 .hero { min-height: 100svh; }  /* always fits the smallest viewport */
 ```
-
+::
 `dvh` adjusts dynamically as the browser chrome shows/hides (the hero resizes). `svh` is the smallest viewport (all chrome shown) — stable but leaves space when the chrome hides. `lvh` is the largest (all chrome hidden) — equivalent to the old `vh` behavior.
 
 **The lesson**: `100vh` on mobile is the large viewport (includes potential chrome space), causing overflow when the address bar is visible. Use `100dvh` (dynamic) or `100svh` (smallest) for mobile full-height sections.

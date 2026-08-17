@@ -305,7 +305,7 @@ VACUUM FULL orders;
 -- Or, for zero-lock (production): pg_repack
 -- pg_repack -t orders
 ```
-
+::
 3. **Prevent recurrence** — tune autovacuum for this table:
 ```sql
 ALTER TABLE orders SET (
@@ -313,7 +313,7 @@ ALTER TABLE orders SET (
   autovacuum_vacuum_cost_limit = 1000      -- let autovacuum work faster
 );
 ```
-
+::
 And ensure no long-running transactions block vacuuming — set `idle_in_transaction_session_timeout` and monitor for stuck transactions.
 
 **The lesson**: plain `VACUUM` reclaims dead tuples for reuse but doesn't shrink the file. `VACUUM FULL` (or `pg_repack`) shrinks, at the cost of a lock. Prevent bloat with tuned autovacuum and no long-running transactions.

@@ -8,13 +8,13 @@ Dart's `test` package provides a clean testing framework. Tests go in `test/` an
 ```bash
 dart pub add dev:test
 ```
-
+::
 ::code-wrapper{language="yaml"}
 ```yaml
 dev_dependencies:
 	test: ^1.24.0
 ```
-
+::
 ## Your First Test
 
 `test/strings_test.dart`:
@@ -33,7 +33,7 @@ void main() {
 	});
 }
 ```
-
+::
 ### Run
 
 ::code-wrapper{language="bash"}
@@ -41,7 +41,7 @@ void main() {
 dart test                 # run all tests
 dart test test/strings_test.dart   # run a specific file
 ```
-
+::
 ## Matchers
 
 `expect(actual, matcher)` checks the actual value against a matcher:
@@ -67,14 +67,14 @@ expect(fn, throwsException);
 expect(fn, throwsA(isA<ArgumentError>()));
 expect(fn, throwsArgumentError);
 ```
-
+::
 ### Custom matchers
 
 ::code-wrapper{language="dart"}
 ```dart
 expect(value, predicate((v) => v > 0, 'is positive'));
 ```
-
+::
 ## `group`
 
 ::code-wrapper{language="dart"}
@@ -91,7 +91,7 @@ void main() {
 	});
 }
 ```
-
+::
 `group` organizes related tests — the output shows the group hierarchy.
 
 ## `setUp` and `tearDown`
@@ -121,7 +121,7 @@ void main() {
 	});
 }
 ```
-
+::
 `setUp` runs before each test; `tearDown` runs after. They can be async (`setUp(() async { ... })`).
 
 ## Testing Async
@@ -144,7 +144,7 @@ test('future throws', () async {
 	);
 });
 ```
-
+::
 For async tests, make the test function `async` and `await` — the framework waits for completion.
 
 ## Mocking with `mockito`
@@ -153,7 +153,7 @@ For async tests, make the test function `async` and `await` — the framework wa
 ```bash
 dart pub add dev:mockito dev:build_runner
 ```
-
+::
 ::code-wrapper{language="dart"}
 ```dart
 import 'package:mockito/annotations.dart';
@@ -173,7 +173,7 @@ void main() {
 	});
 }
 ```
-
+::
 `@GenerateMocks` generates mock classes; run `dart run build_runner build` to generate. `when(...).thenAnswer/thenReturn/thenThrow` stubs methods; `verify` checks calls.
 
 ## Mocking with `mocktail` (simpler)
@@ -195,7 +195,7 @@ void main() {
 	});
 }
 ```
-
+::
 `mocktail` doesn't need code generation (simpler than `mockito`). Use `when(() => ...)` (a lambda) instead of `when(...)`.
 
 ## Parameterized Tests
@@ -212,7 +212,7 @@ void main() {
 	}
 }
 ```
-
+::
 Each iteration creates a separate test (visible in output).
 
 ## Integration Tests
@@ -233,7 +233,7 @@ dart pub global activate coverage
 dart test --coverage=coverage
 dart pub global run coverage:format_coverage --packages=.packages --report-on=lib --in=coverage --out=coverage/lcov.info
 ```
-
+::
 Or use `genhtml` (from lcov) to generate HTML reports.
 
 ## 💡 Tips & Tricks
@@ -292,7 +292,7 @@ test('fetch returns data', () async {
 	expect(data, equals('hello'));
 });
 ```
-
+::
 With `async`/`await`, the test function returns a `Future`, and the framework waits for it to complete before evaluating pass/fail. Option 2 (await the future, then `expect`) is cleaner and more common.
 
 **The lesson**: async tests must be `async` and `await` the async operation (or the expectation). Without `async`/`await`, the test function returns before the future completes, and the framework may finish the test prematurely (false positive). Make the test `async` and `await` the result, then `expect`.

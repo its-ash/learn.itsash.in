@@ -79,7 +79,7 @@ func TestParallel(t *testing.T) {
 	}
 }
 ```
-
+::
 `t.Parallel()` signals that subtests can run concurrently with other parallel tests. Pre-1.22, capture the loop variable (`tt := tt`); 1.22+ doesn't need it.
 
 ## Benchmarks
@@ -105,7 +105,7 @@ go test -bench=. -benchtime=5s    # run each for 5s
 go test -bench=. -count=5         # run 5 times (for variance)
 go test -bench=. -cpu=1,2,4       # different GOMAXPROCS
 ```
-
+::
 Output: `BenchmarkAdd-8   1000000000   0.5 ns/op   0 B/op   0 allocs/op` — `-8` is GOMAXPROCS, `ns/op` is time per operation, `B/op` and `allocs/op` (with `-benchmem`) are memory/allocations.
 
 ### Benchmarking with setup
@@ -120,7 +120,7 @@ func BenchmarkProcess(b *testing.B) {
 	}
 }
 ```
-
+::
 `b.ResetTimer()` excludes setup. `b.ReportAllocs()` enables allocation reporting per-benchmark.
 
 ## Fuzzing (Go 1.18+)
@@ -141,13 +141,13 @@ func FuzzAdd(f *testing.F) {
 	})
 }
 ```
-
+::
 ::code-wrapper{language="bash"}
 ```bash
 go test -fuzz=FuzzAdd           # run the fuzzer (until failure or Ctrl-C)
 go test -fuzz=FuzzAdd -fuzztime=30s   # run for 30s
 ```
-
+::
 Failing inputs are saved to `testdata/fuzz/FuzzAdd/` as a regression corpus — subsequent `go test` runs them as regular tests.
 
 ## Example Functions
@@ -166,7 +166,7 @@ func ExampleAdd_negative() {
 	// Output: -3
 }
 ```
-
+::
 If the `// Output:` comment doesn't match, the example fails. Examples also appear in `go doc` as documentation.
 
 ## `httptest` — Testing HTTP Handlers
@@ -183,7 +183,7 @@ func TestHandler(t *testing.T) {
 	}
 }
 ```
-
+::
 `httptest.NewRequest` + `httptest.NewRecorder` let you test handlers without starting a server. `w.Body` has the response.
 
 ## Test Main (setup/teardown)
@@ -196,7 +196,7 @@ func TestMain(m *testing.M) {
 	// teardown (before os.Exit, or use defer with a wrapper)
 }
 ```
-
+::
 `TestMain` runs once for the package — use for global setup (database, mocks).
 
 ## 💡 Tips & Tricks
@@ -258,7 +258,7 @@ func BenchmarkSum(b *testing.B) {
 	_ = result   // ensure the result is "used"
 }
 ```
-
+::
 Or assign to a package-level var:
 
 ```go
@@ -272,7 +272,7 @@ func BenchmarkSum(b *testing.B) {
 	}
 }
 ```
-
+::
 The "sink" pattern (assigning to a package-level var or a local that's "used") prevents dead-code elimination, so the benchmark measures the real cost.
 
 **The lesson**: if a benchmark's result is unused, the compiler may optimize it away, giving misleadingly fast results. Assign the result to a package-level var (a "sink") to prevent elimination.

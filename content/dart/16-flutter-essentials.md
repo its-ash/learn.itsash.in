@@ -22,7 +22,7 @@ brew install --cask flutter
 
 flutter doctor   # check installation
 ```
-
+::
 ## Your First Flutter App
 
 ::code-wrapper{language="bash"}
@@ -31,7 +31,7 @@ flutter create my_app
 cd my_app
 flutter run
 ```
-
+::
 `lib/main.dart`:
 
 ::code-wrapper{language="dart"}
@@ -59,7 +59,7 @@ class MyApp extends StatelessWidget {
 	}
 }
 ```
-
+::
 - `runApp()` — starts the app with the root widget.
 - `MaterialApp` — a Material Design app wrapper (theme, routing).
 - `Scaffold` — a basic page structure (AppBar, body, FAB, drawer).
@@ -84,7 +84,7 @@ class Greeting extends StatelessWidget {
 	}
 }
 ```
-
+::
 ### StatefulWidget
 
 A widget with mutable state (rebuilds when state changes):
@@ -115,7 +115,7 @@ class _CounterState extends State<Counter> {
 	}
 }
 ```
-
+::
 `setState()` triggers a rebuild with the new state. The `build` method re-runs, producing a new widget tree. Flutter diffs and updates the UI.
 
 ### Why the two classes?
@@ -145,7 +145,7 @@ Row(
 	],
 )
 ```
-
+::
 `Column` is vertical (like flexbox column), `Row` is horizontal. `MainAxisAlignment`/`CrossAxisAlignment` align. `Expanded` fills available space (like `flex: 1`).
 
 ### `Container` (div)
@@ -162,7 +162,7 @@ Container(
 	child: const Text('In a container'),
 )
 ```
-
+::
 `Container` is a multi-purpose widget — padding, margin, decoration (color, border, shadow), constraints, child. Like an HTML `div`.
 
 ### `Stack` (positioning)
@@ -180,7 +180,7 @@ Stack(
 	],
 )
 ```
-
+::
 `Stack` layers children; `Positioned` places a child at specific coordinates.
 
 ### `ListView`
@@ -194,7 +194,7 @@ ListView.builder(
 	},
 )
 ```
-
+::
 `ListView.builder` builds items lazily (only visible items are built) — efficient for long lists. Use `ListView` (non-builder) for short lists.
 
 ### `GridView`
@@ -211,7 +211,7 @@ GridView.builder(
 	itemBuilder: (context, index) => Card(child: Text(items[index])),
 )
 ```
-
+::
 ### `Padding`, `Center`, `SizedBox`
 
 ::code-wrapper{language="dart"}
@@ -226,7 +226,7 @@ Center(child: Text('Centered'))
 SizedBox(height: 16)   // spacer
 SizedBox(width: 100, height: 100, child: Text('Fixed size'))
 ```
-
+::
 ## Hot Reload
 
 - **Hot reload** (`r` in the terminal) — injects new code without losing state. <1 second.
@@ -246,7 +246,7 @@ Navigator.push(
 // Pop back
 Navigator.pop(context);
 ```
-
+::
 For named routes, declare in `MaterialApp(routes: {...})` and use `Navigator.pushNamed(context, '/detail')`.
 
 ## State Management
@@ -280,7 +280,7 @@ ChangeNotifierProvider(
 	),
 )
 ```
-
+::
 ## Themes
 
 ::code-wrapper{language="dart"}
@@ -293,7 +293,7 @@ MaterialApp(
 	darkTheme: ThemeData.dark(),
 )
 ```
-
+::
 `ThemeData` customizes colors, typography, shapes. `darkTheme` for dark mode (auto-switches with the OS). Access via `Theme.of(context)` in widgets.
 
 ## Platform Channels (native interop)
@@ -311,7 +311,7 @@ Future<int> getBatteryLevel() async {
 	return level;
 }
 ```
-
+::
 The native side (Kotlin/Swift) implements the channel handler. Use for features Flutter doesn't expose (most are in packages though).
 
 ## Packages
@@ -327,7 +327,7 @@ dependencies:
 	http: ^1.0.0
 	provider: ^6.0.0
 ```
-
+::
 Popular packages: `http`, `provider`/`riverpod`/`bloc`, `go_router` (routing), `shared_preferences` (key-value storage), `sqflite` (SQLite), `image_picker`, `flutter_svg`.
 
 ## 💡 Tips & Tricks
@@ -394,7 +394,7 @@ Widget build(BuildContext context) {
 	return Text(_data ?? 'Loading...');
 }
 ```
-
+::
 Or with `async`/`await`:
 
 ```dart
@@ -409,7 +409,7 @@ Future<void> _loadData() async {
 	if (mounted) setState(() => _data = data);
 }
 ```
-
+::
 `initState` runs once when the widget is created. `if (mounted)` checks the widget is still in the tree before `setState` (avoids the "setState after dispose" error).
 
 **The lesson**: `build()` must be pure — no side effects (no async work, no `setState`). Start async work in `initState`, and check `mounted` before `setState` (the widget may have been disposed while awaiting).

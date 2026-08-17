@@ -19,7 +19,7 @@ Every HTML element is a rectangular box with four layers: content, padding, bord
 │  └───────────────────────────┘  │
 └─────────────────────────────────┘
 ```
-
+::
 - **Content** — the element's content (text, image, child elements). `width`/`height` set this (by default).
 - **Padding** — space inside the border. `padding` adds to the element's size.
 - **Border** — the border line. `border` adds to the element's size.
@@ -33,21 +33,21 @@ The default is `box-sizing: content-box` — `width`/`height` set only the conte
 ```text
 content-box: width: 100px + padding: 10px + border: 2px = 124px actual width
 ```
-
+::
 This is counterintuitive and a common source of layout bugs. **Use `border-box`**:
 
 ::code-wrapper{language="css"}
 ```css
 * { box-sizing: border-box; }
 ```
-
+::
 With `border-box`, `width` includes padding and border — the element is exactly `width` wide:
 
 ::code-wrapper{language="text"}
 ```text
 border-box: width: 100px (includes padding + border) = 100px actual width
 ```
-
+::
 `border-box` is the modern default — include this reset at the top of every stylesheet.
 
 ## Margin and Padding Shorthands
@@ -68,7 +68,7 @@ margin-left: 40px;
 margin-block: 10px;               /* top/bottom in horizontal writing mode */
 margin-inline: 20px;              /* left/right in horizontal writing mode */
 ```
-
+::
 The same pattern applies to `padding`. The 4-value order is **TRBL** (Top, Right, Bottom, Left) — clockwise from top. Mnemonic: "T-RouBLe."
 
 ## Margin Collapsing
@@ -81,7 +81,7 @@ Vertical margins between block elements **collapse** — the larger margin wins,
 <p style="margin-top: 20px">B</p>
 /* Gap between A and B: 30px (the larger), NOT 50px */
 ```
-
+::
 Margin collapsing rules:
 - Adjacent siblings' vertical margins collapse.
 - Parent and first/last child margins collapse (if no padding/border separates them).
@@ -103,7 +103,7 @@ Margin collapsing is a frequent source of "why is the gap smaller than I expecte
 ```css
 .pull-up { margin-top: -20px; }   /* moves the element up, overlapping the previous */
 ```
-
+::
 Negative margins are a hack for specific effects (overlapping, stretching). Use carefully — they can cause overlap and layout confusion.
 
 ## `width`, `height`, `min-`, `max-`
@@ -118,14 +118,14 @@ Negative margins are a hack for specific effects (overlapping, stretching). Use 
 	/* min/max are useful for responsive: width: 100%; max-width: 600px */
 }
 ```
-
+::
 `max-width` with `width: 100%` is the responsive pattern — fill the container, but cap at a max:
 
 ::code-wrapper{language="css"}
 ```css
 .container { width: 100%; max-width: 1200px; margin: 0 auto; }
 ```
-
+::
 ## `overflow`
 
 What happens when content exceeds the element's size:
@@ -141,7 +141,7 @@ What happens when content exceeds the element's size:
 	overflow-y: auto;     /* vertical (can differ) */
 }
 ```
-
+::
 `overflow: hidden` also clips shadows, transforms, and child elements outside the box — and it establishes a new formatting context (clears floats, contains margins).
 
 ## 💡 Tips & Tricks
@@ -197,7 +197,7 @@ input {
 	border: 1px solid gray;
 }
 ```
-
+::
 With `border-box`, `width: 100%` includes padding and border — the input is exactly 100% wide, fitting the container. This is why `* { box-sizing: border-box; }` is a universal reset.
 
 **The lesson**: `content-box` (default) adds padding/border on top of `width`, causing `width: 100%` + padding to overflow. `border-box` includes padding/border in `width`, preventing overflow. Always use `border-box`.

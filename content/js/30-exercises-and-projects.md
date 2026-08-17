@@ -33,7 +33,7 @@ class TodoApp {
   render() { /* update DOM */ }
 }
 ```
-
+::
 ::
 
 ### 2. Calculator (functions, events)
@@ -58,7 +58,7 @@ async function getWeather(city) {
   }
 }
 ```
-
+::
 ::
 
 ### 5. Markdown Parser (string manipulation, regex)

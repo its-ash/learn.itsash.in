@@ -34,7 +34,7 @@ class Point {
 	String toString() => 'Point($x, $y)';
 }
 ```
-
+::
 ### Constructors
 
 - **Default** — `Point(this.x, this.y)` — `this.x` assigns the field `x` from the param `x` (shorthand).
@@ -57,7 +57,7 @@ const p = ImmutablePoint(1, 2);   // compile-time constant instance
 const q = ImmutablePoint(1, 2);
 print(identical(p, q));   // true — canonicalized
 ```
-
+::
 `const` constructors create compile-time constant instances — all `const` instances with the same args are the same object (canonicalized). All fields must be `final`, and the constructor has no body.
 
 ### Factory constructors
@@ -79,7 +79,7 @@ var a = Logger('app');
 var b = Logger('app');
 print(identical(a, b));   // true — cached
 ```
-
+::
 `factory` runs like a static method — it can return a cached instance, a subtype, or compute the instance. Use for caching, singletons, or returning subtypes.
 
 ## Fields and Properties
@@ -101,7 +101,7 @@ class Person {
 	String get displayName => name.toUpperCase();
 }
 ```
-
+::
 - Fields without `final` are mutable.
 - `_` prefix makes a name library-private (not truly private — accessible within the same library/file, but not from other files).
 - Getters and setters use `get`/`set` — access them like fields (`person.age`, not `person.age()`).
@@ -115,7 +115,7 @@ class Config {
 	String _load() { /* expensive */ return 'loaded'; }
 }
 ```
-
+::
 `late final` with an initializer runs the initializer on first access (lazy). Useful for expensive fields.
 
 ## Inheritance
@@ -139,7 +139,7 @@ class Dog extends Animal {
 var dog = Dog('Rex');
 dog.speak();   // 'Rex barks'
 ```
-
+::
 `extends` for single inheritance. `super` calls the parent. `@override` is a hint (not enforced, but recommended) for overriding methods. Dart has **single inheritance** (one parent), unlike C++/Python.
 
 ## Interfaces (implicit)
@@ -159,7 +159,7 @@ class Bird extends Animal implements Flyer {
 	void fly() => print('$name flies');
 }
 ```
-
+::
 `implements` means "I provide the methods of this interface" — you must implement all methods (even if the class has them). `extends` means "I am a subclass" — you inherit the implementation.
 
 A class can `implements` multiple interfaces (but `extends` only one):
@@ -168,7 +168,7 @@ A class can `implements` multiple interfaces (but `extends` only one):
 ```dart
 class Duck extends Animal implements Flyer, Swimmer { ... }
 ```
-
+::
 ## Abstract Classes
 
 ::code-wrapper{language="dart"}
@@ -186,7 +186,7 @@ class Circle extends Shape {
 	double area() => 3.14159 * radius * radius;
 }
 ```
-
+::
 `abstract class` can't be instantiated — subclasses implement the abstract methods. Can have concrete methods too.
 
 ## Mixins
@@ -214,7 +214,7 @@ class Icon with Drawable, Resizable {
 
 var icon = Icon('star')..draw()..resize(2.0);   // 'Drawing star', size 2.0
 ```
-
+::
 `mixin` defines reusable code; `with` applies it to a class. A class can use multiple mixins. Mixins can't be instantiated (no constructor).
 
 ### Mixin constraints
@@ -227,7 +227,7 @@ mixin Flyable on Animal {   // can only be applied to Animal subclasses
 
 class Bird extends Animal with Flyable { ... }
 ```
-
+::
 `mixin X on Y` — the mixin can only be used on `Y` or its subclasses (access to `Y`'s methods).
 
 ## Static members
@@ -242,7 +242,7 @@ class MathUtils {
 MathUtils.pi;          // 3.14159
 MathUtils.square(5);   // 25.0
 ```
-
+::
 `static` members belong to the class, not instances. No `this` in static methods.
 
 ## Extension methods
@@ -257,7 +257,7 @@ extension StringExtension on String {
 'racecar'.isPalindrome;   // true
 'hello'.reversed;         // 'olleh'
 ```
-
+::
 Extensions add methods to existing types (even library types like `String`). Useful for utility methods without subclassing.
 
 ## `enum` (enhanced, Dart 2.17+)
@@ -277,7 +277,7 @@ enum Status {
 Status.pending.label;   // 'Pending'
 Status.values;          // [pending, active, completed]
 ```
-
+::
 Enhanced enums can have fields, methods, and constructors (like a class). All instances are `const`.
 
 ## Sealed classes (Dart 3)
@@ -294,7 +294,7 @@ String describe(Result r) => switch (r) {
 	Failure(:var error) => 'Failure: $error',
 };   // exhaustive — no default needed
 ```
-
+::
 `sealed` means all direct subtypes are in the same library. The compiler knows all subtypes, enabling exhaustive switches (no `default` needed, and adding a subtype flags non-exhaustive switches). Use for closed hierarchies (Result, Option, states).
 
 ## 💡 Tips & Tricks
@@ -367,7 +367,7 @@ void main() {
 	print(a == b);   // true
 }
 ```
-
+::
 `Object.hash(x, y)` combines the fields into a hash. Override both `==` and `hashCode` (they must be consistent: equal objects have equal hashes).
 
 Or, use a `record` (Dart 3) for automatic value equality:
@@ -378,7 +378,7 @@ var a = (1.0, 2.0);
 var b = (1.0, 2.0);
 print(a == b);   // true — records have value equality
 ```
-
+::
 **The lesson**: Dart's default `==` is identity (like Java, unlike Kotlin data classes). For value equality, override `==` and `hashCode` (use `Object.hash()` for the hash). Or use records (Dart 3) which have automatic value equality.
 
 </details>

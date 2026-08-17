@@ -308,7 +308,7 @@ UPDATE accounts SET balance = balance - 100 WHERE id = 1;   -- atomic
 UPDATE accounts SET balance = balance + 100 WHERE id = 2;   -- atomic
 COMMIT;
 ```
-
+::
 `FOR UPDATE` serializes the transactions on the locked rows; `balance = balance - X` is an atomic update that doesn't depend on the `SELECT`ed value. At SERIALIZABLE, the database would detect the conflict and abort one — but the `balance = balance - X` form is correct even at READ COMMITTED without explicit locking.
 
 **The lesson**: `UPDATE ... SET col = col - X` is an atomic read-modify-write (safe at any isolation level). `UPDATE ... SET col = <value computed in app from a SELECT>` is a lost-update race. Never read a value, compute in the application, and write it back without `FOR UPDATE` or an atomic expression.

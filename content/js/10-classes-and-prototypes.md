@@ -211,7 +211,7 @@ f.greet()  // "hello" — found on Foo.prototype
 // Prototype chain lookup
 f.toString()  // found on Object.prototype
 ```
-
+::
 ::
 
 ### Visualizing the chain
@@ -236,7 +236,7 @@ c instanceof B  // true
 c instanceof A  // true
 c instanceof Object  // true
 ```
-
+::
 ::
 
 ## Constructor Functions (pre-class)
@@ -262,7 +262,7 @@ class PersonClass {
 new Person('Alice').greet()
 new PersonClass('Alice').greet()
 ```
-
+::
 ::
 
 ## `Object.create` (prototypal inheritance without `new`)
@@ -282,7 +282,7 @@ const obj = Object.create(Object.prototype, {
   name: { value: 'Alice', writable: true, enumerable: true, configurable: true }
 })
 ```
-
+::
 ::
 
 ## Mixing Classes and Prototypes
@@ -320,7 +320,7 @@ const user = new User('Alice', 'alice@example.com')
 user.serialize()  // '{"name":"Alice","email":"alice@example.com"}'
 user.validate()   // true
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

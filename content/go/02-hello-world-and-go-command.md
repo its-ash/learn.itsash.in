@@ -289,7 +289,7 @@ func main() {
 	fmt.Println(greet())
 }
 ```
-
+::
 ::code-wrapper{language="go"}
 ```go
 // greet.go
@@ -313,13 +313,13 @@ The fix: run the whole package, not a single file:
 ```bash
 go run .   # includes all .go files in the current directory's package
 ```
-
+::
 Or list all files:
 
 ```bash
 go run main.go greet.go
 ```
-
+::
 `go run .` (or `go build .`) is the right way to run a multi-file package — it compiles all files in the package together. `go run main.go` is only for single-file programs (or when you explicitly want a subset, which is rare).
 
 **The lesson**: `go run file.go` runs only that file; `go run .` runs the whole package. For multi-file packages (the norm), always use `go run .` / `go build .`.

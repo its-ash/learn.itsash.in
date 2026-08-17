@@ -73,7 +73,7 @@ fi
 
 echo "Done" >&2
 ```
-
+::
 **Goal**: a robust backup script with error handling, cleanup, and dry-run.
 
 ## Project 2 — Log Analyzer
@@ -110,7 +110,7 @@ awk '{print $4}' "$log" | cut -d: -f2 | sort | uniq -c | sort -rn | head -1
 echo -e "\n=== Total requests ==="
 wc -l < "$log"
 ```
-
+::
 **Goal**: a log analyzer using `awk`/`sort`/`uniq` pipelines.
 
 ## Project 3 — Git Commit Hook
@@ -145,12 +145,12 @@ fi
 
 echo "Pre-commit checks passed."
 ```
-
+::
 ::code-wrapper{language="bash"}
 ```bash
 chmod +x .git/hooks/pre-commit
 ```
-
+::
 **Goal**: a Git hook enforcing code quality.
 
 ## Project 4 — Process Monitor
@@ -195,7 +195,7 @@ while true; do
 	((backoff > max_backoff)) && backoff=$max_backoff
 done
 ```
-
+::
 **Goal**: a supervisor script with backoff and signal handling.
 
 ## Project 5 — Batch Image Resizer
@@ -235,7 +235,7 @@ find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.png" \) -print0 |
 
 echo "Done"
 ```
-
+::
 **Goal**: a parallel batch processor using `find`/`xargs -P`.
 
 ## Project 6 — Dotfile Manager
@@ -300,7 +300,7 @@ case "${1:-}" in
 	*) usage; exit 1 ;;
 esac
 ```
-
+::
 **Goal**: a dotfile manager with subcommands, idempotent operations, and backups.
 
 ## Project 7 — Deployment Script (Capstone)
@@ -354,7 +354,7 @@ A full deployment script combining all skills (all chapters).
 - [ ] `bats` tests for logic
 - [ ] `--dry-run` for dangerous operations
 ```
-
+::
 ## Summary
 
 You've applied the full Bash toolkit — from a backup script and log analyzer to a Git hook, process monitor, batch resizer, dotfile manager, and a capstone deployment script. You can write robust, strict-mode scripts with proper quoting, error handling, traps, and tests — a production-quality Bash foundation. Bash's power is composing small tools into pipelines and automating system tasks; with discipline (quoting, strict mode, ShellCheck, tests), it's a reliable automation language.

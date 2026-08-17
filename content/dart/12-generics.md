@@ -16,7 +16,7 @@ List<int> numbers = [1, 2, 3];
 // numbers.add('four');   // ✗ compile error
 numbers[0].abs();         // ✓ int has abs
 ```
-
+::
 Generics catch type errors at compile time and document intent.
 
 ## Generic Classes
@@ -35,7 +35,7 @@ var stack = Stack<String>();
 stack.push('hello');
 var item = stack.pop();   // String (typed)
 ```
-
+::
 `T` is a type parameter (convention: single uppercase letters — `T`, `E`, `K`, `V`). `Stack<T>` is parameterized; `Stack<String>` instantiates with `T = String`.
 
 ## Generic Functions
@@ -47,7 +47,7 @@ T firstOf<T>(List<T> items) => items.first;
 var x = firstOf<int>([1, 2, 3]);        // 1 (int)
 var y = firstOf(['a', 'b']);            // 'a' (T inferred as String)
 ```
-
+::
 Type parameters can be inferred from arguments. Explicit `<int>` is optional when inferable.
 
 ## Generic Methods on Classes
@@ -70,7 +70,7 @@ class Cache {
 final cache = Cache();
 var user = cache.get('user', () => fetchUser());   // T inferred as User
 ```
-
+::
 The method has its own type parameter `T`, independent of the class.
 
 ## Bounded Type Parameters
@@ -89,7 +89,7 @@ class User extends Model { ... }
 var repo = Repository<User>();   // ✓ User extends Model
 // var bad = Repository<String>(); // ✗ String doesn't extend Model
 ```
-
+::
 `T extends Model` means `T` must be a `Model` subtype — you can use `Model`'s methods on `T` inside the class.
 
 ### Multiple bounds
@@ -104,7 +104,7 @@ class SortedList<T extends Comparable<T>> {
 	}
 }
 ```
-
+::
 `T extends Comparable<T>` — `T` must be comparable to itself. `a.compareTo(b)` is available (from `Comparable`).
 
 ## Generic Typedefs
@@ -116,7 +116,7 @@ typedef Callback<T> = void Function(T value);
 Callback<int> onInt = (n) => print(n);
 Callback<String> onString = (s) => print(s);
 ```
-
+::
 ## The `Object` bound
 
 By default, `T` is bounded by `Object?` (any type, including null). `T extends Object` excludes null:
@@ -125,7 +125,7 @@ By default, `T` is bounded by `Object?` (any type, including null). `T extends O
 ```dart
 class Box<T extends Object> { ... }   // T can't be Null
 ```
-
+::
 ## Reified Generics
 
 Dart generics are **reified** — type parameters are available at runtime (unlike Java's type erasure):
@@ -136,7 +136,7 @@ var list = <int>[1, 2, 3];
 print(list.runtimeType);   // List<int> (the type is preserved)
 print(list is List<int>);  // true
 ```
-
+::
 You can check `is List<int>` at runtime — the type info is preserved. This is unlike Java (`List<Integer>.class` doesn't exist) and like C#.
 
 ## Covariance
@@ -149,7 +149,7 @@ void feedAll(List<Animal> animals) { ... }
 var dogs = <Dog>[...];
 feedAll(dogs);   // ✓ List<Dog> is a List<Animal> (covariant)
 ```
-
+::
 This is convenient but unsound (you could add a `Cat` to a `List<Dog>` passed as `List<Animal>`). Dart allows it for ergonomics; the runtime checks catch violations.
 
 ### `List<Dog>` vs `List<Dog>?>`
@@ -166,7 +166,7 @@ if (list is List<int>) {
 }
 var typed = list as List<int>;   // cast (throws if wrong)
 ```
-
+::
 `is` and `as` work with generic types (reified). `is List<int>` is a runtime check.
 
 ## Generic collections
@@ -255,7 +255,7 @@ void main() {
 	print(name);   // null
 }
 ```
-
+::
 Using `if (value is T)` (a runtime check, thanks to reified generics) returns the value only if it's actually a `T`, else `null`. No `TypeError` — the caller handles the `null`.
 
 **The lesson**: `as T` in a generic cache blindly trusts the caller's type parameter and throws `TypeError` on mismatch. Use `is T` (reified check) to validate, returning `null` (or a clear error) on mismatch. Don't let type errors surface as confusing `TypeError`s deep in the cache.

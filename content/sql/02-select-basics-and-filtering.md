@@ -278,7 +278,7 @@ SELECT name FROM customers WHERE city != 'NYC' OR city IS NULL;
 SELECT name FROM customers WHERE city != 'NYC';
 -- (NULLs correctly excluded — this is the rare case where the original is right)
 ```
-
+::
 `IS DISTINCT FROM` is the NULL-safe "not equal" — it treats `NULL` and `NULL` as equal (distinct = false), and `NULL` and `'NYC'` as distinct (true). It's the cleanest way to say "not equal, counting NULL as a real value."
 
 **The lesson**: `!=` and `<>` silently drop NULLs. If NULL is a meaningful "other" value in your data, use `IS DISTINCT FROM` or explicitly handle `IS NULL`.

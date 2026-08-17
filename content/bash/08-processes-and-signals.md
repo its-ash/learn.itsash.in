@@ -10,7 +10,7 @@ Bash manages processes — background/foreground, signals, job control, and proc
 ```bash
 ./long_running.sh   # runs in foreground (blocks the terminal)
 ```
-
+::
 ### Background
 
 ::code-wrapper{language="bash"}
@@ -18,7 +18,7 @@ Bash manages processes — background/foreground, signals, job control, and proc
 ./long_running.sh &   # runs in background (returns immediately)
 # [1] 12345   (job 1, PID 12345)
 ```
-
+::
 `&` runs the command in the background. The shell prints the job number and PID. You can continue working.
 
 ### `$!` (last background PID)
@@ -31,7 +31,7 @@ echo "Started PID $pid"
 wait "$pid"   # wait for it to finish
 echo "Exit status: $?"
 ```
-
+::
 `$!` is the PID of the last backgrounded command. `wait` blocks until it finishes; `$?` is its exit status.
 
 ## Job Control
@@ -46,7 +46,7 @@ Ctrl-Z               # suspend the foreground job
 kill %1              # terminate job 1
 kill $pid            # terminate by PID
 ```
-
+::
 - `jobs` — list background/stopped jobs.
 - `fg`/`bg` — foreground/background a job.
 - `Ctrl-Z` — suspend (stop) the foreground process (sends SIGSTOP via the terminal).
@@ -64,7 +64,7 @@ kill -INT PID         # SIGINT (Ctrl-C)
 kill -TERM PID        # SIGTERM
 kill -l               # list all signals
 ```
-
+::
 Common signals:
 - **SIGINT (2)** — Ctrl-C (interrupt).
 - **SIGTERM (15)** — polite terminate (default for `kill`). Can be caught (trap).
@@ -93,7 +93,7 @@ trap cleanup EXIT INT TERM   # run cleanup on exit, Ctrl-C, or SIGTERM
 
 # ... script logic ...
 ```
-
+::
 `trap 'command' SIGNALS` runs `command` when a signal is received. `EXIT` is a pseudo-signal (runs on any exit). Use for cleanup (temp files, locks, partial state).
 
 ### Common trap patterns
@@ -109,7 +109,7 @@ trap 'echo "Shutting down..."; kill "$server_pid"; wait "$server_pid"' TERM INT
 # Reload config
 trap 'load_config' HUP
 ```
-
+::
 ### Ignoring a signal
 
 ::code-wrapper{language="bash"}
@@ -118,7 +118,7 @@ trap '' INT   # ignore Ctrl-C
 # ... critical section ...
 trap - INT    # restore default
 ```
-
+::
 `trap '' SIGNAL` ignores the signal; `trap - SIGNAL` restores the default.
 
 ## `wait`
@@ -138,7 +138,7 @@ pid2=$!
 wait "$pid1" "$pid2"
 echo "Both done"
 ```
-
+::
 `wait` (no arg) waits for all background jobs. `wait PID` waits for a specific one. After `wait PID`, `$?` is that job's exit status.
 
 ### `wait -n` (Bash 5.1+)
@@ -151,7 +151,7 @@ echo "Both done"
 wait -n   # wait for any one to finish
 echo "One job completed"
 ```
-
+::
 `wait -n` waits for *any one* background job to finish. Useful for job pools.
 
 ## Process Substitution (recap)
@@ -160,7 +160,7 @@ echo "One job completed"
 ```bash
 diff <(./gen_a.sh) <(./gen_b.sh)
 ```
-
+::
 `<(cmd)` runs `cmd` and provides its output as a temporary file descriptor. Avoids temp files.
 
 ## `xargs` (parallel)
@@ -173,7 +173,7 @@ find . -name "*.py" -print0 | xargs -0 grep "main"   # safe (null-delimited)
 # Parallel
 ls *.png | xargs -P 4 -I {} convert {} {}.thumb.png   # 4 parallel converts
 ```
-
+::
 `-P N` runs N processes in parallel. `-0` handles null-delimited input (safe with `-print0`). `-I {}` sets a placeholder.
 
 ## `timeout`
@@ -184,7 +184,7 @@ timeout 30 ./slow_script.sh        # kill after 30 seconds
 timeout -s KILL 30 ./slow.sh       # use SIGKILL
 timeout --preserve-status 30 ./script.sh   # preserve the exit status
 ```
-
+::
 `timeout` runs a command with a time limit. Useful for scripts that might hang.
 
 ## `nohup` and `disown`
@@ -194,7 +194,7 @@ timeout --preserve-status 30 ./script.sh   # preserve the exit status
 nohup ./long_script.sh &   # survives logout (immune to SIGHUP)
 disown -h %1               # keep job 1 after shell exits
 ```
-
+::
 `nohup` makes a process immune to SIGHUP (survives terminal close). Output goes to `nohup.out`. `disown` removes a job from the shell's job table (it survives shell exit).
 
 ## Process Inspection
@@ -209,7 +209,7 @@ pstree -p            # process tree with PIDs
 top                  # interactive process monitor
 htop                 # better interactive monitor (install separately)
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `trap 'rm -f "$tmp"; cleanup' EXIT` for cleanup — `EXIT` is a pseudo-signal that runs on any exit (normal, error with `set -e`, or signal). Combine all cleanup in one function. Never leave temp files behind.
@@ -273,7 +273,7 @@ else
 	exit 1
 fi
 ```
-
+::
 Or use an array to collect PIDs and check all:
 
 ```bash
@@ -287,7 +287,7 @@ for pid in "${pids[@]}"; do
 done
 echo "All succeeded"
 ```
-
+::
 **The lesson**: `wait` (no arg) waits for all jobs, but `$?` is only the last job's status (non-deterministic). To check all, capture each PID (`$!`), `wait` for each, and check each exit status. Don't rely on `wait`'s `$?` for "all succeeded."
 
 </details>

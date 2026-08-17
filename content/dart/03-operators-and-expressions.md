@@ -15,7 +15,7 @@ Dart's operators are C-family — arithmetic, comparison, logical, bitwise, assi
 5 == 2   // false
 5 != 2   // true
 ```
-
+::
 `/` always returns `double` (even for `int` inputs). `~/` is integer division (returns `int`, truncated toward zero). `%` is modulo. `-5 ~/ 2 = -2` (truncates toward zero, not floor).
 
 ### Increment/decrement
@@ -28,7 +28,7 @@ x++;     // 6 (postfix)
 x--;     // 6
 --x;     // 5
 ```
-
+::
 Postfix returns the old value, prefix returns the new. `var y = x++` — `y` is the old `x`, then `x` increments.
 
 ### Overflow
@@ -46,7 +46,7 @@ Dart `int` is 64-bit (native). Arithmetic wraps on overflow (two's complement) �
 5 <= 5       // true
 5 >= 6       // false
 ```
-
+::
 `==` compares by value for most types. For lists/maps, `==` compares by identity (use `listEquals`/`DeepCollectionEquality` for value comparison). Override `==` and `hashCode` in your classes for value equality.
 
 ## Logical
@@ -57,7 +57,7 @@ true && false   // false
 true || false   // true
 !true           // false
 ```
-
+::
 Short-circuit: `&&` stops if the left is false; `||` stops if the left is true.
 
 ## Bitwise
@@ -71,7 +71,7 @@ Short-circuit: `&&` stops if the left is false; `||` stops if the left is true.
 5 << 2   // 20 (left shift)
 5 >> 1   // 2 (right shift, arithmetic)
 ```
-
+::
 Bitwise operators work on `int`. `~` is bitwise NOT (flips all bits). `>>` is arithmetic (sign-extending) on signed integers.
 
 ## Assignment
@@ -85,7 +85,7 @@ x *= 2;   // 12
 x ~/= 5;  // 2 (integer division assignment)
 x %= 2;   // 0
 ```
-
+::
 Compound assignment for all arithmetic/bitwise operators: `+=`, `-=`, `*=`, `/=`, `~/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`.
 
 ## Null-Aware Operators
@@ -99,7 +99,7 @@ Dart has several operators for null safety:
 String? name;
 String display = name ?? 'Anonymous';   // 'Anonymous' (name is null)
 ```
-
+::
 Returns the left if non-null, else the right. The right is evaluated only if the left is null.
 
 ### `??=` (null-aware assignment)
@@ -110,7 +110,7 @@ String? name;
 name ??= 'Alice';   // name is now 'Alice' (was null)
 name ??= 'Bob';     // name is still 'Alice' (already non-null)
 ```
-
+::
 Assigns only if the variable is null.
 
 ### `?.` (null-aware access)
@@ -121,7 +121,7 @@ String? name;
 int? length = name?.length;   // null (name is null, no method call)
 name?.toUpperCase();          // no-op (null)
 ```
-
+::
 Calls the method/accesses the property only if the object is non-null; returns `null` otherwise. Promotes the result to nullable.
 
 ### `!` (null assertion)
@@ -131,7 +131,7 @@ Calls the method/accesses the property only if the object is non-null; returns `
 String? name = getInput();
 print(name!.length);   // asserts name is non-null (throws if null)
 ```
-
+::
 `!` tells the compiler "I know this isn't null" — it promotes the type to non-nullable. Throws `TypeError` at runtime if it *is* null. Use sparingly (it defeats null safety); prefer `??` or null checks.
 
 ### `?..` (null-aware cascade)
@@ -141,7 +141,7 @@ print(name!.length);   // asserts name is non-null (throws if null)
 StringBuilder? builder;
 builder?..add('a')..add('b');   // cascades only if builder is non-null
 ```
-
+::
 ## Type Test
 
 ::code-wrapper{language="dart"}
@@ -151,7 +151,7 @@ x is int         // true
 x is! String     // true (is! = "is not")
 x as int         // cast (throws if not an int)
 ```
-
+::
 `is` checks the type (and promotes in `if`). `as` casts (throws `TypeError` if invalid). Prefer `is` over `as` — `is` is safe, `as` can throw.
 
 ### Type promotion
@@ -163,7 +163,7 @@ if (x is String) {
 	print(x.length);   // ✓ x is promoted to String inside the if
 }
 ```
-
+::
 `is` in an `if` promotes the type within the block — no explicit cast needed.
 
 ## Conditional (`?:`)
@@ -172,7 +172,7 @@ if (x is String) {
 ```dart
 var status = age >= 18 ? 'adult' : 'minor';
 ```
-
+::
 Ternary: `condition ? then : else`.
 
 ## Cascade (`..`)
@@ -184,7 +184,7 @@ var paint = Paint()
 	..strokeWidth = 2.0
 	..style = PaintingStyle.fill;
 ```
-
+::
 `..` returns the object (not the result of the method), enabling chaining setters on the same instance. Equivalent to:
 
 ::code-wrapper{language="dart"}
@@ -194,7 +194,7 @@ paint.color = Colors.red;
 paint.strokeWidth = 2.0;
 paint.style = PaintingStyle.fill;
 ```
-
+::
 ## Spread (`...`)
 
 In collection literals (chapter 09):
@@ -205,7 +205,7 @@ var a = [1, 2, 3];
 var b = [0, ...a, 4];   // [0, 1, 2, 3, 4]
 var c = [0, ...?a, 4];  // null-aware spread (if a is null, skips)
 ```
-
+::
 ## Operator Precedence
 
 High to low:
@@ -272,13 +272,13 @@ int total = 10;
 int count = 3;
 int average = total ~/ count;   // 3 (int)
 ```
-
+::
 Or if you want the `double` average:
 
 ```dart
 double average = total / count;   // 3.333...
 ```
-
+::
 **The lesson**: Dart's `/` always returns `double` (unlike some languages where `int / int = int`). Use `~/` for integer division (`int ~/ int = int`, truncated). This is a common surprise for developers from Python 2, Java, or C (where `int / int = int`).
 
 </details>

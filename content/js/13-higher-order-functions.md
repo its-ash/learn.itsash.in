@@ -18,7 +18,7 @@ const double = x => x * 2
 const addOneThenDouble = compose(double, addOne)
 addOneThenDouble(3)  // 8 — (3+1)*2
 ```
-
+::
 ::
 
 ## Composition
@@ -38,7 +38,7 @@ const slugify = s => s.replace(/\s+/g, '-')
 const toSlug = pipe(trim, toLower, slugify)
 toSlug('  Hello World  ')  // "hello-world"
 ```
-
+::
 ::
 
 ## Currying
@@ -68,7 +68,7 @@ const info = log('INFO')
 error('Database failed')  // "[ERROR] Database failed"
 info('Server started')    // "[INFO] Server started"
 ```
-
+::
 ::
 
 ## Partial Application
@@ -89,7 +89,7 @@ timesSix(4)  // 24
 // Curry: f(a)(b)(c) — one arg at a time
 // Partial: f(a, b)(c) — some args, then rest
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

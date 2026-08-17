@@ -19,7 +19,7 @@ CSS custom properties ("CSS variables") store reusable values, enabling theming,
 	color: var(--text-color, #333);   /* fallback if --text-color is unset */
 }
 ```
-
+::
 - Define with `--name: value;`.
 - Use with `var(--name)` or `var(--name, fallback)`.
 - By convention, define on `:root` (the highest level) for global scope.
@@ -35,7 +35,7 @@ CSS variables **inherit** — a variable defined on `:root` is available to all 
 .card .title { color: var(--color); }   /* red */
 .other { color: var(--color); }         /* blue (from :root) */
 ```
-
+::
 Variables follow the normal cascade — later/more-specific rules override. They're *not* static text substitution; they're real properties that inherit and cascade.
 
 ## Validity and Fallbacks
@@ -46,7 +46,7 @@ color: var(--undefined, #333);              /* fallback used */
 color: var(--primary, var(--default, blue)); /* nested fallback */
 color: var(--primary, blue, green);         /* 'blue, green' is the fallback (commas allowed) */
 ```
-
+::
 If a variable is invalid (e.g., `--gap: 10` without a unit), `var(--gap)` makes the *whole property* invalid (`color: var(--bad)` → `color: unset` to inherited/initial, not the fallback). The fallback only applies if the variable is *unset*, not if it's *invalid*.
 
 ## Theming with CSS Variables
@@ -69,7 +69,7 @@ If a variable is invalid (e.g., `--gap: 10` without a unit), `var(--gap)` makes 
 }
 body { background: var(--bg); color: var(--text); }
 ```
-
+::
 ### Manual toggle (data attribute)
 
 ::code-wrapper{language="css"}
@@ -79,12 +79,12 @@ body { background: var(--bg); color: var(--text); }
 
 body { background: var(--bg); color: var(--text); }
 ```
-
+::
 ::code-wrapper{language="javascript"}
 ```javascript
 document.documentElement.setAttribute('data-theme', 'dark');
 ```
-
+::
 The `data-theme` attribute on `<html>` switches the variables — instant theme change, no reload. Persist in `localStorage` and respect `prefers-color-scheme` on load.
 
 ## Dynamic Values (JS)
@@ -102,7 +102,7 @@ document.documentElement.style.setProperty('--primary', '#ff0000');
 // For a specific element
 el.style.setProperty('--spacing', '2rem');
 ```
-
+::
 This is powerful — JS can drive CSS values (e.g., a slider updating `--hue`, a drag updating `--x`/`--y`) without recomputing styles. CSS variables are the bridge for JS↔CSS dynamic styling.
 
 ## Variables in Media Queries (for responsive values)
@@ -115,7 +115,7 @@ This is powerful — JS can drive CSS values (e.g., a slider updating `--hue`, a
 }
 .container { padding: var(--spacing); }   /* 1rem mobile, 2rem tablet+ */
 ```
-
+::
 You *can't* define variables *inside* `@media` conditions (variables are properties, not at-rule conditions), but you can redefine them *within* media query blocks, as above — a clean way to make responsive tokens.
 
 ## CSS Variables vs Preprocessor Variables
@@ -176,14 +176,14 @@ The fix — give `--gap` a unit:
 :root { --gap: 10px; }
 .box { padding: var(--gap); }   /* 10px */
 ```
-
+::
 Or use `calc()` to add the unit (less clean):
 
 ```css
 :root { --gap: 10; }
 .box { padding: calc(var(--gap) * 1px); }   /* 10px */
 ```
-
+::
 **The lesson**: CSS variables are substituted as raw values — `--gap: 10` puts `10` in `padding: 10`, which is invalid (no unit). The property becomes invalid (→ initial), not a fallback. Always include units in variable values, or multiply by `1px` in `calc()`.
 
 </details>

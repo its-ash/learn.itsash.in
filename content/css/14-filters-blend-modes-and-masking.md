@@ -21,7 +21,7 @@ CSS filters, blend modes, and masking provide image-editing-like effects — blu
 /* Multiple */
 .img { filter: grayscale(1) blur(2px) brightness(1.2); }
 ```
-
+::
 ### `drop-shadow` vs `box-shadow`
 
 `drop-shadow` follows the *shape* of the element (including transparent parts of an image/PNG), while `box-shadow` follows the *box*:
@@ -32,7 +32,7 @@ CSS filters, blend modes, and masking provide image-editing-like effects — blu
 .icon { filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5)); }  /* shadow follows the icon shape */
 .icon { box-shadow: 2px 2px 4px rgba(0,0,0,0.5); }          /* shadow on the rectangular box */
 ```
-
+::
 Use `drop-shadow` for non-rectangular elements (icons, PNGs with alpha, clipped elements).
 
 ### `backdrop-filter`
@@ -46,7 +46,7 @@ Use `drop-shadow` for non-rectangular elements (icons, PNGs with alpha, clipped 
 	backdrop-filter: blur(10px);
 }
 ```
-
+::
 This is the "frosted glass" / glassmorphism effect — a translucent background with a blurred backdrop. Needs a semi-transparent background to see through.
 
 ### Performance
@@ -63,7 +63,7 @@ Filters are GPU-accelerated (mostly), but `backdrop-filter` is expensive (it sam
 ```css
 .overlay { mix-blend-mode: multiply; }   /* blends with what's behind */
 ```
-
+::
 Common modes: `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`.
 
 - `multiply` — darkens (white is transparent, black stays).
@@ -84,7 +84,7 @@ Common modes: `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge
 	background-blend-mode: overlay;   /* blends the texture with the gradient */
 }
 ```
-
+::
 ## Masking
 
 ### `mask` (and `-webkit-mask`)
@@ -98,7 +98,7 @@ Common modes: `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge
 	mask: linear-gradient(to bottom, black, transparent);
 }
 ```
-
+::
 This fades the bottom of the image to transparent — a soft fade-out. `clip-path` can only hard-clip; `mask` can soft-fade.
 
 ### Mask modes
@@ -118,7 +118,7 @@ WebKit/Safari historically used `-webkit-mask` (with differences). For cross-bro
 	mask: url("mask.svg") center / contain no-repeat;
 }
 ```
-
+::
 ## `clip-path` recap
 
 `clip-path` (from chapter 10) hard-clips to a shape. `mask` is for soft/alpha-based cutting. Use `clip-path` for sharp shapes, `mask` for gradients and soft edges.
@@ -173,7 +173,7 @@ The fix — use a more translucent background so the blurred backdrop is visible
 	-webkit-backdrop-filter: blur(10px);   /* Safari */
 }
 ```
-
+::
 Also, ensure there's content *behind* the card to blur — if the card is over a solid background, the blur has nothing to show. Glassmorphism needs a colorful or textured backdrop to be visible.
 
 **The lesson**: `backdrop-filter` blurs what shows *through* the background. A mostly-opaque background (0.8) hides the blur. Use a translucent background (0.1–0.3) so the blurred backdrop is visible, and ensure there's content behind to blur.

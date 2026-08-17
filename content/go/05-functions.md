@@ -134,7 +134,7 @@ To capture the *current* value at defer time, use a closure:
 ```go
 defer func() { fmt.Println(i) }()   // prints 2 — i is read at defer-run time
 ```
-
+::
 ### `defer` and named returns
 
 A `defer`d function can modify named return values:
@@ -241,7 +241,7 @@ func processFile(path string) error {
 	return nil
 }
 ```
-
+::
 Now each file is closed when `processFile` returns, before the next iteration opens another. This is the idiomatic pattern for resource cleanup in loops: extract a function, `defer` inside it.
 
 **The lesson**: `defer` is function-scoped. In a loop, deferred calls pile up until the function returns. Extract the loop body into a function so each `defer` runs per iteration.

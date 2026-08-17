@@ -277,7 +277,7 @@ WITH RECURSIVE descendant AS (
 )
 SELECT id, name, manager_id FROM descendant;
 ```
-
+::
 `visited` accumulates the chain of IDs from the root; `WHERE NOT e.id = ANY(d.visited)` prevents re-entering a node already in the current path. This breaks cycles without altering the tree-traversal semantics for acyclic data.
 
 Alternatively, use the `CYCLE` clause (PostgreSQL 14+):
@@ -292,13 +292,13 @@ WITH RECURSIVE descendant AS (
 )
 SELECT id, name, manager_id FROM descendant WHERE NOT is_cycle;
 ```
-
+::
 And as a safety net, set `statement_timeout` before running recursive CTEs on data with unknown integrity:
 
 ```sql
 SET statement_timeout = '10s';
 ```
-
+::
 **The lesson**: recursive CTEs on self-referencing data (manager_id, graph edges) must have cycle detection — either a `visited` array with `NOT id = ANY(visited)`, the `CYCLE` clause, or a `statement_timeout` safety net. Without it, a single data cycle creates an infinite loop.
 
 </details>

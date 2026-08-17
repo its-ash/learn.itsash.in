@@ -20,7 +20,7 @@ button.addEventListener('click', handler, { capture: true })  // capture phase
 // Remove
 button.removeEventListener('click', handler)  // must be same reference
 ```
-
+::
 ::
 
 ## Bubbling and Capturing
@@ -54,7 +54,7 @@ button.addEventListener('click', e => {
   e.stopImmediatePropagation()
 })
 ```
-
+::
 ::
 
 ## Event Delegation
@@ -77,7 +77,7 @@ items.forEach(item => {
 // ✅ closest() matches the element or its ancestors
 e.target.closest('.button')  // nearest ancestor matching selector
 ```
-
+::
 ::
 
 ## Custom Events
@@ -96,7 +96,7 @@ document.addEventListener('userLogin', (e) => {
   console.log('User logged in:', e.detail.name)
 })
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks

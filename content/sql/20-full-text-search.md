@@ -212,7 +212,7 @@ ALTER TABLE articles ADD COLUMN body_vec TSVECTOR
 CREATE INDEX articles_body_vec_gin ON articles USING gin(body_vec);
 SELECT * FROM articles WHERE body_vec @@ to_tsquery('english', 'database');
 ```
-
+::
 **The lesson**: when indexing an expression, the query must use the *exact same expression* (including the text search configuration). Generated columns eliminate this class of bug by naming the expression once and reusing the name.
 
 </details>

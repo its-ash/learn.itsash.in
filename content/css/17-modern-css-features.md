@@ -19,7 +19,7 @@ Modern CSS (2023+) added features that replace JavaScript and preprocessor worka
 	}
 }
 ```
-
+::
 Native nesting (like Sass) — `&` refers to the parent selector. Browser support: 2023 in all major browsers.
 
 ### Rules
@@ -37,7 +37,7 @@ Native nesting (like Sass) — `&` refers to the parent selector. Browser suppor
 	&:not(.open) { ... } /* .card:not(.open) */
 }
 ```
-
+::
 ## `:has()` (the "parent selector")
 
 `:has()` selects an element based on its *descendants* — the long-requested "parent selector":
@@ -59,7 +59,7 @@ li:has(ul) { font-weight: bold; }
 /* A paragraph directly followed by a heading (no margin) */
 h2:has(+ p) { margin-bottom: 0; }
 ```
-
+::
 `:has()` is a relational pseudo-class — it checks if the element has matching descendants/siblings. Powerful for state-based styling without JS classes.
 
 ### `:has()` specificity
@@ -90,7 +90,7 @@ h2:has(+ p) { margin-bottom: 0; }
 	.text-center { text-align: center; }
 }
 ```
-
+::
 The layer order (declared first) sets priority — later layers win. `utilities` (last) beats `components` beats `base` beats `reset`, *regardless of specificity*. A `.text-center` utility (0,1,0) beats a `.btn .text-center` component (0,2,0) because `utilities` is a later layer.
 
 ### Unlayered styles
@@ -104,7 +104,7 @@ Unlayered styles (outside any `@layer`) win over layered styles. This lets you a
 @layer components { .card p { color: #333; } }
 p { color: darkgray; }  /* unlayered, wins over both layers */
 ```
-
+::
 ### When to use layers
 
 - Large codebases with multiple sources (framework, components, utilities).
@@ -119,7 +119,7 @@ p { color: darkgray; }  /* unlayered, wins over both layers */
 	.card { background: #222; color: #eee; }
 }
 ```
-
+::
 Style queries check a container's *custom properties* (not just size). A card can adapt its style based on its container's `--theme` variable — without the card itself reading the variable.
 
 Support: Chrome 111+, Safari 17.4+. Still newer than size queries — check support.
@@ -132,7 +132,7 @@ input[type="checkbox"], input[type="radio"] {
 	accent-color: #3498db;   /* colors the native control */
 }
 ```
-
+::
 A simple way to theme native form controls (checkboxes, radios, range sliders, progress bars) without custom widgets.
 
 ## `color-mix()`
@@ -142,7 +142,7 @@ A simple way to theme native form controls (checkboxes, radios, range sliders, p
 --button-bg: color-mix(in srgb, var(--primary) 80%, white);
 --hover-bg: color-mix(in srgb, var(--primary) 60%, black);
 ```
-
+::
 `color-mix()` mixes two colors — useful for deriving shades/tints from a base color. No preprocessor needed.
 
 ## `text-wrap: balance` / `pretty`
@@ -152,7 +152,7 @@ A simple way to theme native form controls (checkboxes, radios, range sliders, p
 h1, h2 { text-wrap: balance; }   /* balance line lengths */
 p { text-wrap: pretty; }         /* avoid orphans (single word on last line) }
 ```
-
+::
 - `balance` — evens out line lengths (for headings).
 - `pretty` — avoids a single word on the last line (for paragraphs).
 
@@ -164,7 +164,7 @@ No `max-width` tuning needed — the browser optimizes the wrapping.
 ```css
 .img { aspect-ratio: 16/9; width: 100%; object-fit: cover; }
 ```
-
+::
 ## Scroll-Driven Animations (2023+)
 
 ::code-wrapper{language="css"}
@@ -178,7 +178,7 @@ No `max-width` tuning needed — the browser optimizes the wrapping.
 	animation-timeline: scroll(root block);
 }
 ```
-
+::
 `animation-timeline: scroll(...)` drives an animation by scroll position — a progress bar that fills as you scroll, parallax, scroll-reveal — all without JS. Support: Chrome 115+, Safari 17.4+ (partial).
 
 ## View Transitions API
@@ -190,12 +190,12 @@ No `max-width` tuning needed — the browser optimizes the wrapping.
 	animation-duration: 0.3s;
 }
 ```
-
+::
 ::code-wrapper{language="javascript"}
 ```javascript
 document.startViewTransition(() => { /* DOM update */ });
 ```
-
+::
 View transitions smoothly animate between two DOM states — cross-fade, or named transitions for shared elements. Support: Chrome 111+, Safari 17.4+ (partial). For SPAs, this replaces many animation libraries.
 
 ## 💡 Tips & Tricks
@@ -255,7 +255,7 @@ The most pragmatic fix — ensure source order and specificity are clear:
 .form-section { border: 2px solid #ccc; }  /* base, first */
 .form-section:has(.error) { border-color: red; }  /* override, after */
 ```
-
+::
 And verify in a `:has()`-supporting browser (Chrome 105+, Safari 15.4+, Firefox 121+) that `.error` is a descendant.
 
 **The lesson**: when `:has()` "doesn't work," check (1) browser support, (2) that the matched element is actually a descendant, (3) source order — put the `:has()` rule *after* the base rule. Specificity (0,2,0 > 0,1,0) should win, but source order is a clearer intent.

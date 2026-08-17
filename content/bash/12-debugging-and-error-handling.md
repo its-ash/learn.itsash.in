@@ -15,7 +15,7 @@ set -E             # trap ERR inherits (function context)
 # Combined (the strict mode)
 set -euo pipefail
 ```
-
+::
 ### The strict mode
 
 Always start scripts with:
@@ -25,7 +25,7 @@ Always start scripts with:
 #!/usr/bin/env bash
 set -euo pipefail
 ```
-
+::
 - **`-e`** — exit immediately if a command fails (non-zero exit status). Catches errors that would otherwise be silent.
 - **`-u`** — treat unset variables as an error (not empty). Catches typos like `$FOO` instead of `$FOO_BAR`.
 - **`-o pipefail`** — a pipeline (`cmd1 | cmd2`) fails if *any* command fails (not just the last). Without it, `cmd1` failing is masked if `cmd2` succeeds.
@@ -42,7 +42,7 @@ if false; then ...   # ✓ (tested by if)
 false || true        # ✓ (tested by ||)
 ! false              # ✓ (negated)
 ```
-
+::
 This is useful but can surprise — `cmd` in `cmd | grep` won't trigger `-e` if `grep` succeeds (but `pipefail` catches `cmd`).
 
 ## Manual Error Checking
@@ -59,7 +59,7 @@ fi
 # Or with ||
 cd "$dir" || { echo "Error: can't cd to $dir" >&2; exit 1; }
 ```
-
+::
 ### `trap ERR` (run on error)
 
 ::code-wrapper{language="bash"}
@@ -71,7 +71,7 @@ err_handler() {
 
 trap 'err_handler $LINENO' ERR
 ```
-
+::
 `trap '...' ERR` runs when a command fails (with `set -e`). `$LINENO` is the line number. Useful for logging where the script failed.
 
 ## `set -x` (tracing)
@@ -82,7 +82,7 @@ set -x        # print each command before running
 echo "hello"  # + echo hello
 set +x        # turn off
 ```
-
+::
 `set -x` (trace) prints each command (with `+`) before execution — the primary debugging tool. Turn on for a section, off after.
 
 ### `PS4` (trace prompt)
@@ -91,7 +91,7 @@ set +x        # turn off
 ```bash
 PS4='+ $LINENO: ' set -x   # include line numbers in trace
 ```
-
+::
 `PS4` is the trace prompt (default `+`). Customize to include `$LINENO` for "which line is running."
 
 ### `bash -x script.sh`
@@ -100,7 +100,7 @@ PS4='+ $LINENO: ' set -x   # include line numbers in trace
 ```bash
 bash -x script.sh   # run with tracing (from the command line)
 ```
-
+::
 No need to edit the script — trace from the CLI.
 
 ## Logging
@@ -114,7 +114,7 @@ log() {
 log "Starting process"
 log "Error: something failed"
 ```
-
+::
 Log to stderr (`>&2`) so it doesn't mix with stdout (data). Include timestamps.
 
 ## Exit Codes
@@ -129,7 +129,7 @@ exit 127  # command not found
 exit 130  # terminated by Ctrl-C (128 + SIGINT(2))
 # 128 + N: killed by signal N
 ```
-
+::
 Use meaningful exit codes. Scripts in CI/CD and pipelines rely on them.
 
 ## Common Error Patterns
@@ -143,7 +143,7 @@ if ! command -v git &>/dev/null; then
 	exit 1
 fi
 ```
-
+::
 `command -v` checks if a command exists (portable `which`).
 
 ### Check file existence
@@ -153,7 +153,7 @@ fi
 [[ -f "$file" ]] || { echo "Error: $file not found" >&2; exit 1; }
 [[ -d "$dir" ]]  || { echo "Error: $dir not a directory" >&2; exit 1; }
 ```
-
+::
 ### Check args
 
 ::code-wrapper{language="bash"}
@@ -163,7 +163,7 @@ if [[ $# -lt 1 ]]; then
 	exit 1
 fi
 ```
-
+::
 ### Check dependencies
 
 ::code-wrapper{language="bash"}
@@ -172,7 +172,7 @@ for cmd in git curl jq; do
 	command -v "$cmd" &>/dev/null || { echo "Error: $cmd not found" >&2; exit 1; }
 done
 ```
-
+::
 ## Debugging Techniques
 
 ### `set -x` + `set -v`
@@ -181,7 +181,7 @@ done
 ```bash
 set -xv   # -x (trace commands), -v (print input lines)
 ```
-
+::
 `-v` prints input lines as read (before expansion); `-x` prints commands after expansion (before execution). Together, you see the raw line and the expanded command.
 
 ### `bashdb` (debugger)
@@ -195,7 +195,7 @@ set -xv   # -x (trace commands), -v (print input lines)
 echo "DEBUG: var=$var, count=$count" >&2
 declare -p arr   # print an array's definition (for debugging)
 ```
-
+::
 `declare -p` prints a variable's definition (useful for arrays/associative arrays).
 
 ### Dry-run mode
@@ -216,7 +216,7 @@ run() {
 run rm -f "$file"
 run cp "$src" "$dst"
 ```
-
+::
 A `run` function that echoes in dry-run mode, executes otherwise. Useful for dangerous scripts.
 
 ## 💡 Tips & Tricks
@@ -250,7 +250,7 @@ set -e
 grep "error" log.txt | head -5
 echo "Done"
 ```
-
+::
 If `log.txt` doesn't exist, `grep` fails, but the script continues to "Done". Why?
 
 <details>
@@ -265,7 +265,7 @@ set -eo pipefail
 grep "error" log.txt | head -5
 echo "Done"
 ```
-
+::
 With `pipefail`, the pipeline fails if *any* command fails — `grep`'s failure propagates, and `set -e` exits before "Done".
 
 The full strict mode is `set -euo pipefail` — always use all four for robust scripts.

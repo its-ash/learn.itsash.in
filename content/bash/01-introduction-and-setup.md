@@ -23,6 +23,7 @@ Create `hello.sh`:
 #!/usr/bin/env bash
 echo "Hello, Bash!"
 ```
+::
 
 ### Run it
 
@@ -31,14 +32,14 @@ echo "Hello, Bash!"
 chmod +x hello.sh   # make executable
 ./hello.sh          # run
 ```
-
+::
 Or without making it executable:
 
 ::code-wrapper{language="bash"}
 ```bash
 bash hello.sh
 ```
-
+::
 ## The Shebang (`#!`)
 
 The first line `#!/usr/bin/env bash` is the **shebang** — it tells the system which interpreter to use. `#!/usr/bin/env bash` is preferred over `#!/bin/bash` (finds `bash` via the `PATH`, more portable).
@@ -57,7 +58,7 @@ echo "Hello"           # Hello (with newline)
 echo -n "No newline"   # no trailing newline
 printf "%s is %d\n" "Alice" 30   # formatted (like C printf)
 ```
-
+::
 `printf` is more portable and supports formatting. `echo` behavior varies between shells (especially with `-e`/`-n`); `printf` is consistent.
 
 ## Which Bash?
@@ -68,7 +69,7 @@ Check your Bash version:
 ```bash
 bash --version
 ```
-
+::
 Bash 4.0+ (2009) added associative arrays, `coproc`, etc. Bash 5.0+ (2019) added `--` handling, `${var@operator}`. macOS ships Bash 3.2 (due to licensing — GPLv3). On macOS, install Bash 5 via Homebrew: `brew install bash`.
 
 ## A Slightly Bigger Script
@@ -82,7 +83,7 @@ name="${1:-World}"
 echo "Hello, $name!"
 echo "Today is $(date +%A)"
 ```
-
+::
 - `set -euo pipefail` — enable strict mode (chapter 18).
 - `"${1:-World}"` — the first argument, defaulting to `World` if not provided.
 - `$(date +%A)` — command substitution (runs `date`, inserts output).
@@ -95,7 +96,7 @@ Run it:
 # Hello, Alice!
 # Today is Monday
 ```
-
+::
 ## Comments
 
 ::code-wrapper{language="bash"}
@@ -103,7 +104,7 @@ Run it:
 # This is a comment
 echo "hi"   # inline comment
 ```
-
+::
 `#` starts a comment (to the end of the line). There are no block comments in Bash.
 
 ## Getting Help
@@ -122,14 +123,14 @@ echo "hi"   # inline comment
 brew install shellcheck           # macOS
 apt install shellcheck            # Debian/Ubuntu
 ```
-
+::
 Run it:
 
 ::code-wrapper{language="bash"}
 ```bash
 shellcheck hello.sh
 ```
-
+::
 Use it on every script — it catches quoting issues, `set -e` gaps, unquoted variables, and many footguns. VS Code has a ShellCheck extension.
 
 ## VS Code
@@ -155,7 +156,7 @@ my_project/
 │   └── test_utils.sh       # tests (using bats, etc.)
 ├── README.md
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: always start scripts with `#!/usr/bin/env bash` (shebang) and `set -euo pipefail` (strict mode) — the shebang makes it executable directly (`./script.sh`), strict mode catches errors early (exit on error, error on undefined var, fail on pipe failure). See chapter 18.
@@ -202,7 +203,7 @@ dos2unix script.sh
 # or
 sed -i 's/\r$//' script.sh
 ```
-
+::
 Configure your editor (VS Code: bottom-right "CRLF" → "LF") to use LF for Bash scripts.
 
 **The lesson**: shebang errors are usually (1) wrong interpreter path (use `#!/usr/bin/env bash` for portability), (2) typos, or (3) CRLF line endings (Windows). Use LF line endings and `#!/usr/bin/env bash`.

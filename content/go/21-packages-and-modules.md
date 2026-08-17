@@ -209,7 +209,7 @@ The fix — update all import paths to include `/v2`:
 ```go
 import "github.com/x/y/v2"   // not "github.com/x/y"
 ```
-
+::
 And the module's own path (in its go.mod) must be `github.com/x/y/v2` for the v2 module. This is a deliberate Go design: major version changes require import path changes, preventing accidental breaking upgrades.
 
 **The lesson**: v2+ Go modules require a `/vN` suffix in the import path. Upgrading a dependency to v2 means changing every import of it (and the module's own path if you're the v2 author).

@@ -11,7 +11,7 @@ CSS has traditionally been *physical* (`left`, `right`, `top`, `bottom`, `width`
 	padding-right: 2rem;   /* in RTL, this is the *start* */
 }
 ```
-
+::
 In a left-to-right (LTR) language, `left` is the start. In right-to-left (RTL) languages (Arabic, Hebrew), the start is the *right*. Physical properties don't flip automatically — you'd need `[dir="rtl"]` overrides. Logical properties solve this.
 
 ## Logical Properties
@@ -53,7 +53,7 @@ Logical properties use `inline`/`block` and `start`/`end`:
 	inset-inline-start: 0;         /* left: 0 in LTR, right: 0 in RTL */
 }
 ```
-
+::
 In RTL, these all flip automatically — no `[dir="rtl"]` overrides needed.
 
 ## Shorthands
@@ -66,7 +66,7 @@ padding-inline: 1rem 2rem;    /* start end */
 inset-inline: 0;              /* both inset-inline-start and -end */
 border-inline: 1px solid red; /* both inline-start and -end */
 ```
-
+::
 ## `text-align` and Logical Values
 
 ::code-wrapper{language="css"}
@@ -74,7 +74,7 @@ border-inline: 1px solid red; /* both inline-start and -end */
 text-align: start;   /* left in LTR, right in RTL */
 text-align: end;     /* right in LTR, left in RTL */
 ```
-
+::
 `start`/`end` are the logical equivalents of `left`/`right` for text alignment.
 
 ## Writing Modes
@@ -86,7 +86,7 @@ text-align: end;     /* right in LTR, left in RTL */
 .vertical { writing-mode: vertical-rl; }   /* vertical, right-to-left (Japanese) */
 .vertical-lr { writing-mode: vertical-lr; } /* vertical, left-to-right (Mongolian) }
 ```
-
+::
 - `horizontal-tb` (default) — horizontal, top-to-bottom.
 - `vertical-rl` — vertical, right-to-left (traditional Japanese/Chinese).
 - `vertical-lr` — vertical, left-to-right (Mongolian).
@@ -100,7 +100,7 @@ With `vertical-rl`, `inline` is vertical (top-to-bottom), `block` is horizontal 
 [dir="rtl"] { direction: rtl; }
 bdi { unicode-bidi: isolate; }   /* isolate bidirectional text */
 ```
-
+::
 `direction: rtl` sets the base direction. `unicode-bidi` controls how bidirectional text is handled — `isolate` is useful for embedded user content (names, numbers) that might be LTR within RTL.
 
 ## When to Use Logical Properties
@@ -155,7 +155,7 @@ The fix — use a logical inset for the icon:
 .card { padding-inline-start: 2.5rem; }
 .card .icon { position: absolute; inset-inline-start: 0.5rem; }  /* logical */
 ```
-
+::
 Now `inset-inline-start: 0.5rem` is `left: 0.5rem` in LTR and `right: 0.5rem` in RTL — the icon is on the same side as the padding, in both directions.
 
 **The lesson**: mixing logical (padding) and physical (`left`) properties breaks i18n — one flips, the other doesn't, and they get out of sync. Use logical properties *consistently* for flow-relative layout (padding, margin, positioning insets). Reserve physical for effects that shouldn't flip (a logo, a fixed shadow).

@@ -351,7 +351,7 @@ SELECT month, revenue, prev_revenue,
 FROM with_lag
 ORDER BY month;
 ```
-
+::
 This computes `LAG` once (in a CTE), uses `NULLIF(prev_revenue, 0)` to avoid division by zero (returns NULL for zero previous revenue), and accepts NULL `mom_pct` for the first row (no previous month).
 
 **The lesson**: don't repeat window functions — compute once in a CTE and reference. And guard division with `NULLIF(denominator, 0)` to convert zero-divisor to NULL instead of an error.

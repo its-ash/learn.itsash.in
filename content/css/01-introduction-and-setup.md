@@ -33,7 +33,7 @@ Three ways, in order of preference:
 <!-- index.html -->
 <link rel="stylesheet" href="styles.css">
 ```
-
+::
 ::code-wrapper{language="css"}
 ```css
 /* styles.css */
@@ -42,7 +42,7 @@ body {
 	margin: 0;
 }
 ```
-
+::
 External stylesheets are cached, reusable across pages, and keep HTML clean. This is the production approach.
 
 ### `<style>` element (per-page)
@@ -53,7 +53,7 @@ External stylesheets are cached, reusable across pages, and keep HTML clean. Thi
 	body { font-family: sans-serif; }
 </style>
 ```
-
+::
 Use for page-specific styles or critical CSS inlined in `<head>` for performance (avoiding a render-blocking request).
 
 ### Inline `style` attribute (avoid)
@@ -62,7 +62,7 @@ Use for page-specific styles or critical CSS inlined in `<head>` for performance
 ```html
 <p style="color: red; font-weight: bold;">Warning</p>
 ```
-
+::
 Inline styles have the highest specificity (hard to override), can't be cached, and mix structure with presentation. Avoid except for genuinely one-off, dynamic styles (set via JavaScript).
 
 ## Syntax
@@ -82,7 +82,7 @@ selector {
 @keyframes fade { /* ... */ }
 @supports (display: grid) { /* ... */ }
 ```
-
+::
 - A **rule** = selector + declaration block.
 - A **declaration** = property: value.
 - **At-rules** (`@media`, `@keyframes`, `@supports`, `@import`) are special directives.
@@ -128,7 +128,7 @@ Browser DevTools are the primary tool for CSS work. Open with `Cmd+Opt+I` (Mac) 
 </body>
 </html>
 ```
-
+::
 ::code-wrapper{language="css"}
 ```css
 /* styles.css */
@@ -146,7 +146,7 @@ h1 {
 	padding-bottom: 0.5rem;
 }
 ```
-
+::
 ## The Cascade (preview)
 
 When multiple rules apply to the same element, the browser resolves conflicts by:
@@ -204,7 +204,7 @@ p {
 	font-size: 18px;
 }
 ```
-
+::
 The last declaration's semicolon is technically optional (the `}` closes it), but every other declaration must end with `;`. Always use semicolons (a formatter like Prettier enforces this).
 
 **The lesson**: a missing semicolon causes the next declaration to be absorbed into the current value, often invalidating both. Use a formatter to catch this.

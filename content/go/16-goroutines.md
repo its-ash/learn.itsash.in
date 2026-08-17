@@ -188,7 +188,7 @@ func main() {
 	wg.Wait()
 }
 ```
-
+::
 **The lesson**: main exits before goroutines finish (use WaitGroup); pre-1.22 loop variables are captured by reference (pass as argument); ignored errors cause nil-dereference panics (check errors).
 
 </details>

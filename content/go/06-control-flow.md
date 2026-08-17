@@ -274,7 +274,7 @@ for i := 0; i < 3; i++ {
 	}(i)
 }
 ```
-
+::
 Or, on 1.22+, just use the original — the fix is automatic.
 
 **The lesson**: pre-1.22, loop variables are shared across iterations; closures/goroutines capture them by reference and see the final value. Pass the variable as an argument (`func(i int) { ... }(i)`) to create a fresh copy per iteration. Go 1.22+ makes each iteration's variable distinct, eliminating the bug.

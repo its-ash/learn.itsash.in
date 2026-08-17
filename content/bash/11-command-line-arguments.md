@@ -20,7 +20,7 @@ echo "Count: $#"
 # All args: foo bar baz
 # Count: 3
 ```
-
+::
 ### Default values
 
 ::code-wrapper{language="bash"}
@@ -29,7 +29,7 @@ name="${1:-World}"
 count="${2:-1}"
 echo "$name $count"
 ```
-
+::
 ### Mandatory args
 
 ::code-wrapper{language="bash"}
@@ -40,14 +40,14 @@ if [[ $# -lt 1 ]]; then
 fi
 name="$1"
 ```
-
+::
 Or with `${var:?}`:
 
 ::code-wrapper{language="bash"}
 ```bash
 name="${1:?Usage: $0 <name>}"
 ```
-
+::
 ### `"$@"` (pass all args)
 
 ::code-wrapper{language="bash"}
@@ -60,7 +60,7 @@ process_args() {
 
 process_args "$@"   # pass the script's args to the function
 ```
-
+::
 Always quote `"$@"` (preserves each arg as a separate item).
 
 ## `getopts` (built-in)
@@ -87,7 +87,7 @@ echo "verbose: $verbose"
 echo "output: $output"
 echo "Positional: $@"
 ```
-
+::
 - `getopts "vo:" opt` — `v` is a flag (no arg), `o:` takes an argument (`:` after the letter).
 - The leading `:` in `":vo:"` enables silent error reporting (you handle `?` and `:`).
 - `OPTARG` — the argument value for options that take one.
@@ -103,7 +103,7 @@ Run it:
 # output: output.txt
 # Positional: file1 file2
 ```
-
+::
 ### `getopts` limitations
 
 - Only short options (`-v`, not `--verbose`).
@@ -136,7 +136,7 @@ echo "verbose: $verbose"
 echo "output: $output"
 echo "input: $input"
 ```
-
+::
 Manual parsing is more verbose but supports long options. Use a `while`/`case` loop, `shift` to consume args.
 
 ## External `getopt` (not recommended)
@@ -162,14 +162,14 @@ case "$subcommand" in
 	help|*) echo "Usage: $0 {build|test|deploy}"; exit 1 ;;
 esac
 ```
-
+::
 ::code-wrapper{language="bash"}
 ```bash
 ./script.sh build     # Building...
 ./script.sh test      # Testing...
 ./script.sh           # Usage: ... (default to help)
 ```
-
+::
 Subcommands (like `git build`, `git test`) — dispatch on `$1`, `shift`, then parse the rest.
 
 ## `shift`
@@ -179,7 +179,7 @@ Subcommands (like `git build`, `git test`) — dispatch on `$1`, `shift`, then p
 shift        # remove $1, shift others ($2 → $1, etc.)
 shift 2      # remove $1 and $2
 ```
-
+::
 `shift` removes the first arg, shifting the rest. Used after parsing an option/subcommand.
 
 ## Reading from stdin
@@ -202,7 +202,7 @@ else
 	echo "Got stdin"
 fi
 ```
-
+::
 ## 💡 Tips & Tricks
 
 - **Idiom**: use `getopts` for short options — it's built-in, POSIX, reliable (unlike external `getopt`). `getopts "vo:" opt` with `v` (flag) and `o:` (option with arg). Handle `?` (invalid) and `:` (missing arg). `shift $((OPTIND - 1))` after.
@@ -239,7 +239,7 @@ done
 
 echo "Positional: $@"
 ```
-
+::
 Run: `./script.sh -v -o out.txt file1 file2`
 Output: `Positional: -v -o out.txt file1 file2`
 
@@ -263,7 +263,7 @@ shift $((OPTIND - 1))   # remove the parsed options, leave positional args
 
 echo "Positional: $@"
 ```
-
+::
 Now `Positional: file1 file2` (the options `-v -o out.txt` are removed, leaving the positional args).
 
 `OPTIND` is the index of the next unprocessed arg (4 in this case, after `-v -o out.txt`). `shift $((OPTIND - 1))` shifts past the 3 parsed options, leaving `file1 file2`.

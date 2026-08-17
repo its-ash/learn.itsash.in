@@ -229,7 +229,7 @@ func main() {
 	go increment(c)
 }
 ```
-
+::
 Now both goroutines share the same `Counter` (and the same mutex), and the lock works.
 
 **The lesson**: mutexes (and `WaitGroup`/`Once`/`Cond`) mustn't be copied. Pass structs containing them by pointer, and use pointer receivers for methods that lock. `go vet` catches copy-of-lock bugs.

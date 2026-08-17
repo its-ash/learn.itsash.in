@@ -219,7 +219,7 @@ if true {
 }
 fmt.Println(x)   // 10
 ```
-
+::
 The `:=` inside a new scope (block, if, for, switch) is the classic Go shadowing trap. `go vet -shadow` (or `golangci-lint` with the `shadow` linter) catches many of these. When you mean to modify an outer variable, use `=`; `:=` is for declaring new variables.
 
 **The lesson**: `:=` in an inner scope declares new variables (shadowing outer ones); `=` assigns to existing ones. When you want to update an outer variable inside a block, use `=`.

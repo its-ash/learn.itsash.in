@@ -30,7 +30,7 @@ void main() async {
 	print(result);
 }
 ```
-
+::
 The function runs in a separate isolate (on another thread/core), not blocking the main isolate. The result is sent back. Simple for one-shot computations.
 
 ### Arguments
@@ -39,7 +39,7 @@ The function runs in a separate isolate (on another thread/core), not blocking t
 ```dart
 final result = await Isolate.run(() => processFile(filePath));
 ```
-
+::
 The function closure can capture variables (they're copied to the new isolate — deep copy, since no shared memory).
 
 ## `compute` (Flutter)
@@ -50,7 +50,7 @@ Flutter provides `compute` (a wrapper around `Isolate.run`):
 ```dart
 final result = await compute(heavyFunction, input);
 ```
-
+::
 `compute(fn, input)` runs `fn(input)` in a separate isolate. Use in Flutter for offloading heavy work from the UI thread.
 
 ## `Isolate.spawn` (low-level)
@@ -75,7 +75,7 @@ void main() async {
 	});
 }
 ```
-
+::
 - `ReceivePort` — receives messages in this isolate.
 - `SendPort` — sends messages to another isolate (passed via `spawn`).
 - `Isolate.spawn(entry, message)` — starts an isolate, calls `entry(message)`.
@@ -104,7 +104,7 @@ void main() async {
 	// ... use responsePort for replies
 }
 ```
-
+::
 This is more verbose — use `Isolate.run` for one-shot work.
 
 ## What Can Be Sent Between Isolates?
@@ -131,7 +131,7 @@ sendPort.send(transferable);
 // Receiver:
 final data = transferable.materialize();
 ```
-
+::
 This avoids copying large byte buffers — much faster for big data.
 
 ## When to Use Isolates
@@ -152,7 +152,7 @@ try {
 	print('Caught: $e');   // errors propagate back
 }
 ```
-
+::
 Errors in `Isolate.run` propagate to the caller. For `Isolate.spawn`, set up error handling via the `onError` port or `errorsAreFatal` parameter.
 
 ## `Isolate.current`
@@ -162,7 +162,7 @@ Errors in `Isolate.run` propagate to the caller. For `Isolate.spawn`, set up err
 final id = Isolate.current.debugName;
 print('Running in $id');
 ```
-
+::
 Each isolate has a debug name (for debugging/profiling).
 
 ## Limitations
@@ -192,7 +192,7 @@ class WorkerPool {
 	// ... send tasks to workers, collect results
 }
 ```
-
+::
 Or use a package like `worker_manager` or `pool` for managed worker pools.
 
 ## 💡 Tips & Tricks
@@ -242,7 +242,7 @@ Future<String> readFile(String path) async {
 	return File(path).readAsString();   // already async, event loop handles it
 }
 ```
-
+::
 Isolates are for **CPU-heavy work** (parsing, compression, image processing) that would block the main isolate's event loop. For I/O (file, network, timers), `Future`/`await` is sufficient — the event loop handles concurrency while the I/O is in progress.
 
 Use isolates when:
@@ -250,13 +250,13 @@ Use isolates when:
 // CPU-heavy: parsing a huge JSON string
 final data = await Isolate.run(() => jsonDecode(hugeJsonString));
 ```
-
+::
 Don't use isolates when:
 ```dart
 // I/O-bound: reading a file (async, event loop handles it)
 final content = await File(path).readAsString();
 ```
-
+::
 **The lesson**: isolates are for CPU-heavy work (blocks the event loop), not I/O (which is async and handled by the event loop). Offloading I/O to an isolate adds spawn overhead + copy overhead without benefit.
 
 </details>

@@ -20,7 +20,7 @@ dart pub add package_name       # add a dependency
 dart pub publish                # publish to pub.dev
 dart pub deps                   # dependency tree
 ```
-
+::
 ## `dart format`
 
 `dart format` is the opinionated formatter (like `gofmt` for Go or `prettier` for JS). It enforces a consistent style:
@@ -30,7 +30,7 @@ dart pub deps                   # dependency tree
 dart format .                    # format all Dart files
 dart format --line-length 100 . # custom line length (default 80)
 ```
-
+::
 Configure your editor to format on save. Don't argue about style — `dart format` decides.
 
 ## `dart analyze`
@@ -42,7 +42,7 @@ Configure your editor to format on save. Don't argue about style — `dart forma
 dart analyze                     # analyze the project
 dart analyze lib/                # a specific directory
 ```
-
+::
 Configure rules in `analysis_options.yaml`:
 
 ::code-wrapper{language="yaml"}
@@ -64,7 +64,7 @@ linter:
 		- prefer_final_locals
 		- require_trailing_commas
 ```
-
+::
 `package:lints/recommended.yaml` (or `package:lints/core.yaml`) is a good starting point. Treat warnings as errors in CI (`dart analyze --fatal-infos`).
 
 ## `dart test`
@@ -76,7 +76,7 @@ dart test test/user_test.dart               # a specific file
 dart test --name "push"                     # tests matching a name
 dart test --coverage=coverage               # with coverage
 ```
-
+::
 See chapter 14 for testing in depth.
 
 ## DevTools
@@ -87,7 +87,7 @@ Dart DevTools is a browser-based suite for debugging and profiling:
 ```bash
 dart devtools   # starts DevTools server, opens browser
 ```
-
+::
 For Flutter: `flutter pub global activate devtools` then `flutter run` and press `D` in the terminal.
 
 ### DevTools features
@@ -110,7 +110,7 @@ dart run build_runner build     # generate code (once)
 dart run build_runner watch     # generate + watch (dev)
 dart run build_runner build --delete-conflicting-outputs   # force
 ```
-
+::
 ### Common code generators
 
 - **`json_serializable`** — JSON to/from typed classes.
@@ -137,7 +137,7 @@ class User {
 	Map<String, dynamic> toJson() => _$UserToJson(this);
 }
 ```
-
+::
 After `dart run build_runner build`, `user.g.dart` has `_$UserFromJson` and `_$UserToJson` — type-safe JSON serialization.
 
 ### `freezed` example
@@ -155,7 +155,7 @@ class Result with _$Result {
 	factory Result.fromJson(Map<String, dynamic> json) => _$ResultFromJson(json);
 }
 ```
-
+::
 `freezed` generates immutable classes, `==`/`hashCode`, `copyWith`, sealed union types, and JSON — all from one annotation.
 
 ## `lints` Package
@@ -167,7 +167,7 @@ The official `lints` package provides lint rule sets:
 # analysis_options.yaml
 include: package:lints/recommended.yaml   # or strict.yaml for more
 ```
-
+::
 - `core.yaml` — minimal.
 - `recommended.yaml` — recommended for most projects.
 - `strict.yaml` — strictest (more rules).
@@ -194,7 +194,7 @@ jobs:
 			- run: dart analyze --fatal-infos
 			- run: dart test
 ```
-
+::
 - `dart format --set-exit-if-changed` — fails if files aren't formatted.
 - `dart analyze --fatal-infos` — treats infos as errors.
 - `dart test` — runs all tests.
@@ -274,7 +274,7 @@ class User {
 	Map<String, dynamic> toJson() => _$UserToJson(this);
 }
 ```
-
+::
 Then run `dart run build_runner build` — the regenerated `user.g.dart` will handle `id` as nullable (from the `int?` annotation).
 
 Never edit generated files (`.g.dart`, `.freezed.dart`, `.mocks.dart`). They're derived from annotations/source. Change the source, regenerate. Add them to `.gitignore` (and regenerate in CI) or commit them (avoiding a build step for consumers) — but never edit them.

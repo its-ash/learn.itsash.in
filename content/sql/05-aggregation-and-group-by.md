@@ -264,7 +264,7 @@ FROM (
 ) c
 GROUP BY c.city;
 ```
-
+::
 **The lesson**: `AVG` over a join computes the average over *rows* (orders), not over *entities* (customers). To average per-entity, aggregate to the entity level first, then average those aggregates. SQL can't nest aggregates directly (`AVG(SUM(x))` is illegal), so use a subquery/CTE.
 
 </details>

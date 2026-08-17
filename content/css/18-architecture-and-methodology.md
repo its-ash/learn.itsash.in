@@ -25,7 +25,7 @@ BEM is the most popular naming convention:
 	<button class="card__button card__button--disabled">Click</button>
 </div>
 ```
-
+::
 ::code-wrapper{language="css"}
 ```css
 .card { ... }
@@ -36,7 +36,7 @@ BEM is the most popular naming convention:
 .card__button { ... }
 .card__button--disabled { ... }
 ```
-
+::
 - **Block** (`.card`) — a standalone component.
 - **Element** (`.card__title`) — a part of the block (double underscore).
 - **Modifier** (`.card--featured`) — a variation or state (double hyphen).
@@ -68,7 +68,7 @@ Two principles:
 .skin-card { background: white; border-radius: 8px; padding: 1rem; box-shadow: ...; }
 .skin-dark { background: #333; color: #eee; }
 ```
-
+::
 ::code-wrapper{language="html"}
 ```html
 <div class="media skin-card">
@@ -76,7 +76,7 @@ Two principles:
 	<div class="media__body">...</div>
 </div>
 ```
-
+::
 Combine a structure class (`media`) with a skin class (`skin-card`) — the media layout works regardless of the visual skin.
 
 ## SMACSS (Scalable and Modular Architecture)
@@ -113,7 +113,7 @@ Atomic CSS uses single-purpose utility classes (`.mt-4`, `.text-center`, `.flex`
 	Button
 </button>
 ```
-
+::
 ### Pros
 - No naming — compose utilities directly in HTML.
 - Small file size (with purging) — only used utilities ship.
@@ -144,7 +144,7 @@ Modern CSS `@layer` formalizes the ITCSS-like ordering:
 @layer components { .card { ... } .btn { ... } }
 @layer utilities { .text-center { text-align: center; } .mt-4 { margin-top: 1rem; } }
 ```
-
+::
 The layer order sets precedence — `utilities` beats `components` beats `layout`, regardless of specificity. This makes the architecture explicit and reliable.
 
 ## Choosing a Methodology
@@ -211,7 +211,7 @@ The fix — include both classes:
 ```html
 <button class="btn btn--disabled">Click</button>
 ```
-
+::
 Now `.btn` provides the base (padding, blue background, white text), and `.btn--disabled` overrides the background to gray.
 
 **The lesson**: BEM modifiers are always used with their base block/element. A modifier alone doesn't carry the base styles — it only sets the differences. Always include the base class: `class="btn btn--disabled"`.

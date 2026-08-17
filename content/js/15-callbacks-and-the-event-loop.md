@@ -21,7 +21,7 @@ console.log('2. End')
 // Output order: 1, 2, 3, 4
 // Microtasks run before macrotasks — even if both queued at same time
 ```
-
+::
 ::
 
 ## Execution Order
@@ -45,7 +45,7 @@ console.log('script end')
 // promise2
 // setTimeout
 ```
-
+::
 ::
 
 ## Callbacks
@@ -65,7 +65,7 @@ fetchData('/api/users', (err, data) => {
   console.log(data)
 })
 ```
-
+::
 ::
 
 ## Callback Hell (Pyramid of Doom)
@@ -87,7 +87,7 @@ getUser(userId, (err, user) => {
   })
 })
 ```
-
+::
 ::
 
 ## Best Practices with Callbacks
@@ -115,7 +115,7 @@ getUser(userId, handleUser)
 
 // ✅ Use Promises or async/await instead of callbacks when possible
 ```
-
+::
 ::
 
 ## `queueMicrotask`
@@ -134,7 +134,7 @@ setTimeout(() => {
 
 // queueMicrotask runs first
 ```
-
+::
 ::
 
 ## 💡 Tips & Tricks
