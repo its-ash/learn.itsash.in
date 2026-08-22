@@ -176,10 +176,6 @@ definePageMeta({
         <meta itemprop="wordCount" :content="wordCount" />
         <div class="not-prose mb-12 flex items-center justify-between gap-4 border-b-[2px] border-c-fg pb-6">
           <BackButton label="Back" />
-          <span
-            class="inline-flex items-center gap-2 border border-c-fg px-3 py-1.5 font-mono text-xs font-medium uppercase tracking-widest text-c-fg">
-            Article · {{ readingTime }} min read
-          </span>
         </div>
 
         <ContentRenderer v-if="page" :value="page" />
