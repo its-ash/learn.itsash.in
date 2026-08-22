@@ -120,6 +120,26 @@
   <url><loc>https://learn.itsash.in/js/29-security</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/js/30-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/js</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/01-introduction-and-architecture</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/02-shell-and-command-line</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/03-filesystem-hierarchy</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/04-files-directories-permissions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/05-text-processing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/06-processes-and-jobs</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/07-users-groups-auth</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/08-package-management</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/09-storage-and-filesystems</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/10-networking-fundamentals</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/11-systemd-and-services</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/12-logging-and-monitoring</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/13-kernel-and-modules</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/14-security-and-hardening</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/15-performance-and-tuning</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/16-boot-process-and-runlevels</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/17-containers-and-namespaces</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/18-troubleshooting-and-recovery</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux/19-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/linux</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua/01-getting-started</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua/02-variables-and-data-types</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua/03-functions</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
