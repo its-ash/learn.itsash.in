@@ -368,7 +368,7 @@ fn parse_config(s: &str) -> Result<i32, ParseError> {
 <details>
 <summary>Answer</summary>
 
-It fails with something like: `the trait bound \`ParseError: From<std::num::ParseIntError>\` is not satisfied`.
+It fails with something like: ``the trait bound `ParseError: From<std::num::ParseIntError>` is not satisfied``.
 
 The `?` operator doesn't just "return the error" — it calls `From::from(err)` to convert the failure's error type into the function's declared return error type, so that the caller gets back exactly the `Result<T, ParseError>` the signature promises. Here, `s.parse::<i32>()` produces a `Result<i32, std::num::ParseIntError>` on failure, but `parse_config` is declared to return `Result<i32, ParseError>` — for `?` to bridge the gap, the compiler needs a `From<ParseIntError> for ParseError` impl, and none exists. This is easy to miss because the two types "feel" related (both about parsing), but Rust performs no implicit error-type coercion — every conversion has to be spelled out via `From`, whether by hand or through `thiserror`'s `#[from]` attribute.
 
