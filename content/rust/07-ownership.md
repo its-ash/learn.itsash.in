@@ -168,41 +168,66 @@ These let you extract values from behind a mutable reference without invalidatin
 
 ## Ownership Tricks & Patterns
 
+These patterns exist because Rust's move semantics sometimes paint you into a corner: you can't mutate a field and *also* keep its old value (that'd be two owners), and you can't hand data to multiple readers without either copying it or shared ownership. Each trick below solves one of these friction points without falling back to `.clone()`.
+
+### `mem::replace` — extract the old value while installing a new one
+
+When you need to transition a field from one state to another *and* keep the old state for use, you can't read the old value out and write the new one in separately (the borrow checker sees a conflict). `mem::replace` does both atomically: it returns the old value and leaves the slot holding your replacement. Reach for this in `impl` methods that swap state, and in algorithms like "remove-and-replace" on a node in a linked structure.
+
+### `mem::take` — empty a value, leaving `Default` behind
+
+A specialization of `replace` for `Default` types: pulls the value out and substitutes `T::default()` (e.g., an empty `String`). Cheaper than `clone()` when you need to move a value out of a struct field that the struct still needs to use afterward.
+
+### `into()` — cheap, explicit ownership transfer
+
+A no-op-looking call that signals intent: "I'm handing ownership to you." Useful when the target type differs from the source (via `Into`) so the conversion happens at the call boundary without a separate `.map()`.
+
+### `into_iter()` — consume a collection by ownership
+
+Use when you need *owned* elements (e.g., to move `String`s out of a `Vec` for further processing) rather than borrowed references. The collection is consumed; each element is moved into the loop body and dropped at the end of its iteration.
+
+### `Rc` — shared read-only ownership for a single thread
+
+When multiple parts of your data structure need to *read* the same data and no single owner is naturally the source, `Rc` (reference counting) lets them share it without copying. Use `Rc` for single-threaded code; use `Arc` (atomic refcount) the moment threads are involved. `Rc::clone` is a refcount bump, not a deep copy.
+
+### `Box` — heap allocation and move-only cleanup
+
+`Box` puts a value on the heap (useful for recursive types whose size is unknown, or to ship a large value cheaply via pointer-sized moves) and runs `Drop` automatically. Unboxing with `*b` moves the inner value out — handy when you allocated temporarily and want the owned inner value back.
+
 ::code-wrapper{language="rust"}
 ```rust
-// Trick: use mem::replace for state swaps without drop
+// mem::replace: extract old state, install new — avoids borrow conflict
 let mut state = State::Init;
 state = mem::replace(&mut state, State::Done); // old state is extracted
 
-// Trick: into() for cheap ownership transfers
+// into(): explicit ownership transfer with a possible conversion
 fn take_owned(v: Vec<i32>) { }
 let v = vec![1, 2, 3];
 take_owned(v.into()); // or just take_owned(v)
 
-// Trick: std::mem::take for default swap
+// mem::take: pull out the value, leave Default behind — no allocation
 let mut s = String::from("hello");
 let taken = mem::take(&mut s); // s is now empty String
 assert_eq!(s, "");
 assert_eq!(taken, "hello");
 
-// Trick: move out of collections
+// Move out of collections by ownership
 let mut v = vec![String::from("a"), String::from("b")];
-let first = v.remove(0); // moves ownership
-let first = v.into_iter().next(); // consumes vec, yields Option
+let first = v.remove(0);                 // moves one element out, shifts the rest
+let first = v.into_iter().next();         // consumes the Vec, yields Option
 
-// Trick: into_iter() for consuming ownership
+// into_iter(): consume the collection, get owned elements
 for s in vec![String::from("a"), String::from("b")].into_iter() {
-    println!("{}", s); // s is owned by loop, dropped after each iteration
+    println!("{}", s); // s is owned, dropped after each iteration
 }
 
-// Trick: use Rc for multiple readers
+// Rc: shared read-only ownership (single-thread; use Arc for threads)
 use std::rc::Rc;
 let data = Rc::new(String::from("shared"));
 let r1 = Rc::clone(&data);
 let r2 = Rc::clone(&data);
-// data is accessible from r1, r2, and the original
 
-// Trick: Box for move-only cleanup
+// Box: heap-allocate, move cheaply, Drop on scope end
 let b = Box::new(String::from("owned"));
 let owned = *b; // unbox (moves String out)
 ```

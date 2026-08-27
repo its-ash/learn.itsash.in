@@ -144,6 +144,10 @@ Wrap `sqlite3` via `bindgen`. Expose a safe `Database`/`Statement` API with `Dro
 
 ## Reading Code to Mastery
 
+### Why reading source accelerates learning
+
+Reading high-quality Rust source **internalizes idioms** you can't get from tutorials: how real crates structure error types, where they draw module boundaries, how they use traits for extensibility, how they handle `unsafe` soundness. The standard library especially is **heavily reviewed, performance-tuned Rust** — reading `alloc::vec` teaches you the ownership/move patterns and amortized-allocation reasoning that `Vec` embodies. **How to approach a large crate**: start with the public API (`src/lib.rs`'s `pub` items), trace one common call path end-to-end, then read the internals only once you understand what the API promises. **When to do this**: once you're past the basics (chapters 1-20) and want to bridge from "can write Rust" to "can read any Rust" — reading source is the bridge to working on real codebases.
+
 Read source of:
 - `std` (slice/iter/vec modules).
 - `tokio` (scheduler, channels).

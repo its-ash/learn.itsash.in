@@ -45,6 +45,16 @@ fn first((a, _): (i32, i32)) -> i32 { a }
 
 ## Diverging Functions (`-> !`)
 
+### Why does this exist?
+
+A **diverging function** is a function that *never returns a value to the caller* — either because it loops forever (`loop {}`), because it aborts the process (`std::process::exit`), or because it panics (`panic!`). The return type `!` (pronounced "never") tells the compiler: **"control flow does not continue past this call."**
+
+This matters because Rust's type system is strict about every branch of an `if`/`match` producing the same type. Without `!`, you'd be forced to write awkward placeholder values for unreachable branches. With `!`, the compiler knows that branch *can't* produce a value, so it lets the `!` stand in for *any* type — this is called **never-type coercion**.
+
+### How it works
+
+`!` coerces to any type. That means a `!`-returning function can be used anywhere a value of any type is expected, because the compiler knows that code path is dead.
+
 ::code-wrapper{language="rust"}
 ```rust
 fn forever() -> ! {
@@ -53,40 +63,145 @@ fn forever() -> ! {
 fn die() -> ! {
     panic!("bye");
 }
+fn exit_with(code: i32) -> ! {
+    std::process::exit(code);
+}
 ```
 ::
 
-`!` coerces to any type, allowing it anywhere a value is expected:
+The practical payoff is in `match` arms and `if`/`else` chains — you can mix a real value with a diverging call without a type mismatch:
 
 ::code-wrapper{language="rust"}
 ```rust
 let v: i32 = match opt {
     Some(x) => x,
-    None => die(),    // ! coerces to i32
+    None => die(),    // ! coerces to i32 — no mismatch
 };
+```
+
+// Without !, you'd have to write something like `None => -1` or `None => panic!()` inline,
+// which is either wrong (-1 is a valid i32!) or verbose when the panic logic is reused.
 ```
 ::
 
-## Default & Optional Parameters?
+### When to use it
 
-Rust has **no function overloading or default parameters**. Use:
-- Builder pattern
-- Multiple methods (`new`, `with_capacity`)
-- Traits for "overloading" semantics (e.g., `From`/`Into`)
+You reach for `-> !` whenever you write a helper that **always** terminates the program, panics, or loops. Common real-world cases:
 
-## Generic Functions (preview)
+- **A `fatal()` / `abort()` helper** that logs an error and exits — so callers can use it in `unwrap_or_else(|| fatal("..."))` without a type error.
+- **A `TODO()` or `unimplemented!()`-style helper** during development, marking code paths you haven't finished yet.
+- **An infinite event loop** in an embedded `main` or a server's accept loop.
+- **`process::exit` wrappers** in CLI tools that need to set a specific exit code after printing a usage message.
 
 ::code-wrapper{language="rust"}
 ```rust
-fn first<T>(v: &[T]) -> Option<&T> {
-    v.first()
+fn usage_and_exit() -> ! {
+    eprintln!("Usage: prog <input>");
+    std::process::exit(2);
 }
 
-fn max<T: PartialOrd + Copy>(a: T, b: T) -> T {
-    if a > b { a } else { b }
+fn main() {
+    let input = std::env::args().nth(1).unwrap_or_else(|| usage_and_exit());
+    // unwrap_or_else expects an fn() -> String, but usage_and_exit returns !,
+    // so it coerces to String — no need to fabricate a dummy String.
 }
 ```
 ::
+
+### How `!` differs from `()`
+
+- `()` means "returns, but the value is the unit value (nothing meaningful)." Control flow *continues*.
+- `!` means "does not return at all." Control flow *stops*. There is no value, and the compiler can prove it.
+
+This distinction is what enables never-type coercion: `()` can't coerce to `i32` (they're different types), but `!` can coerce to *anything*, because a value of type `!` can never actually exist at runtime.
+
+## Default & Optional Parameters?
+
+### Why doesn't Rust have them?
+
+Rust deliberately omits function overloading and default parameters because they make call resolution ambiguous and complicate the type system (which overload is picked? which defaults apply?). Instead, Rust pushes you toward patterns that are explicit and unambiguous at each call site.
+
+### What to use instead
+
+- **Builder pattern** — for functions/structs with many optional fields. A `Builder` struct accumulates options via chained `.with_x()` calls, then `.build()` produces the final value. This is idiomatic for anything with more than ~3 optional knobs.
+- **Multiple associated functions** — e.g., `Vec::new()` vs `Vec::with_capacity(n)` instead of `Vec::new(capacity = 0)`.
+- **Traits for "overloading" semantics** — `From`/`Into` let you write `fn from<T: Into<Self>>(t: T)` and accept any convertible type, which covers most real "overloading" needs without ambiguity.
+- **Option arguments** — `fn f(name: Option<&str>)` with `None` as the "default." Verbose but explicit.
+
+## Generic Functions (preview)
+
+### Why does this exist?
+
+Suppose you want a `first` function that returns the first element of *any* slice — `&[i32]`, `&[String]`, `&[Vec<f64>]`. Without generics, you'd write a separate `first_i32`, `first_string`, `first_vec_f64`... — an explosion of near-identical code. **Generics** let you write the function *once*, parametrized over a type placeholder, and the compiler stamps out a specialized copy for each concrete type you call it with. This is called **monomorphization** — you get the performance of hand-written specialized code without the duplication.
+
+The `<T>` declares a **type parameter**: a placeholder name that stands for "whatever type the caller uses here." It's a compile-time mechanism — at runtime there is no `T`, only the concrete types that were substituted in.
+
+### What is `T`?
+
+`T` is just a conventional name (short for "Type"). It's a **type variable** — you could name it anything (`<Element>`, `<Item>`), but `T`, `U`, `V` are idiomatic. The important thing is that `T` is a *placeholder*: when someone calls `first(&[1, 2, 3])`, the compiler replaces every `T` with `i32`; when they call `first(&["a", "b"])`, it replaces `T` with `&str`. Each substitution produces a *separate, fully-typed* function in the final binary.
+
+### How to use it — the basic pattern
+
+::code-wrapper{language="rust"}
+```rust
+// T is a placeholder. The caller decides what T is at each call site.
+fn first<T>(v: &[T]) -> Option<&T> {
+    v.first()   // returns None if empty, Some(&element) otherwise
+}
+
+// Two calls → two monomorphized copies in the binary:
+let n = first(&[1, 2, 3]);        // here T = i32
+let s = first(&["a", "b"]);        // here T = &str
+```
+::
+
+### Why this alone isn't enough — trait bounds
+
+A bare `<T>` says "any type at all." But if you want to *do* something with `T` — compare it, print it, copy it — the compiler needs proof that `T` supports that operation. That's what **trait bounds** are for: they constrain `T` to types that implement a given trait.
+
+Without a bound, you can barely do anything with `T` — you can move it, return it, put it in a container, but you **cannot** compare it, add it, print it, or clone it, because the compiler doesn't know `T` has those capabilities.
+
+::code-wrapper{language="rust"}
+```rust
+fn max<T: PartialOrd + Copy>(a: T, b: T) -> T {
+    // PartialOrd  → allows `a > b`   (comparison)
+    // Copy        → allows returning by value without moving
+    if a > b { a } else { b }
+}
+
+max(3, 7);            // T = i32  — i32: PartialOrd + Copy ✓
+max(3.0, 7.0);        // T = f64  — f64: PartialOrd + Copy ✓
+// max(vec![1], vec![2]); // ERROR: Vec is not Copy — bound not satisfied
+```
+::
+
+### Where vs how to specify bounds
+
+Bounds can go inline (`<T: Trait>`) or in a `where` clause. The `where` form is cleaner when you have many bounds or complex types:
+
+::code-wrapper{language="rust"}
+```rust
+// inline — fine for 1-2 bounds
+fn max<T: PartialOrd + Copy>(a: T, b: T) -> T { if a > b { a } else { b } }
+
+// where clause — clearer when things get hairy
+fn merge<T, U>(a: T, b: U) -> Vec<U>
+where
+    T: IntoIterator<Item = U>,
+    U: Clone,
+{
+    a.into_iter().chain(std::iter::once(b)).collect()
+}
+```
+::
+
+### When to use generics vs alternatives
+
+- **Generics (static dispatch)**: best when you want zero-cost abstractions and the set of types is known/finite. The compiler inlines aggressively. Cost: binary size grows per type (monomorphization).
+- **Trait objects `dyn Trait` (dynamic dispatch)**: best when you need a heterogeneous collection (`Vec<Box<dyn Display>>`) or want to reduce binary size. Cost: one vtable lookup per call, no inlining.
+- **Just write concrete types**: if a function is only ever called with one type, generics add complexity for no benefit.
+
+Generics are covered in full depth (associated types, higher-ranked lifetimes, `impl Trait` in returns, etc.) in the [Traits and Generics](16-traits-and-generics) chapter. This preview exists because functions are where you'll first encounter `<T>`.
 
 ## `impl` Blocks (Methods)
 
@@ -127,6 +242,12 @@ Idiomatic variadic-ness comes from macros (`println!`, `vec!`) or slices (`fn su
 
 ## Function Pointers vs Closures
 
+### Why two kinds?
+
+A **function pointer** (`fn(T) -> U`) is a bare pointer to compiled code — it captures *nothing*, is `Copy`, has a fixed size known at compile time, and is as cheap to pass around as an integer. A **closure** (`|a, b| a + b`) is an anonymous function that *can capture variables from its surrounding scope*; because the set of captured values varies, a closure's size is not known statically (it's stored as a fat pointer + captured env, hence `!Sized` in general).
+
+You reach for a **function pointer** when you have a top-level `fn` and want to store/pass it without any captured state (e.g., a callback slot in a C FFI struct, a dispatch table `&[fn(&str) -> i32]`). You reach for a **closure** when you need to capture local variables (e.g., `let threshold = 5; nums.iter().filter(|&&x| x > threshold)`).
+
 ::code-wrapper{language="rust"}
 ```rust
 fn add(a: i32, b: i32) -> i32 { a + b }
@@ -135,7 +256,7 @@ let cl = |a, b| a + b;                    // closure, captures env, !Sized
 ```
 ::
 
-See the Closures chapter for `Fn`/`FnMut`/`FnOnce` distinctions.
+See the [Closures](17-closures) chapter for `Fn`/`FnMut`/`FnOnce` distinctions — they control *how* a closure may be called based on whether it borrows, mutably borrows, or consumes its captured environment.
 
 ## Recursion
 

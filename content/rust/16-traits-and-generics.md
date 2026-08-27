@@ -78,6 +78,12 @@ trait Rng { type Output = u64; fn next(&self) -> Self::Output; }
 
 ## Trait Bounds
 
+### Why trait bounds exist
+
+A bare `<T>` says "any type at all" — but that means the function body can *do almost nothing* with `T`, because the compiler doesn't know what capabilities `T` has (no `==`, no `+`, no `.len()`). A **trait bound** is the constraint that tells the compiler "`T` must implement these traits," which unlocks exactly those methods and operations in the body. Bounds are the bridge between generics (write once, use for any type) and capability (only types that support these operations).
+
+You **add** a bound when the body needs an operation that requires it (`a > b` needs `PartialOrd`). You **relax** a bound when you want the function to accept more types — the minimum bound is the one whose methods you actually call. Adding `Copy` to `max` lets you return `a` by value without moving; removing it would force a different return strategy. This is the central tradeoff: tighter bounds = more you can do in the body, fewer types accepted; looser bounds = more types accepted, less you can do.
+
 ::code-wrapper{language="rust"}
 ```rust
 fn max<T: PartialOrd + Copy>(a: T, b: T) -> T { if a > b { a } else { b } }
@@ -170,6 +176,12 @@ Multi-source APIs use `AsRef<T>` to accept `&str`, `String`, `&Path`, `&OsStr`, 
 
 ## Operator Overloading
 
+### Why it exists and when to use it
+
+Operator overloading exists so domain types can read **naturally**: `Vec2 + Vec2` is clearer than `vec2.add(other)`, and for math/vector libraries it's the conventional notation everyone expects. You overload an operator by implementing the corresponding trait (`Add`, `Sub`, `Mul`, ...); the `type Output` associated type declares what the operator returns, since `a + b` need not produce the same type as `a` (e.g., matrix × vector → vector).
+
+**Ecosystem norm**: overload operators for types that are genuinely "numeric" or have a universally-agreed operator meaning (vectors, matrices, complex numbers, money). Avoid overloading `+` for types where the meaning is ambiguous (what does `User + User` mean?) — a named method is clearer there. The standard library's choices are a good guide: it overloads for arithmetic types, not domain types.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::ops::Add;
@@ -200,6 +212,10 @@ let x = m.x;     // m.x works via Deref coercion
 
 ## `Drop`
 
+### How it works and when to implement it
+
+`Drop` is the heart of **RAII** in Rust: when a value goes out of scope, the compiler automatically calls `drop` on it, which you can customize to release resources (close a file, free a lock, deallocate FFI memory). The compiler also orders drops deterministically: variables drop in **reverse declaration order** at scope end, so cleanup is predictable. You implement `Drop` manually when a type owns a resource that needs explicit cleanup beyond what its fields already handle — e.g., a wrapper around a raw FFI handle that must call a C `close()` function, or a guard that releases a lock on drop. Most types **don't** need a manual `Drop`: if all your resources are already in `Drop`-implementing fields (a `File`, a `MutexGuard`), the compiler's automatic drop calls their `Drop` for you.
+
 ::code-wrapper{language="rust"}
 ```rust
 impl Drop for File {
@@ -214,6 +230,10 @@ Runs automatically at scope end. Don't call directly — use `std::mem::drop(val
 
 ## Supertraits
 
+### Why they exist
+
+A supertrait (e.g., `trait Pretty: Debug`) expresses a **capability requirement**: any type implementing `Pretty` *must also* implement `Debug` — the supertrait is a precondition. This lets the trait's methods rely on the supertrait's methods (a `pretty` impl can use `{:?}`). You reach for a supertrait when your trait's contract *includes* another trait's behavior — "to be `Pretty`, you must already be `Debug`-able." This differs from a `where` bound on a function (which constrains a single function), in that a supertrait constrains *every* impl of the trait globally.
+
 ::code-wrapper{language="rust"}
 ```rust
 trait Pretty: Debug { fn pretty(&self) { /* can use {:?} */ } }
@@ -223,6 +243,10 @@ trait Pretty: Debug { fn pretty(&self) { /* can use {:?} */ } }
 A supertrait bound means "any type implementing Pretty must also implement Debug".
 
 ## Trait Composition
+
+### When to compose traits
+
+Trait composition (a trait that bundles several other traits) lets you write a single bound where you'd otherwise list several. `fn f(x: impl Read)` is clearer than `fn f(x: impl io::Read + BufRead)`. You reach for composition when a *named capability* spans multiple underlying traits and you use that bundle repeatedly — it documents intent ("I need something that's both a Reader and a BufRead") and keeps signatures terse. The blanket impl (`impl<T: io::Read + BufRead> Read for T {}`) makes every type that has the underlying traits automatically implement the composite, so existing types opt in for free.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -255,7 +279,9 @@ trait Bytes<const N: usize> { fn data(&self) -> [u8; N]; }
 
 ## Marker Traits
 
-Zero-method traits that tag types: `Sized`, `Send`, `Sync`, `Unpin`, `Copy`. Some are auto-traits (compiler-implemented when possible).
+### Why they exist
+
+A marker trait carries **no methods** — it's a pure *type-level tag* that asserts a property about a type without defining behavior. `Send` and `Sync` mark thread-safety; `Sized` marks compile-time-known size; `Copy` marks bitwise-copyability. Some markers are **auto-traits**: the compiler automatically implements them for a type when all its fields qualify (a struct is `Send` if all its fields are `Send`). This is how Rust tracks soundness properties (like "can this cross a thread boundary?") through the type system *without* requiring you to write boilerplate — the property is *derived* from the type's composition. You reach for marker traits (or rather, rely on them) whenever you write code with soundness preconditions (thread spawning requires `Send + 'static`, generic storage requires `Sized`).
 
 ## Sealed Traits
 

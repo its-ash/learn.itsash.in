@@ -186,6 +186,10 @@ Skipped unless `--ignored` is passed.
 
 ## Asynchronous Tests
 
+### How async tests work
+
+An async test is a `future` that the test harness must **drive to completion** — unlike a sync test that just runs and returns, an async fn returns a `Future` that needs a runtime to poll. The runtime's test attribute (`#[tokio::test]`, `#[async_std::test]`) sets up that runtime for you, so the async body behaves as if it's being awaited inside a runtime. You reach for `#[tokio::test]` whenever the test involves `.await` — I/O, timers, channels, anything async. Without the runtime attribute, you'd have to manually construct a runtime and `block_on` the future, which is verbose; the attribute is the ergonomic wrapper.
+
 ::code-wrapper{language="rust"}
 ```rust
 #[tokio::test]
@@ -199,6 +203,10 @@ async fn async_test() {
 Use the runtime's test attribute (`tokio::test`, `async_std::test`).
 
 ## Benchmark Tests (unstable)
+
+### Why `black_box` matters and when to benchmark
+
+`test::black_box` tells the optimizer "treat this value as opaque — don't constant-fold it." Without it, a benchmark of `add(2, 2)` would compile to a constant `4` at compile time, and the benchmark would measure nothing. `black_box` forces the compiler to actually compute the value at runtime so the benchmark measures real work. You reach for benchmarks when you're optimizing a hot path and need **numbers, not guesses** — micro-benchmark the function in question, compare before/after a change, and guard against regressions. The std `#[bench]` is nightly-only; the `criterion` crate is the stable, more featureful default (statistical analysis, regression detection, HTML reports).
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -218,6 +226,10 @@ fn bench_add(b: &mut Bencher) {
 
 ## Property-Based Testing
 
+### Why it exists and how it works
+
+Property-based testing generates **many random inputs** to find edge cases you wouldn't think to write — instead of hand-coding "test `add(2, 3)`," you assert a *property* ("`add` is commutative") and the framework throws hundreds of random `(a, b)` pairs at it. When a case fails, `proptest` **shrinks** the failing input to the smallest reproducing case (e.g., `add(-1, 0)`), which makes debugging tractable. You reach for it when a function should satisfy a universal property (commutativity, round-trip serialization, invariants) and hand-written examples can't cover the input space — it catches off-by-one, overflow, and boundary bugs that unit tests miss.
+
 Use `proptest` or `quickcheck`:
 
 ::code-wrapper{language="rust"}
@@ -230,8 +242,13 @@ proptest! {
 }
 ```
 ::
+::
 
 ## Snapshot Testing
+
+### How it works and when to use it
+
+Snapshot testing compares a function's output against a **golden file** stored on disk. On the first run, `insta` saves the output as the snapshot; on subsequent runs, it compares — if the output changed, the test fails and shows a diff, and you run `cargo insta accept` to update the snapshot once you've confirmed the change is intentional. You reach for it when the output is **large, structured, and stable** — rendered templates, JSON/CSV serialization, CLI `--help` text, formatted config. It's far better than hand-writing `assert_eq!(output, "...huge string...")` because the snapshot is auto-managed and diffs are readable. Avoid it for outputs that change often (timestamps, random IDs) unless you normalize them first.
 
 Use `insta`:
 
@@ -243,6 +260,7 @@ fn snapshot() {
     insta::assert_snapshot!(v);
 }
 ```
+::
 ::
 
 ## Test Organization Tips
@@ -265,6 +283,10 @@ fn snapshot() {
 
 ## Coverage
 
+### Why coverage matters and how the tools differ
+
+Coverage measures **which lines/branches your tests actually execute**, surfacing untested code paths that may harbor bugs. You reach for it when you want to quantify test quality — e.g., a library aiming for 90% coverage, or a refactor where you want to confirm the tests still exercise the new code. The two tools differ in granularity: `cargo-tarpaulin` is **line-based** (simpler, works everywhere but coarser), while `cargo-llvm-cov` is **source-based** (uses LLVM's instrumentation, tracks branch coverage, more accurate but needs an LLVM-compatible toolchain). Run coverage periodically (CI or pre-release), not on every commit — it's slower than tests.
+
 ::code-wrapper{language="bash"}
 ```bash
 cargo install cargo-tarpaulin
@@ -275,6 +297,10 @@ cargo tarpaulin
 Or `cargo-llvm-cov` for source-based coverage.
 
 ## Fuzzing
+
+### Why fuzzing exists and how it works
+
+Fuzzing finds **panics and undefined behavior** by feeding the target randomly-generated (and **coverage-guided mutated**) inputs — it keeps mutating inputs that reach new code paths, so it explores deeply rather than purely randomly. This is the most effective way to find bugs in **parsers, deserializers, unsafe code, and any function that accepts untrusted input**. You reach for `cargo-fuzz` (built on libFuzzer) when you have a function that should never panic/UB on any input and you want to verify that automatically. It's complementary to unit tests: unit tests check *expected* cases; fuzzing hunts *unexpected* ones. Run fuzzing as a periodic job or CI step, not on every commit (it runs for minutes/hours to be effective).
 
 Use `cargo-fuzz` (libFuzzer-based) for finding panics/UB:
 
@@ -288,6 +314,10 @@ cargo fuzz run parse_target
 ::
 
 ## `Test Traits`: `Debug` for `assert_eq!`
+
+### Why `Debug` is required
+
+`assert_eq!` requires `T: PartialEq + Debug` because, **on failure**, the macro needs to *print both values* so you can see what differed. `PartialEq` is needed for the comparison itself; `Debug` is needed for the failure message (`{:?}`). If you see "the trait `Debug` is not implemented," the fix is almost always `#[derive(Debug)]` on the type — you'll hit this when testing with a custom type you forgot to derive `Debug` on. Reach for `Debug` by default on any type you might test with; it's a near-zero-cost derive that pays off the first time a test fails.
 
 `assert_eq!` requires `T: PartialEq + Debug`. If you see "the trait Debug is not implemented," derive it.
 

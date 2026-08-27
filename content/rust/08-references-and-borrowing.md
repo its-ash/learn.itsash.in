@@ -4,6 +4,14 @@ Ownership is heavy. **References** let you use a value without taking ownership.
 
 ## Shared References `&T`
 
+### Why this exists
+
+A shared reference `&T` lets you **read** a value without owning it and without copying it. This is the core mechanism that decouples *access* from *ownership* in Rust: a function can inspect your `String` without taking it from you or cloning it. Because the borrow is shared and immutable, **any number of `&T`** can exist simultaneously — multiple readers can coexist freely, which is what makes read-only data sharing trivial and cheap.
+
+### When to reach for it
+
+Use `&T` in function signatures whenever you only need to *read* the value (compute a length, format it, search it). Taking ownership would force the caller to hand over the value or clone it; taking `&mut T` would needlessly exclude other readers. The reference itself is `Copy`, so passing it around costs nothing more than copying a pointer.
+
 ::code-wrapper{language="rust"}
 ```rust
 fn len(s: &String) -> usize { s.len() }
@@ -19,6 +27,14 @@ println!("{s} {l}"); // OK
 - `&T` is `Copy` (the reference itself can be copied).
 
 ## Mutable References `&mut T`
+
+### Why exclusivity is required
+
+A mutable reference `&mut T` is **exclusive**: at most one can be active at a time, and it can't coexist with any `&T` to the same data. This rule is what makes Rust's data-race freedom a compile-time guarantee rather than a runtime check. If two `&mut`s were allowed to the same memory, they could disagree about mutations (data races); if a `&mut` could coexist with a `&`, the `&` could observe a mutation mid-read (iterator invalidation, reallocation dangling the reference). By making `&mut` exclusive *at compile time*, Rust eliminates these entire classes of bugs that other languages detect at runtime (or never).
+
+### When to reach for it
+
+Use `&mut T` when a function needs to *modify* the value without taking ownership. Taking ownership would force the caller to give up the value (and then take it back somehow); `&mut` lets the caller retain ownership while granting temporary write access. The tradeoff: the caller must guarantee no other access overlaps, which the borrow checker enforces.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -36,9 +52,15 @@ println!("{s}");   // "hi!"
 
 ## The Borrow Rules
 
+### Why these two rules?
+
+The borrow rules are the *entire foundation* of Rust's memory-safety-without-GC story. They replace the runtime aliasing checks (or silent UB) found in other languages with a compile-time guarantee:
+
 > At any given time, you can have **either**:
 > - One mutable reference, **or**
 > - Any number of immutable references.
+
+The conceptual basis is **aliasing + mutation = bugs**: if data can be both aliased (seen from multiple places) and mutated, you get data races (concurrency), iterator invalidation, use-after-free, and dangling pointers. Rust's rule says you may have *aliasing* (`&T`, many readers) OR *mutation* (`&mut T`, one writer), but never both at once. This single invariant, checked at compile time, is what lets Rust promise thread safety and memory safety with zero runtime cost — the borrow checker is essentially a compile-time proof that no aliasing+mutation exists.
 
 These rules are checked at compile time. Violations produce `E0502` (aliased mutable borrow) and similar.
 
@@ -51,6 +73,7 @@ println!("{r} {r2}");
 let m = &mut v;       // OK — shared refs ended above (NLL)
 m.push(4);
 ```
+::
 ::
 
 ## Non-Lexical Lifetimes (NLL)
@@ -131,6 +154,12 @@ This second version fails: `cannot borrow \`v\` as mutable because it is also bo
 
 ## Reborrowing
 
+### Why this exists
+
+The borrow rules say "one active `&mut` at a time," but real code needs to *pass* a `&mut` through multiple function calls or re-borrow pieces of it. Reborrowing (`&mut *r`) is the mechanism that reconciles this: it temporarily deactivates the outer `&mut` while the inner borrow is live, then reactivates it when the inner one dies. This is what lets you chain mutable references through function calls without violating the single-`&mut` rule — each call is a transient reborrow, not a second simultaneous `&mut`.
+
+You rarely write `&mut *r` explicitly — reborrowing happens automatically at function call sites (passing `&mut x` to a function that takes `&mut T` reborrows). You'll reach for the explicit form mainly when re-borrowing a slice/field out of an existing `&mut` while the rest stays usable, or when the compiler needs a nudge.
+
 ::code-wrapper{language="rust"}
 ```rust
 let mut s = String::from("hi");
@@ -150,6 +179,7 @@ fn push_all(dst: &mut Vec<i32>, src: &[i32]) {
     for &x in src { dst.push(x); }   // dst reborrows each call
 }
 ```
+::
 ::
 
 ## Lifetimes of References (preview)
@@ -207,7 +237,9 @@ greet(&String::from("Ada"));   // &String coerces to &str
 
 ## `Deref` Coercion
 
-Types implementing `Deref` allow chained deref coercions:
+### How it works
+
+`Deref` is a trait with a `deref(&self) -> &Target` method. When the compiler needs a `&Target` but you supply `&T` where `T: Deref<Target = Target>`, it auto-inserts a call to `deref`. This chains: `&Box<String>` → `&String` → `&str`. The coercion exists so that smart pointers (`Box`, `Rc`, `String`, `Vec`) compose with `&`-based APIs ergonomically — you can pass a `&Box<T>` where a `&T` is expected without manual unboxing, because `Deref` makes the smart pointer *transparent* for borrowing.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -218,9 +250,15 @@ let r: &str = &b;          // &Box<String> -> &String -> &str
 ```
 ::
 
-This is how `Box`, `Rc`, `String`, `Vec` all play nicely with `&`-APIs.
+This is how `Box`, `Rc`, `String`, `Vec` all play nicely with `&`-APIs. Reach for it implicitly; implement `Deref` on your own smart-pointer-like types to get the same ergonomics.
 
 ## `as_ref` / `as_mut`
+
+### Why these traits exist
+
+`AsRef<T>` / `AsMut<T>` are the **explicit, type-erased** borrowing traits. Where `Deref` is tied to a single target type and auto-coerces, `AsRef` is generic: a single type can `AsRef` to *multiple* targets (e.g., a path type can `as_ref()` to `Path` and `OsStr`). This makes `AsRef` the right tool for API boundaries that want to accept "anything that can be borrowed as X" without coupling to a specific smart-pointer chain.
+
+Reach for `AsRef<T>` in function signatures when you want callers to pass any of several types that can cheaply yield a `&T` (e.g., `fn open(path: impl AsRef<Path>)` accepts `&str`, `String`, `&Path`, `PathBuf`). Use `AsMut` for the mutable equivalent.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -284,6 +322,10 @@ let ry = &mut d.y; // OK: different fields
 ::
 
 ## `Ref` and `RefMut` (Interior Mutability)
+
+### Why this exists
+
+The borrow rules are a *compile-time* check: the compiler must prove, statically, that no aliasing+mutation exists. But some patterns are safe at runtime that the compiler can't prove statically — e.g., mutation inside a method that holds only `&self`, or shared mutation across an `Rc`. `RefCell` moves the borrow check to **runtime**: `borrow()`/`borrow_mut()` enforce the same single-mutable-or-many-immutable rule, but as a runtime check that panics if violated. This unlocks patterns (interior mutability, mutation behind `Rc`) that static borrow checking can't permit.
 
 `std::cell::RefCell` provides *runtime-checked* borrow rules (single mutable xor multiple immutable), enabling interior mutability behind an immutable reference. Covered in Interior Mutability chapter.
 

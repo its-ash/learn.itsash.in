@@ -37,6 +37,19 @@ pub fn add(a: i32, b: i32) -> i32 { a + b }
 
 ## Standard Sections
 
+### Why each section exists
+
+Rust doc sections aren't arbitrary — each documents a **contract** callers need:
+
+- **`# Examples`** — runnable usage (executed as doc tests, so they stay correct). Reach for one per public function.
+- **`# Panics`** — documents **non-`Result` failure modes**: conditions under which the function panics. Callers must know these to avoid panics (they can't `?` a panic). Mandatory for functions that *can* panic.
+- **`# Errors`** — for `Result`-returning functions: which `Err` variants and what they mean. Callers handle errors based on this.
+- **`# Safety`** — for `unsafe` functions: the **invariants** the caller must uphold (e.g., "pointer must be valid for `len` bytes"). Without this, `unsafe` callers can't reason about soundness.
+- **`# Arguments` / `# Returns`** — parameter/return docs (often redundant with prose; use when type/behavior isn't obvious).
+- **`# Notes`** — extra info that doesn't fit elsewhere.
+
+The order convention (Examples, Panics, Errors, Safety) puts the most useful (examples) first and the most critical (safety contracts) prominently.
+
 | Section | Purpose |
 |---|---|
 | `# Examples` | Usage examples (run as doc tests). |
@@ -123,6 +136,17 @@ Output goes to `target/doc/`.
 ::
 
 ## Lints
+
+### Why these matter and when to enable
+
+Doc lints enforce **documentation as a gate, not a reminder**:
+
+- **`missing_docs`** — every public item must have docs; turns "forgot to document" into a build error. Reach for it in **libraries** where the public API *is* the product — it prevents silently shipping undocumented items. Enable in `lib.rs` with `#![warn(missing_docs)]` (or `deny` for strict libraries).
+- **`missing_debug_implementations`** — every public type must impl `Debug` (derive or manual). `Debug` is essential for diagnostics; this lint catches types you forgot to derive it on.
+- **`rustdoc::broken_intra_doc_links`** — intra-doc links that don't resolve (a renamed item, a typo) become errors. Reach for it so stale links surface immediately, not after a docs.rs build.
+- **`rustdoc::missing_crate_level_docs`** — requires the `//!` crate-level doc comment (the landing page). Reach for it so every crate has an intro.
+
+Enable these as a library matures — early prototypes can `allow`, but a published library should `warn`/`deny` them so the docs stay complete and correct.
 
 ::code-wrapper{language="rust"}
 ```rust

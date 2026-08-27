@@ -4,6 +4,10 @@ Enums are Rust's killer feature for modeling domain choices. Each variant can ca
 
 ## Basic Enum
 
+### What an ADT is and why it's more than a C enum
+
+A Rust enum is an **algebraic data type (ADT)** — specifically a *sum type*: a value is *exactly one* of several variants, and each variant can carry its own shaped data. This is far more powerful than a C enum (which is just named integers): an `IpAddr::V4(u8, u8, u8, u8)` variant carries four bytes, while `IpAddr::V6(String)` carries a string. You model domain choices *with the data each choice needs attached*, and the compiler guarantees you handle every case when you `match`. The payoff: illegal states become unrepresentable (you can't have an "IPv6 with four bytes" — the type doesn't allow it), and forgetting a case is a compile error, not a runtime bug.
+
 ::code-wrapper{language="rust"}
 ```rust
 enum IpAddr {
@@ -51,6 +55,10 @@ match msg {
 
 ## `Option<T>` — The Null Replacement
 
+### Why null was removed
+
+Rust has **no null**. This is a deliberate rejection of the "billion-dollar mistake" — null references force defensive checks everywhere and silently fail when forgotten. `Option<T>` replaces null with a **type-level distinction**: a value of type `Option<T>` is *either* `Some(T)` *or* `None`, and you can't get the `T` out without handling both cases (via `match`, `?`, `unwrap_or`, etc.). The compiler forces you to acknowledge absence at the point of use, which eliminates an entire class of "forgot to check for null" bugs. A plain `T` is *guaranteed present* — no null check ever needed.
+
 ::code-wrapper{language="rust"}
 ```rust
 enum Option<T> {
@@ -72,6 +80,10 @@ let unwrapped = v.unwrap_or(0);
 ::
 
 ## `Result<T, E>` — Error Handling Primitive
+
+### Why this exists
+
+`Result<T, E>` encodes **fallible operations in the type system** so failures can't be silently ignored. A function returning `Result` forces every caller to deal with the error path (via `match`, `?`, `unwrap`, etc.) — unlike exceptions, there's no way to forget that the operation might fail. This is the foundation of Rust's error-handling story: errors are ordinary values with ordinary types, and the type checker makes sure you handle them. Reach for `Result` for *any* operation that can fail (parsing, I/O, network, validation); use `Option` for *absence* (a key not in a map), `Result` for *failure* (a parse that encountered bad input).
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -190,7 +202,9 @@ Short for "match one pattern and ignore the rest". Use when you only care about 
 
 ## Enum Memory Layout
 
-Enums store a discriminant (tag) plus enough space for the largest variant's payload:
+### How the discriminant + payload sharing works
+
+An enum value stores a **discriminant** (a tag identifying which variant) plus enough space for the *largest* variant's payload. Variants *overlap* in that payload region — at any moment only one variant's data lives there, so the compiler allocates `max(payload sizes)` plus the tag. Smaller variants simply don't use all of it. **Niche optimization** goes further: if a variant has an impossible bit pattern (e.g., a non-null reference can never be null), the compiler reuses that "impossible" value to encode another variant, dropping the tag entirely. This is why `Option<&T>` is the same size as `&T` — `None` is stored as the null pointer, which a valid `&T` can never be.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -209,7 +223,9 @@ The compiler performs **niche optimization**: if a variant is impossible to over
 
 ## State Machines
 
-Enums are perfect for state machines:
+### Why enums are ideal for state machines
+
+Each enum variant encodes a **valid state** carrying exactly the data that state needs — `Idle` carries nothing, `Connected` carries an address and a timestamp. Transitions are functions that consume one state and return another, and the type checker validates them: you can't accidentally use `Connecting`'s data in an `Idle` context, and a `match` on the state is exhaustive so you can't forget to handle a state. This makes enums the natural, type-safe way to model protocol states, parser states, connection lifecycles, etc. — illegal transitions become unrepresentable rather than runtime bugs.
 
 ::code-wrapper{language="rust"}
 ```rust

@@ -11,6 +11,10 @@ Rust's module system controls visibility, organization, and namespacing.
 
 ## Module Declaration
 
+### Why the module system exists
+
+Rust's module system **separates code organization from file layout**: a module is a named *scope* that controls visibility, and the file system is one (of several) ways to *provide* the module's contents. This decoupling means the same logical structure (`crate::network::server`) can live in one file or several, and you reorganize without rewriting paths. You split code into modules when a single file gets too large, when you want to enforce visibility boundaries (a public API surface backed by private internals), or when logical groupings (network, ui, db) make the codebase navigable. Reach for modules when "one file" stops scaling; keep one file when the code is small enough to grasp at once.
+
 ::code-wrapper{language="rust"}
 ```rust
 // src/lib.rs
@@ -40,6 +44,16 @@ src/
 The 2018 edition prefers `network.rs` over `network/mod.rs`. Don't mix the two for the same module.
 
 ## `use` — Importing
+
+### When to use each path form
+
+Rust deliberately doesn't **auto-import** anything (no global prelude beyond `std::prelude`) — every import is explicit so you always know where a name comes from. The path forms differ by *what they're relative to*:
+
+- **`crate::`** — absolute from the crate root. Use when you want a stable path that doesn't change if you move the *current* file (the path is anchored to the crate, not the file's location).
+- **`super::`** — one module up (the parent). Use for siblings in the same parent module, but be aware it's *relative*: moving the file changes what `super::` resolves to.
+- **`self::`** — the current module. Rare; mostly for disambiguation or for items defined in the same file you're importing into a nested scope.
+
+Reach for `crate::` in larger projects (it's stable under file moves); `super::` is fine for tightly-coupled sibling modules that move together. Aliasing (`as`) is for resolving name conflicts or shortening verbose paths.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -116,6 +130,10 @@ Enums' variants inherit the enum's visibility by default; you can override per-v
 
 ## Struct Visibility
 
+### Why private fields matter
+
+A `pub` struct with **private fields** is the foundation of Rust's encapsulation/newtype pattern: external code can *use* the type (call its methods, pass it around) but can't **construct** it with literal syntax or **access** the private fields directly. This lets the module enforce **invariants** — only the module's own constructor/methods can build a valid instance, so you can't accidentally create an invalid state from outside. This is how newtypes preserve their guarantees: the constructor is a method that validates, not a public struct literal. Without private fields, any caller could construct a `User { email: "garbage" }` bypassing your validation.
+
 A struct can be `pub` but have private fields — external code can't construct it with literal syntax or access private fields, but can use it via methods. This is how newtypes preserve invariants.
 
 ## Module Path Items
@@ -128,6 +146,10 @@ A struct can be `pub` but have private fields — external code can't construct 
 - Macros (via `macro_rules!` and `pub use`)
 
 ## Submodules and Privacy
+
+### How the privacy model works
+
+Rust's privacy is **per-module-tree**, not hierarchical in the OOP sense. The rule: an item is visible within its own module and all its **descendants** — a child can see its parent's private items, but a parent *cannot* see a child's private items unless the child marks them `pub`. This is the opposite of "private = only this class." The conceptual basis: a child module is a more-specific piece of the parent's implementation, so it's trusted with the parent's internals; the parent, being more general, isn't automatically trusted with the child's specifics. `pub` opens an item up the tree to ancestors and beyond. This is why `pub(crate)` exists for the common case of "internal to this crate but not exposed to users."
 
 A child module can access anything in its parent (privacy is per-module-tree, with `pub` opening it up). Children can use private items of parents and ancestors.
 
@@ -172,6 +194,10 @@ In edition 2018+, you don't need `extern crate serde;` — `use` finds it.
 
 ## Workspaces
 
+### When to use a workspace
+
+A workspace lets multiple crates share a single `target/` (disk + compile-time savings), a single `Cargo.lock` (unified dependency versions across crates), and unified dependency declarations via `[workspace.dependencies]`. You reach for a workspace when you have **multiple related crates** evolving together: a multi-crate library (core + derive + macros), a monorepo (app + shared internal libs), or a project with separate binary/library/tooling crates. Keep a single crate when there's only one publishable unit — a workspace adds structure you don't need. Members can depend on each other via `path = "../core"` and stay in sync during local development.
+
 ::code-wrapper{language="toml"}
 ```toml
 # Cargo.toml
@@ -183,6 +209,10 @@ members = ["crates/api", "crates/cli", "crates/core"]
 Members can depend on each other via `path = "../core"`. Shared `Cargo.lock` and `target/` directory.
 
 ## Macros Across Modules
+
+### Why macros need special export treatment
+
+`macro_rules!` macros are **resolved at a different compilation stage** than items — they expand *before* the module system is fully finalized, so the normal `pub` visibility rules don't apply to them by default. `#[macro_export]` opts a macro into crate-wide (and external) visibility by placing it at the **crate root** regardless of where it's defined. You reach for `#[macro_export]` when you want users of your crate (or other modules within it) to invoke your macro by path (`crate::my_macro!` or `my_crate::my_macro!`). Use `pub use my_macro;` to re-export it under a different module path if you want it visible at a non-root location.
 
 `macro_rules!` macros need `#[macro_export]` to be used outside their defining module:
 

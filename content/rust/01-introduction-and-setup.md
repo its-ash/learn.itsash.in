@@ -69,6 +69,16 @@ Code from older editions keeps compiling; editions are about how the *parser* se
 
 ## The Cargo Build Pipeline
 
+Cargo is the build system and package manager that ships with Rust. These commands cover the full development loop — here's *when* you reach for each:
+
+- **Scaffold**: `cargo new` (binary) or `cargo new --lib` (library) creates the canonical project skeleton.
+- **Fast feedback**: `cargo check` type-checks *without* generating code — an order of magnitude faster than `build`, so this is what you run in a tight edit-compile loop.
+- **Build/run**: `cargo build`/`cargo run` produce a binary; `--release` enables optimization (used for benchmarks and production).
+- **Test/bench**: `cargo test` runs unit + integration + doc tests; `cargo bench` needs nightly or a crate like `criterion` for stable benchmarks.
+- **Inspect deps**: `cargo tree` prints the full dependency graph — reach for it when a build is slow, when two crate versions are linked, or when a transitive dep pulls in something unexpected.
+- **Docs**: `cargo doc --open` generates HTML docs for your crate and (by default) all dependencies.
+- **Hygiene**: `cargo fmt` enforces style; `cargo clippy` catches common bugs and idioms; `cargo update` refreshes `Cargo.lock` within the bounds of your `Cargo.toml`.
+
 ::code-wrapper{language="text"}
 ```text
 cargo new my_project      # scaffolds a binary crate
@@ -88,6 +98,13 @@ cargo bench              # run benchmarks (requires nightly or criterion)
 ::
 
 ### Profile customization
+
+Each `[profile.*]` section tunes the compiler for a goal: fast builds during development, fast binaries for release, small binaries for embedded, etc. These settings trade **compile time** for **runtime performance/size**, so the defaults differ per profile. Reach for these when the defaults don't fit your deployment target (e.g., tiny embedded binary, latency-sensitive server, CI build that must be fast).
+
+- **`lto = "fat"`** — Link-Time Optimization runs the optimizer *across crate boundaries* (the default `lto = false` can't inline calls into dependencies). Fat LTO maximizes runtime speed at a steep compile-time cost; `"thin"` is a middle ground.
+- **`codegen-units = 1`** — Tells rustc to compile your crate as a single unit. The default (16 for release) parallelizes codegen for faster builds but limits the optimizer's view; 1 lets LLVM see the whole crate for better inlining. Slower build, faster binary.
+- **`strip = true`** — Removes debug symbols from the binary (they don't help at runtime). Smaller binary, marginally faster to load.
+- **`panic = "abort"`** — Switches from stack-unwinding panics to immediate abort. Smaller binary (no unwind tables), but **`Drop` destructors don't run on panic** — RAII guards relying on `Drop` for cleanup will be skipped, which can leak resources. Use only when you're sure no cleanup depends on unwinding.
 
 ::code-wrapper{language="toml"}
 ```toml

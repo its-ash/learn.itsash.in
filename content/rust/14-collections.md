@@ -2,6 +2,10 @@
 
 ## `Vec<T>` — The Growable Array
 
+### Why `Vec` is the default collection
+
+A `Vec` stores its elements in a **single contiguous heap allocation**, which means **cache locality** (iterating is fast because the CPU prefetches nearby memory) and **amortized O(1) push** (capacity doubles on overflow, so copies are O(n) but happen O(log n) times — averaging to O(1) per push). This combination — fast iteration, fast append, random access by index — makes `Vec` the right default for *almost any* list of elements. You reach for other sequences only when you need something `Vec` can't give (fast front-insert → `VecDeque`, sorted order → `BTreeMap`, etc.).
+
 ::code-wrapper{language="rust"}
 ```rust
 let mut v: Vec<i32> = Vec::new();
@@ -18,6 +22,8 @@ let v3 = vec![0; 5];              // [0, 0, 0, 0, 0]
 - `ptr` → heap allocation
 - `len` → number of elements currently stored
 - `capacity` → allocated space; pushing beyond doubles capacity (amortized O(1))
+
+**Why doubling gives amortized O(1)**: each resize copies all n elements (O(n)), but resizes happen at sizes 1, 2, 4, 8, ... — geometrically. Over n pushes, total copy work is ~2n (a converging geometric series), so each push averages to constant work despite occasional O(n) resizes. This is the classic "amortized" argument — you pay for the resize gradually across the cheap pushes, not all at once.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -102,6 +108,10 @@ v.binary_search(&5);              // Option<usize> on sorted vec
 
 ## `String` — Owned UTF-8 String
 
+### Why `String` enforces UTF-8
+
+A `String` is a `Vec<u8>` with an **invariant**: the bytes are always valid UTF-8. The type system enforces this — you can't push arbitrary bytes into a `String`; you must go through APIs that validate. The payoff is that every `&str` slice taken from a `String` is *guaranteed* valid UTF-8, eliminating an entire class of encoding bugs at the type level. Reach for `String` for owned, growable text; reach for `Vec<u8>` when you deal with raw bytes that aren't necessarily UTF-8 (binary protocols, file I/O before decoding).
+
 ::code-wrapper{language="rust"}
 ```rust
 let s = String::new();
@@ -185,6 +195,10 @@ let s: String = "a".to_string() + "b";
 
 ## `HashMap<K, V>` and `BTreeMap<K, V>`
 
+### How they work conceptually
+
+A `HashMap` stores entries in **buckets** keyed by a hash: hash the key → find the bucket → store/lookup there (with collision handling). This gives **amortized O(1)** lookup but **unordered iteration** (and a random per-run seed, so order varies). A `BTreeMap` stores entries in a **balanced B-tree**: keys are kept sorted, so iteration is **ordered** and range queries are efficient, but lookups are **O(log n)**. Reach for `HashMap` when you want fast keyed access and don't care about order (the common case); reach for `BTreeMap` when you need sorted iteration, range queries, or deterministic order (e.g., a config map you serialize in sorted form).
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::collections::HashMap;
@@ -203,6 +217,10 @@ for (k, v) in &m { /* ... */ }
 - `BTreeMap` keeps keys sorted (binary tree), iteration is ordered, lookups are O(log n) vs HashMap's amortized O(1).
 
 ### `entry` API
+
+### Why the `entry` API exists
+
+The `entry` API exists to eliminate the **double-lookup anti-pattern**: `if !m.contains_key(k) { m.insert(k, v); }` does two hash lookups (one for `contains_key`, one for `insert`). `entry(k)` does **one** lookup and returns a mutable view of the slot — `or_insert`/`and_modify` then operate on that view, so the "check then insert/modify" pattern costs a single lookup. Reach for `entry` whenever you're doing "insert if absent, else modify" logic; it's both faster and more readable than the manual `contains_key` + `insert` form.
 
 The idiomatic way to "insert if absent, else modify":
 

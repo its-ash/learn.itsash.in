@@ -129,19 +129,27 @@ The 2021 edition "default binding modes" let you avoid writing `&` everywhere; t
 
 ## `match` on References
 
+### Why match on a reference?
+
+When your value is a reference (`&str`, `&String`, `&enum`), you have two ways to `match`: match *through* the reference (using `&` in the pattern) or convert to a value first. The first form (`match &s { &"yes" => ... }`) matches the reference shape — the `&` in the pattern "peels off" the `&` from the scrutinee. The second (`match s.as_str() { "yes" => ... }`) obtains an owned/copyable value first and matches on that.
+
+Reach for the `&` form when you already hold a reference and copying would be costly or impossible (e.g., a borrowed `String` you can't move out of). Reach for the by-value form when the type is cheaply copyable (`&str` is `Copy`) or when the reference pattern is awkward (matching nested references).
+
 ::code-wrapper{language="rust"}
 ```rust
 match &s {
-    &"yes" => 1,
+    &"yes" => 1,      // match through the reference
     _ => 0,
 }
-// or pattern-match by value of &str (Copy):
+// or pattern-match by value of &str (Copy) — often clearer:
 match s.as_str() {
     "yes" => 1,
     _ => 0,
 }
 ```
 ::
+
+In modern Rust (2021+), **binding modes** let you often drop the explicit `&` — `match &s { "yes" => ... }` works because the compiler auto-borrows. The explicit `&pattern` form is still common in older code and is clearer when matching nested references.
 
 ## Destructuring in `match`
 
@@ -159,7 +167,14 @@ match shape {
 
 ## Returning from `match` vs `break`
 
-`match` is an expression. To short-circuit, use `return`, `break`, `?`, or `continue`.
+`match` is an expression — each arm produces a value. Sometimes you don't want a value, you want to *exit early*. The four short-circuit mechanisms differ by context:
+
+- **`return`** — exits the enclosing *function* (with a value if non-unit). Use when an arm means "this function is done."
+- **`break`** — exits the enclosing *loop* (optionally with a value for `break value`). Use inside a `match` that's inside a `loop`/`while`/`for`.
+- **`?`** — propagates an error/None out of the function (see below). Use in `Result`/`Option`-returning functions to bail on failure.
+- **`continue`** — skips to the next loop iteration. Use inside a loop-embedded `match` to filter.
+
+Which one applies depends on *where* the `match` sits: in a function body, `return` exits the function; inside a loop, `break` exits the loop; in a `?`-compatible function, `?` propagates. Using `return` inside a closure returns from the *closure*, not the enclosing function (a common surprise).
 
 ## `?` Operator (Error Propagation)
 

@@ -87,6 +87,10 @@ fn apply_any(f: impl for<'a> Fn(&'a [u8])) {
 ::
 ## Associated Types vs Generics
 
+### Why associated types exist
+
+An **associated type** (`type Item;` in a trait) is chosen by the *implementing type* — there's exactly one `Item` for each impl. A **generic type parameter** is chosen by the *caller* — the same type can be instantiated many ways. You reach for associated types when each impl has **one natural related type**: an `Iterator` over `T` has `Item = T` — there's no sense in the caller picking a different `Item` for the same iterator. You reach for generics when **multiple impls coexist**: `From<&str> for String` and `From<u8> for String` are two valid impls the caller selects between. The tradeoff: associated types are more ergonomic (no extra type parameter cluttering call sites) and enable `dyn Trait` (the impl owns the type); generics are more flexible (caller can pick) but bloat signatures and break object-safety.
+
 ::code-wrapper{language="rust"}
 ```rust
 // Associated type — impl picks:
@@ -101,11 +105,21 @@ Use associated types when each impl has *one* natural type. Use generics when mu
 
 ## `impl Trait` Internals
 
+### What existential types are and when to use `impl Trait`
+
+`fn f() -> impl Trait` returns a **concrete but hidden type** — an *existential* type ("some type that implements Trait, but I won't tell you which"). The caller knows it implements `Trait` but can't name the exact type. This is zero-cost (static dispatch, monomorphized, the compiler knows the real type internally). Reach for `impl Trait` returns when you want to hide a complex internal type (an iterator chain, an async block) without exposing it in the signature. The limitation: every `return` must produce the *same* concrete type, so multi-branch returns with different types need boxing.
+
+`fn f(x: impl Trait)` in argument position is sugar for `fn f<T: Trait>(x: T)` — the caller picks the type, statically dispatched. Reach for it for ergonomics (one less `<T>`); it's equivalent to the generic form.
+
 `fn f() -> impl Trait` returns *some* concrete type that implements `Trait`. The type is inferred per return path; if branches return different concrete types, you must box.
 
 `fn f(x: impl Trait)` is sugar for `fn f<T: Trait>(x: T)`. The caller picks the type.
 
 ## `dyn Trait` Type Erasure
+
+### How erasure works and when to reach for `dyn`
+
+`dyn Trait` is **type erasure**: the compiler generates a **vtable** (a static table of function pointers, one per method) for each trait impl, and the `dyn Trait` value is a **fat pointer** carrying `(data_ptr, vtable_ptr)`. Method calls go through the vtable (one indirection). This lets you hold **heterogeneous values** in one collection (`Vec<Box<dyn Trait>>`) and call them uniformly. The tradeoff vs generics: `dyn` has one copy of the code (small binary) but runtime vtable dispatch (slower, no inlining); generics monomorphize per type (fast, but binary grows). Reach for `dyn Trait` when you need **heterogeneous** values or want to **reduce binary size** at the cost of dispatch speed; reach for generics when the types are uniform and you want zero-cost dispatch. The pointer must be behind indirection (`Box`, `&`, `Arc`) because the `dyn` value itself is unsized.
 
 `dyn Trait` is a **dynamic** type — values are behind a pointer (`Box<dyn Trait>`, `&dyn Trait`, `Arc<dyn Trait>`, `Rc<dyn Trait>`, `Pin<Box<dyn Trait>>`).
 
@@ -127,6 +141,10 @@ Workarounds for non-object-safe traits:
 
 ## Auto Traits
 
+### Why they exist and how auto-derivation works
+
+Auto traits (`Send`, `Sync`, `Unpin`, `Sized`) are **compositionally derived marker traits**: the compiler automatically implements them for a type when **all its fields** implement them — no manual impl needed. This is how Rust tracks soundness properties (thread-safety, movability) through the type system *without* boilerplate: a struct is `Send` iff every field is `Send`, so adding a non-`Send` field (`Rc<T>`) makes the whole struct `!Send`, and the compiler prevents it from crossing a thread boundary. The derivation is **structural** — it walks the type's composition. You reach for auto traits implicitly (rely on the auto-derivation) and override with `unsafe impl` only when wrapping a raw type you've verified is safe. `Send` (safe to *move* to another thread) and `Sync` (safe to *share* `&T` between threads) are the two you'll encounter most — they're how `Arc<T>: Send` requires `T: Send + Sync`.
+
 `Send`, `Sync`, `Unpin`, `Sized` are auto traits — the compiler auto-implements them based on constituent types.
 
 ::code-wrapper{language="rust"}
@@ -140,6 +158,10 @@ You can opt out or opt in via `unsafe impl`/`impl !Send` (negative impls are uns
 
 ## `Sized` Trait
 
+### Why `Sized` is the default and when to relax it
+
+`Sized` marks types whose **size is known at compile time** — the compiler needs this for stack allocation, passing by value, and indexing arrays. Most types are `Sized` (`i32`, `String`, any struct of `Sized` fields). The exceptions (`?Sized`) are **dynamically sized types** (DSTs): `str`, `[T]`, `dyn Trait` — their size is only known at runtime (a `str`'s length lives in the fat pointer). Generic parameters **default to `Sized`** because most code assumes a known size; you relax with `T: ?Sized` when you want to write code generic over DSTs — e.g., a function that accepts `&str`, `&[T]`, or `&dyn Trait` via `fn foo<T: ?Sized>(x: &T)`. Reach for `?Sized` in collection/library code that must handle borrowed DSTs; leave the default (`Sized`) for ordinary functions.
+
 Most types are `Sized` (known size at compile time). Exceptions are `?Sized` types:
 - `str`, `[T]`, `dyn Trait`, `*const ()` (in some contexts)
 
@@ -150,6 +172,7 @@ Generic parameters default to `Sized`; relax with `T: ?Sized`:
 fn first_byte(s: &str) -> u8 { /* str is !Sized but you can take &str */ }
 fn foo<T: ?Sized>(x: &T) { /* works for unsized T */ }
 ```
+::
 ::
 
 ## `PhantomData<T>` — Marker for Unused Type Params
@@ -210,6 +233,10 @@ Practical for `typenum` (compile-time integers), dimension tracking (`uom`), and
 
 ## Const Generics (Deep)
 
+### Why they exist and how they're monomorphized
+
+Const generics let you **parameterize a type by a compile-time constant value** (an integer, bool, or char) — not just by other types. This exists because some types are naturally parameterized by a *number*: a fixed-size `Grid<W, H>`, an array `<i32; N>`, a cryptographic `Block<16>`. Without const generics, you'd use macros or separate types per size (`Array16`, `Array32`...). The compiler **monomorphizes** each instantiation (`Arr<10>` and `Arr<20>` are distinct types), giving you type-level size guarantees with zero runtime cost. Reach for const generics when a number is part of a type's identity (fixed-size arrays/matrices, compile-time-sized buffers); use `Vec`/slices when the size is runtime-variable.
+
 ::code-wrapper{language="rust"}
 ```rust
 struct Arr<const N: usize> { data: [u8; N] }
@@ -253,6 +280,10 @@ Rust doesn't have HKTs (types parameterized over type constructors). Workarounds
 The lack of HKTs limits abstracting over `Option`, `Vec`, `Result` uniformly. Most code doesn't need it.
 
 ## GATs (Generic Associated Types)
+
+### Why they were needed
+
+GATs (Generic Associated Types) are associated types that **themselves take generic parameters** — most commonly lifetimes (`type Item<'a>`) — stable since 1.65. They were needed because **before GATs, an associated type couldn't borrow from `self`**: a trait like `LendingIterator` (whose `next()` returns a borrow tied to `&mut self`) couldn't express that its `Item` depends on the borrow's lifetime. The `where Self: 'a` clause ties the lifetime: "the returned `Item<'a>` is valid for `'a`, which is bounded by how long `self` lives." You reach for GATs when a trait's associated type must reference `self`'s lifetime — lending iterators (returning borrowed items), async traits (the future borrows `self`), or graph/node APIs (returning references into the graph). Without GATs, these patterns required boxing or `unsafe`.
 
 ::code-wrapper{language="rust"}
 ```rust

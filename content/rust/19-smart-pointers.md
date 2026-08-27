@@ -72,12 +72,16 @@ shared.borrow_mut().push(4);
 
 ### Weak References
 
+### How `Weak` works and when to use it
+
+A `Weak<T>` is a **non-owning pointer** to the same allocation an `Rc`/`Arc` points to: it doesn't increment the strong count, so the allocation is freed when the last *strong* ref drops, even if weaks remain. `upgrade()` then returns `None` — the weak is just a stale slot. You reach for `Weak` to **break reference cycles** (the classic parent↔child link: the parent owns the child via `Rc`, the child refers back via `Weak`, so dropping the parent frees both). Without `Weak`, back-pointers as `Rc` would create a cycle whose refcounts never reach zero — a permanent memory leak that the borrow checker *cannot* prevent (it's a runtime refcount issue, not a borrow issue).
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::rc::{Rc, Weak};
 let strong = Rc::new(5);
 let weak: Weak<i32> = Rc::downgrade(&strong);
-if let Some(v) = weak.upgrade() { /* ... */ }
+if let Some(v) = weak.upgrade() { /* ... */ }   // Some only while a strong ref exists
 ```
 ::
 
@@ -118,6 +122,10 @@ let b = Rc::new(RefCell::new(None));
 `Rc`/`Arc` cycles leak. Use `Weak` for back-references. Rust can't prevent this; design matters.
 
 ## Interior Mutability Pattern
+
+### Why interior mutability exists
+
+The borrow rules are a **compile-time** check — the compiler must statically prove no aliasing+mutation. But some patterns are safe at runtime that the compiler can't prove: mutation behind a shared `&self` (caching, memoization, internal state updates), or mutation shared through `Rc`. Interior mutability moves the borrow check to **runtime** via types like `RefCell` (single-thread) or `Mutex`/`RwLock` (multi-thread): `borrow()`/`borrow_mut()` enforce the same one-mutable-or-many-immutable rule, but as a runtime check (panicking on violation). You reach for it when mutation must happen through an immutable reference — the canonical case is `Rc<RefCell<T>>` for shared, mutable, single-threaded state (graphs, GUI state, observers). The cost: runtime checking instead of compile-time, plus a panic risk if the rule is violated.
 
 `Rc`/`Arc` give shared ownership but no mutation. Wrap the inner in `RefCell`/`Mutex`:
 
@@ -167,7 +175,7 @@ println!("{:?}", r);
 
 ### `try_borrow` / `try_borrow_mut`
 
-Non-panicking variants returning `Result`. Useful when you might encounter a borrow conflict gracefully.
+Non-panicking variants returning `Result`. Reach for these when a borrow conflict is a **recoverable case, not a bug** — e.g., you're probing whether a value is currently borrowed and want to take a fallback path if it is, rather than crashing. The panicking `borrow()`/`borrow_mut()` are for when a conflict indicates a logic bug you'd want to surface immediately; the `try_` variants are for graceful, non-fatal handling.
 
 ## `Mutex<T>` and `RwLock<T>`
 
@@ -203,6 +211,10 @@ If a thread panics while holding a lock, the lock becomes "poisoned"; subsequent
 
 ## `Once`, `OnceLock`, `LazyLock` — Initialization
 
+### Why these exist
+
+These types provide **thread-safe, one-time initialization** of a value: the first access runs the initializer, subsequent accesses return the already-computed value, and the whole thing is safe to share across threads. You reach for them for **global singletons** and **lazy globals** — a config loaded once at first use, a database pool opened on demand, a lookup table built lazily. They exist because (a) `static` values must be const-evaluable (no runtime init), so you can't just `static CONFIG = load_config();`, and (b) you want the init to happen exactly once even under concurrent access. `OnceLock` (1.70) and `LazyLock` (1.80) replace the older `lazy_static`/`once_cell` crates with std-only types.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::OnceLock;
@@ -219,6 +231,10 @@ let _ = &*DB;     // initialized on first access
 Pre-`LazyLock` you'd use the `once_cell` or `lazy_static` crates. Modern std has you covered.
 
 ## `Cow<T>` — Clone-on-Write
+
+### When `Cow` pays off
+
+`Cow` ("Clone on Write") is a value that's **either borrowed or owned**, decided at runtime. You reach for it when a function **usually returns borrowed data but sometimes needs to allocate** — e.g., a normalizer that returns the input `&str` unchanged when it's already normalized (no allocation), but produces an owned `String` when it has to transform it. Without `Cow`, you'd be forced to always allocate (returning `String`) or always borrow (returning `&str`, which can't hold a transformed value). `Cow` lets you defer the clone until mutation: `to_mut()` clones the borrowed value into an owned one only when you actually need to modify it. The tradeoff: the `Cow` enum carries a discriminator, so there's a tiny size/branch cost, but it's usually worth it for the allocation savings.
 
 ::code-wrapper{language="rust"}
 ```rust

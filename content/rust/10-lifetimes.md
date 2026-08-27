@@ -19,7 +19,11 @@ println!("{r}");        // ERROR: x does not live long enough
 
 ## Generic Lifetime Parameters
 
-When a function returns a reference, the compiler needs to know its lifetime is tied to *some* input:
+### What a lifetime parameter actually is
+
+A lifetime parameter like `'<a>` is **not a runtime thing** — it's a compile-time **relationship constraint** that the compiler uses to verify borrows are sound. When you write `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str`, you're declaring: "the returned reference will be valid for *at least* as long as the shorter of `x` and `y`." The compiler then checks every call site to confirm that constraint holds.
+
+The reason this must be explicit: a function returning a reference *must* borrow from some input (it can't conjure data from thin air), and the compiler needs to know *which* input so it can tie the output's validity to that input's lifetime. Without the annotation, `fn f(x: &str, y: &str) -> &str` is ambiguous — does the output borrow from `x` or `y`? The compiler can't tell, so it asks you to say.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -32,6 +36,12 @@ fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
 `<'a>` declares a generic lifetime. `&'a str` means "a `str` reference valid for at least `'a`". The signature says: *the returned reference is valid for at least as long as the shorter of `x` and `y`.*
 
 ## Lifetime Elision Rules
+
+### Why these rules exist
+
+The three elision rules exist because the overwhelming majority of function signatures follow one of a few common patterns, and writing explicit lifetimes for every one of them would drown real code in noise. The rules pick the most likely input-to-output relationship automatically; they cover the common cases so you only annotate the genuinely ambiguous ones. Rule 3 (`&self` ties to output) reflects how methods work — a method returning a borrow almost always borrows from `self`, not from a separate argument.
+
+If after these rules the output lifetime is ambiguous (multiple inputs, no `self`), the compiler gives up and asks you to write it explicitly. That's not a failure of elision — it's the rule system saying "this case is genuinely ambiguous, you decide."
 
 To reduce boilerplate, the compiler applies three elision rules:
 
@@ -49,11 +59,18 @@ fn longest<'a>(x: &'a str, y: &'a str) -> &'a str { ... }
 
 ## `'static`
 
-The `'static` lifetime lasts the entire program. Examples:
+### What `'static` means conceptually
+
+`'static` is the **longest possible lifetime** — it lasts the entire program. In Rust's lifetime subtyping lattice, `'static` sits at the top, so a `&'static T` can be used anywhere a `&'a T` is expected (this is covariance: longer-lived fits where shorter-lived is needed). String literals get `'static` because they're stored in the read-only data section of the binary, which exists for the program's whole execution.
+
+The key thing to understand: `'static` is a *lifetime*, not a storage class. It doesn't mean "allocated globally" — it means "valid for the whole program." A leaked `Box` produces a `&'static` reference even though the data started on the heap, because nothing will reclaim it.
+
+### When you'll encounter it
 
 - All string literals: `"hello"` has type `&'static str` (stored in the binary).
 - `const` values that are references.
 - Global statics.
+- Thread spawning: captured closures require `'static` because the thread may outlive the caller's stack.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -61,7 +78,7 @@ let s: &'static str = "I live forever";
 ```
 ::
 
-Don't reach for `'static` to silence lifetime errors — it usually means a design problem. Common accidental `'static`: spawning threads that capture references requires `'static` (see Concurrency chapter).
+Don't reach for `'static` to *silence* lifetime errors — if the compiler demands `'static` where you didn't expect it, it usually signals a design problem (a borrowed value can't escape its scope). Reach for `'static` only when the data genuinely lives for the whole program.
 
 ## Structs Holding References
 
@@ -96,6 +113,10 @@ Output references are tied to `&self` automatically when there's no other choice
 
 ## Multiple Lifetimes
 
+### Why two is more flexible than one
+
+Two distinct lifetime parameters express **independent** borrowing constraints: `source` must live at least `'src`, `arena` must live at least `'arena`, and nothing says they're related. This is *strictly more permissive* than collapsing both to a single `'a` (which would force both to live for the same span). You reach for separate lifetimes when a struct/function holds borrows of things with genuinely unrelated lifespans — e.g., a parser that borrows both source text and an allocation arena, where the arena may outlive the source or vice versa. Collapse to one lifetime only when the borrows are truly coupled.
+
 ::code-wrapper{language="rust"}
 ```rust
 struct Parser<'src, 'arena> {
@@ -109,13 +130,23 @@ Two distinct lifetimes express "the source lives at least `'src`, the arena live
 
 ## Lifetime Variance (advanced)
 
-A `&'a T` is **covariant** in `'a`: you can use a longer-lived reference where a shorter-lived one is expected. `&'static str` fits anywhere `&'a str` is needed.
+### Why variance matters
 
-`&'a mut T` is covariant in `'a` but **invariant** in `T` (you can't shorten the borrow of `T` because mutation could write back). `Cell<T>`, `RefCell<T>`, `UnsafeCell<T>` are invariant.
+Variance determines **when you can substitute a reference of one lifetime for another**. Without it, the compiler would have to reject any case where the lifetimes don't match exactly — which would break enormous amounts of valid code (you couldn't pass a `&'static str` where a `&'a str` is expected, for instance). Variance is the rule system that makes lifetimes *subtype* sensibly.
 
-`fn(&'a T)` is contravariant in `'a`. Most code doesn't think about variance, but it explains why some seemingly valid code compiles or doesn't.
+- `**Covariance**` in `'a` (`&'a T`): a *longer* lifetime can substitute for a *shorter* one. So `&'static str` fits anywhere `&'a str` is needed — the longer-lived reference is a *subtype*.
+- `**Invariance**` in `T` (`&'a mut T`): you *can't* shorten the borrow of `T` because mutation could write back a value that lives shorter than expected. This is why `&'a mut T` can't be freely substituted — it prevents foot-guns.
+- `**Contravariance**` in `'a` (`fn(&'a T)`): a function that accepts a *shorter* lifetime can be used where one accepting a *longer* lifetime is expected.
+
+Most code never names variance, but it's the *reason* some seemingly valid code compiles or doesn't — e.g., why `Cell`/`RefCell`/`UnsafeCell` are invariant (they enable interior mutation, so invariance is required for soundness).
 
 ## Higher-Rank Trait Bounds (HRTB)
+
+### Why this exists
+
+A normal lifetime parameter `'<a>` is *chosen by the caller* — the caller picks one specific `'a` and the function works for that one. But some functions need to work with **any lifetime the caller throws at them, possibly different ones each call** — a callback that may be invoked many times with borrows of different durations. `for<'a>` expresses exactly that: "this works for *all* lifetimes `'a`," not just one the caller selected. This is the difference between "the caller picks" (generic) and "the callee works for any" (higher-ranked).
+
+The `Fn` traits implicitly use HRTBs on their arguments — that's why a closure `|x: &str| ...` can be called with borrows of varying lifetimes rather than being locked to one.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -126,6 +157,10 @@ fn foo<F>(f: F) where F: for<'a> Fn(&'a str) { ... }
 `for<'a>` means "for all possible lifetimes `'a`". Closures that work with any borrowed input need this. The `Fn` traits implicitly have HRTB on their arguments.
 
 ## Anonymous Lifetime `'_`
+
+### Why it exists
+
+`'_` is the explicit way to say **"use elision here."** It exists for places where bare `&` would be a warning or ambiguous (e.g., inside an `impl Trait` return, in a type alias, in a struct field where you want elision semantics but need a placeholder token). You don't sprinkle it — you reach for it when the compiler insists on a lifetime token but you want elision to apply, or to silence "elided lifetime in path" lints in a focused way.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -159,6 +194,10 @@ fn returns_stack() -> &str {
 
 ## Lifetime Bounds on Generics
 
+### What `T: 'a` constrains
+
+`T: 'a` does **not** mean `T` itself outlives `'a` — it means **any references contained inside `T` must outlive `'a`.** This matters when `T` is itself a type that might hold borrows (e.g., a struct with a `&str` field). The compiler needs to know those inner references won't dangle before it lets you return `&'a T` or store `T` somewhere expecting `'a`. The bound is often implicit (the compiler adds it when it can), but you write it explicitly when `T` is generic and you need to guarantee its contents are valid for `'a`.
+
 ::code-wrapper{language="rust"}
 ```rust
 fn parse<T>(s: &str) -> T where T: FromStr, T::Err: Debug { ... }
@@ -169,6 +208,10 @@ fn longest_anon<'a, T: 'a>(x: &'a T) -> &'a T { x }
 `T: 'a` means "T's owned references (if any) outlive `'a`". Often implicit, but needed when `T` itself contains references.
 
 ## Lifetime Extension via `Box::leak`
+
+### When to reach for it
+
+`Box::leak` deliberately "leaks" an owned heap value, turning it into a `&'static` reference that's never reclaimed. The classic use case is **a config or asset parsed once at program startup that lives for the whole program anyway** — allocating it once and leaking a `'static` reference avoids threading a lifetime parameter through every function that touches the config, since `'static` is universally acceptable. The tradeoff is that the memory is *never freed*, so this is appropriate only for data whose lifetime matches the process; don't use it for data created repeatedly during runtime (use an arena, a `OnceLock`, or an `Rc` instead).
 
 ::code-wrapper{language="rust"}
 ```rust

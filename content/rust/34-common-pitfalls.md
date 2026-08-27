@@ -234,6 +234,10 @@ UTF-8 strings don't support byte indexing semantically. Iterate `chars()` for co
 
 ## 12. Using `Deref` for Inheritance
 
+### Why it's misleading
+
+`Deref` is a **coercion mechanism for smart pointers** — it's how `&Box<T>` becomes `&T`, how `&String` becomes `&str`. It is *not* subtype polymorphism. When you implement `Deref` on a wrapper to "inherit" methods, you get method-resolution-via-deref-coercion (`B.method_of_a()` works because the compiler derefs `B` to `A`), but the semantics are wrong: it's incidental method forwarding, not inheritance — there's no virtual dispatch, no `super`, no subtype relationship. The confusion: from OOP you expect `B` "is-a" `A`, but `Deref` just means "B can be borrowed as A." The misleading result: `B` silently gains all of `A`'s methods (even ones that don't make sense), and adding a method to `A` changes `B`'s API invisibly. The Rust-idiomatic alternative is **explicit delegation** — write the methods you want on `B`, calling `self.0.method()`. It's more code but the API is honest and stable.
+
 `Deref` is for smart pointers, not modeling. Misuse leads to confusing method resolution:
 
 ::code-wrapper{language="rust"}
@@ -306,6 +310,10 @@ let f = async move { println!("{:?}", v); };   // moves v
 `Arc::clone(&arc)` is identical to `arc.clone()` but signals "this is cheap, just refcount". Use `Arc::clone`.
 
 ## 18. `if` vs `match` for Two-Path
+
+### Why `match` is better for enums
+
+`if cond { } else { }` is fine for **booleans** (there are exactly two cases, no exhaustiveness to gain). `match` is better for **enum dispatch** because of **exhaustiveness checking**: when you add a variant later, every `match` on the enum becomes a compile error until you handle it, so you can't forget a case. An `if`/`else if` chain silently misses the new variant (it falls through to the `else`). Reach for `match` whenever the value is an enum you control (so you'll benefit from the exhaustiveness signal); reach for `if`/`else` for genuine booleans or when a guard-based condition isn't enum-driven.
 
 `if cond { } else { }` is fine for booleans; `match` is better for enum dispatch. Don't `if let` when a full `match` is clearer.
 
@@ -425,6 +433,10 @@ If the API allows `None`, handle it. Reserve `unreachable!` for truly impossible
 
 ## 27. `String::from` vs `.to_string()` vs `.into()`
 
+### Why they're equivalent and which to pick
+
+All three produce a `String` from a `&str` because they're wired to the same conversion: `String::from(&str)` is the `From` impl; `.to_string()` is the `ToString` impl (which is auto-derived from `Display`); `.into()` is the reciprocal of `From` (`Into<String>` for `&str`). They compile to the same code. The differences are **readability and inference**: `.into()` is shortest but relies on type inference (the target must be inferrable); `.to_string()` reads as "convert to string" most clearly; `String::from` is the most explicit. **Pick one and be consistent** within a codebase — mixing styles for no reason is visual noise. Reach for `.into()` when the target type is obvious from context; `.to_string()` when you want readability; `String::from` when explicitness matters.
+
 All three work for `String`. `into()` is shortest, `to_string()` reads clearly, `String::from` is explicit. Pick one and be consistent.
 
 ## 28. `&Vec<T>` Parameters
@@ -509,6 +521,10 @@ let n: u8 = 1000u32.try_into().unwrap_or(u8::MAX);
 
 ## 37. `cargo build` in CI Without `--locked`
 
+### Why `--locked` matters
+
+`--locked` forces Cargo to build with the **exact versions in `Cargo.lock`**, failing if the lockfile would need updating. Without it, Cargo may **update the lockfile** if dependencies drifted (a new patch was published), which silently changes what the CI is actually testing — a build that passed yesterday can use different transitive dep versions today, breaking reproducibility. With `--locked`, the build fails loudly if the lockfile is stale, so you commit the update deliberately. Use `--frozen` instead when you also want to forbid network access (e.g., offline CI). Reach for `--locked` in CI always; reach for `--frozen` when you need bit-for-bit reproducibility guarantees.
+
 ::code-wrapper{language="yaml"}
 ```yaml
 - run: cargo build --locked --release
@@ -518,6 +534,10 @@ let n: u8 = 1000u32.try_into().unwrap_or(u8::MAX);
 `--locked` ensures `Cargo.lock` is honored (reproducible builds).
 
 ## 38. Ignoring Clippy
+
+### Why treat warnings as errors
+
+Clippy lints catch **real bugs and anti-patterns** (`clippy::needless_collect` flags a wasted collection; `clippy::mem_forget` flags a dropped `ManuallyDrop`; `clippy::redundant_clone` flags a needless allocation). In CI, treating warnings as errors (`-D warnings`) **prevents drift**: without it, warnings accumulate over time ("I'll fix it later"), the signal gets buried in noise, and the codebase rots. With `-D warnings`, every warning blocks the build, forcing immediate fixes, so the warning count stays at zero and real issues stay visible. Reach for `-D warnings` in CI from the start; use `-A` to temporarily allow a lint during a transition, but don't leave it.
 
 Treat Clippy warnings as errors in CI:
 

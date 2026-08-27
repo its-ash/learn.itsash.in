@@ -158,14 +158,21 @@ let x: i32 = match opt {
 
 ## Type Aliases
 
+### Why this exists
+
+A type alias lets you give a shorter, more meaningful name to an existing type without creating a new type. The alias is **erased at compile time** — `Kilometers` and `i32` are the *same* type to the compiler, so they can be freely mixed (which means an alias gives you readability but **no type safety**: you can pass `Kilometers` where `i32` is expected and vice versa, and a `Miles` alias is indistinguishable from `Kilometers`).
+
+You reach for aliases when a type signature is *verbose* or *meaningful*: shortening `Box<dyn Fn(i32, String) -> Result<Vec<u8>, io::Error>>` to a name, or documenting that a function's `i32` parameter represents kilometers. For *type safety* (preventing `Miles` and `Kilometers` from being confused), use a **newtype** instead.
+
 ::code-wrapper{language="rust"}
 ```rust
-type Kilometers = i32;
+type Kilometers = i32;            // just a name — fully interchangeable with i32
 type IntPair = (i32, i32);
+type Handler = Box<dyn Fn(i32, String) -> Result<Vec<u8>, std::io::Error>>;
 ```
 ::
 
-Aliases are purely nominal — no new type, no methods, just a shorthand.
+Aliases are purely nominal — no new type, no methods, just a shorthand. Use a newtype when you need the compiler to treat two semantically different values as distinct.
 
 ## Newtype Pattern (real distinct type)
 

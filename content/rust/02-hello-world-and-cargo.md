@@ -125,35 +125,52 @@ json = ["serde"]
 
 ## Dependency Sources
 
+### Why there's more than one source
+
+Almost all real projects pull from crates.io, but Cargo supports several sources so you can integrate code before it's published, pin to a fork, or develop multiple local crates together. Each source has a distinct use case:
+
+- **crates.io** — the default registry. Reach for this whenever the crate you need is published and the published version works for you. This is what 99% of dependencies look like.
+- **git** — use a git source when the crate isn't on crates.io yet, when you need a fix that's only on a branch/tag/commit (e.g., a bugfix merged upstream but not yet released), or when you maintain a private fork. Pin to a `tag` for reproducibility, a `rev` for an exact commit, or a `branch` to track evolving work. Avoid `branch` in published crates — downstream builds become non-reproducible.
+- **path** — a local directory. Use during development when you're working on multiple crates simultaneously (e.g., a library + an app that uses it) so changes in one are immediately visible in the other without re-publishing. Path deps are usually paired with a version for when the crate is eventually published.
+- **optional** — a dependency gated behind a feature flag (see below). The dep is only compiled when the feature is enabled, letting you keep heavy/optional integrations out of the default build.
+
 ::code-wrapper{language="toml"}
 ```toml
 [dependencies]
-# crates.io
+# crates.io — the default registry
 serde = "1.0"
 
-# git
+# git — unpublished, forked, or pre-release
 my_crate = { git = "https://github.com/user/crate", branch = "dev" }
-my_crate2 = { git = "...", tag = "v1.2.3" }
-my_crate3 = { git = "...", rev = "abc123" }
+my_crate2 = { git = "...", tag = "v1.2.3" }     # reproducible
+my_crate3 = { git = "...", rev = "abc123" }     # exact commit
 
-# path (local)
+# path — local monorepo development
 my_local = { path = "../my_local" }
 
-# optional dependency behind a feature
+# optional — only compiled if the "extra" feature is enabled
 extra = { version = "1.0", optional = true }
 ```
 ::
 
 ## Features
 
-Features enable **conditional compilation**. Avoid exposing features of dependencies (this causes "feature unification" surprises). Use direct deps + optional features instead.
+### Why features exist
+
+A feature is a **compile-time switch** that conditionally includes code, dependencies, or modules. They exist so a single crate can serve multiple use cases without forcing every user to compile everything — e.g., a HTTP client that's async-only behind a `"async"` feature, or a serializer with optional `"json"`/`"yaml"` backends. Code gated by `#[cfg(feature = "...")]` is only compiled when the feature is on.
+
+The important mechanic to understand is **feature unification**: if *any* crate in your dependency graph enables a feature, it's enabled for *all* uses of that crate in the build. This is why exposing features of your dependencies to your users is risky — your library's `serde` feature and a downstream crate's `serde` feature unify, and you may end up with features you didn't ask for. The safe pattern is to use direct dependencies + optional features rather than re-exporting a dependency's features.
 
 ::code-wrapper{language="rust"}
 ```rust
 #[cfg(feature = "json")]
-mod json;
+mod json;          // only compiled when the "json" feature is enabled
 ```
 ::
+
+### When to define your own features
+
+Define a feature when you want users to opt into functionality that has a compile-time or runtime cost (a heavy dependency, an async runtime, a CLI mode). Keep features **additive** (they only turn things *on*, never off) so unification can never break a downstream build.
 
 ## `Cargo.lock`
 
@@ -163,7 +180,15 @@ mod json;
 
 ## Workspaces
 
-When multiple crates share a workspace, dependency versions unify and `target/` is shared:
+### Why workspaces exist
+
+A workspace lets multiple crates share a single `target/` directory, a single `Cargo.lock`, and a unified set of dependency versions. Without a workspace, each crate in a monorepo would have its own `target/` (disk + compile-time waste), its own lockfile (drifting dependency versions across crates), and its own resolution (one crate could pull `serde 1.0.150` while another pulls `serde 1.0.180`). The workspace makes them one build graph.
+
+### When to use a workspace
+
+Reach for a workspace when you have **multiple related crates** that you want to evolve together: a multi-crate library (e.g., `core` + `derive` + `macros`), a monorepo with an app + shared internal libraries, or a project with separate binary + library + tooling crates. Keep a single crate if there's only one publishable unit — a workspace adds structure you don't need.
+
+The `[workspace.dependencies]` table lets you declare a dependency version once and have every member crate reference it via `crate.workspace = true`, so versions stay unified without copy-pasting.
 
 ::code-wrapper{language="toml"}
 ```toml

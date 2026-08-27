@@ -4,6 +4,10 @@ Rust's iterators are **lazy**, **zero-cost**, and compose into chains that compi
 
 ## The `Iterator` Trait
 
+### Why it's built around a single `next()`
+
+The entire `Iterator` trait is built around **one required method**: `next(&mut self) -> Option<Self::Item>`. Everything else — `map`, `filter`, `fold`, `collect`, `take`, `sum`, dozens of methods — is a *provided method* derived from `next`. This design exists so that **any** sequence-producing logic can be an iterator by implementing one method, and instantly get the entire combinator library for free. The conceptual model is *pull-based*: an iterator yields the next item on demand (`next`), reports exhaustion with `None`, and the adapters layer on top by calling `next` and transforming the result. This minimal contract is what makes iterator composition so uniform and zero-cost.
+
 ::code-wrapper{language="rust"}
 ```rust
 pub trait Iterator {
@@ -142,6 +146,10 @@ it.unzip()
 
 ## `collect` and `FromIterator`
 
+### How it works conceptually
+
+`collect` builds *any* type that implements `FromIterator<A>` — a trait with a `from_iter: IntoIterator<Item = A> -> Self` method. The same `collect` call can target wildly different collections (`Vec`, `HashMap`, `String`, `HashSet`) because each of those types implements `FromIterator` differently: `Vec` pushes each item, `HashMap` inserts each `(k, v)` pair, `String` appends each `char`. You tell `collect` which type to build via a type annotation or turbofish (`collect::<Vec<_>>()`); the compiler resolves the `FromIterator` impl. This is why one method serves every collection — the destination type owns the logic.
+
 ::code-wrapper{language="rust"}
 ```rust
 let v: Vec<i32> = (0..5).collect();
@@ -154,6 +162,10 @@ let (evens, odds): (Vec<i32>, Vec<i32>) = (0..10).partition(|x| x % 2 == 0);
 `collect` can build *any* `FromIterator` type — the turbofish or type annotation tells it which.
 
 ## Custom Iterator (Manual `impl`)
+
+### When to write a manual `impl`
+
+Most iterators come from composing existing adapters (`.map()`, `.filter()`, `.chunks()`, etc.) — reach for that first. You write a manual `impl Iterator` only when the iteration logic is **stateful in a way no combinator expresses cleanly**: a state machine, a parser producing tokens, a generator with non-trivial termination, or a sequence derived from external state (reading bytes from a device). The example below is a `Counter`, but the real motivation is custom iteration logic that doesn't map to existing adapters.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -188,6 +200,10 @@ This compiles to essentially the same machine code as a hand-written `for` loop.
 
 ## `DoubleEndedIterator`
 
+### How double-endedness works
+
+A `DoubleEndedIterator` adds a `next_back` method: you can pull from *either end*. `.rev()` works by swapping to `next_back`. Not every iterator is double-ended — `std::io::Lines` reading a file can only go forward (you can't un-read a line), and infinite iterators have no back. You care about double-endedness when you need to consume from the back (reversal, deque-style), or when you want to interleave front/back consumption (e.g., building a palindrome, two-pointer algorithms).
+
 `.rev()` requires `DoubleEndedIterator` (can pull from the back):
 
 ::code-wrapper{language="rust"}
@@ -200,7 +216,7 @@ Not all iterators are double-ended (`std::io::Lines` reading a file isn't).
 
 ## `ExactSizeIterator`
 
-`.len()` works if the iterator knows its exact remaining length.
+`.len()` works if the iterator knows its exact remaining length. This trait exists so consumers can **pre-allocate** the destination collection — `Vec::from_iter` can reserve the exact capacity up front, avoiding reallocations during `collect`. An iterator knows its exact size when it's derived from a sized source (a `Vec`, a `Range`); it doesn't when the source is unbounded or when adapters like `filter` make the count unpredictable.
 
 ## Infinite Iterators
 
@@ -216,6 +232,10 @@ Use `take(n)` or `take_while` to bound them. Don't `.collect()` an infinite iter
 
 ## `peekable`
 
+### When to reach for it
+
+`peekable` lets you **look at the next item without consuming it** — `peek()` returns `Option<&Item>` and leaves the iterator's state unchanged. This is essential for **lookahead parsing**: a tokenizer that needs to decide based on the upcoming token, a parser distinguishing `==` from `=` by peeking the second `=`, or any "consume if next matches X" pattern. Without `peekable`, you'd have to consume the item and re-inject it on mismatch — `peek` lets you inspect first.
+
 ::code-wrapper{language="rust"}
 ```rust
 let mut it = vec.iter().peekable();
@@ -228,6 +248,10 @@ let actual = it.next();
 `peek` returns `Option<&Item>` without advancing.
 
 ## `fuse`
+
+### Why this matters
+
+The `Iterator` contract says: once `next` returns `None`, calling `next` again has **unspecified** behavior — some iterators return `None` forever, some may return `Some` again (it's not guaranteed). `fuse` wraps an iterator and makes it **always return `None` after the first `None`**, giving you a deterministic contract. You reach for `fuse` when you can't trust the underlying iterator's post-exhaustion behavior — e.g., when you're manually driving `next` in a loop and want a guarantee, or when mixing iterators where one might misbehave after exhaustion.
 
 After an iterator returns `None` once, calling `next` again is unspecified — `fuse` makes it always return `None` after the first:
 
@@ -255,6 +279,10 @@ For debugging chains without breaking them:
 
 ## Iterators and Ownership
 
+### How iterator lifetimes tie to the collection
+
+The kind of iterator you use (`iter()`, `iter_mut()`, `into_iter()`) determines **who owns the data during iteration**. `iter()` borrows immutably — the collection lives, you get `&T`s, and multiple iterators can coexist. `iter_mut()` borrows mutably — the collection lives, you get `&mut T`s, but no other access is allowed meanwhile. `into_iter()` **consumes** the collection — it's gone after, you get owned `T`s. The choice ties the iteration's lifetime to the collection's ownership: borrowing iterators can't outlive the collection; `into_iter` ends the collection's life. This is why `for s in v` (consuming) leaves `v` unusable, while `for s in &v` keeps `v` alive.
+
 ::code-wrapper{language="rust"}
 ```rust
 let v = vec![String::from("a"), String::from("b")];
@@ -270,6 +298,7 @@ let mut it = v.into_iter();
 let first = it.next();
 let rest: Vec<_> = it.collect();
 ```
+::
 ::
 
 ## Common Patterns

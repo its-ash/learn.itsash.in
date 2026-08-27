@@ -80,6 +80,10 @@ pub extern "C" fn add(a: i32, b: i32) -> i32 { a + b }
 
 ## `unsafe` Traits
 
+### Why some traits are `unsafe`
+
+An `unsafe trait` is a trait the compiler **cannot verify** — implementing it is a promise you make (and the compiler trusts) that your type satisfies the trait's safety contract. `Send`/`Sync` are the canonical examples: the compiler auto-derives them when all fields qualify, but if you wrap a raw pointer you *know* is thread-safe (e.g., a pointer to immutable global data), you must `unsafe impl Send` to opt in — the compiler can't prove your pointer is safe to move/share across threads, so it requires you to assert it. The danger: a wrong `unsafe impl Send` makes UB possible through *safe* code, because the compiler trusted your assertion. You reach for `unsafe impl Send/Sync` only when wrapping a raw type you've verified is thread-safe by construction, and you document *why* in a `// SAFETY:` comment.
+
 ::code-wrapper{language="rust"}
 ```rust
 unsafe trait TrustedIter {}
@@ -98,6 +102,10 @@ unsafe impl Send for MyType {}     // we promise the pointer is safe to move to 
 
 ## `static mut`
 
+### Why it's dangerous
+
+`static mut` is a **mutable global with no synchronization** — any thread can read/write it concurrently, so accesses are **data races** (UB) unless you prove they're serialized. The compiler forces `unsafe` to make you acknowledge this. In practice, `static mut` is almost never the right tool: reach for **atomics** (`AtomicUsize`, `AtomicBool`) for counters/flags — they're safe, lock-free, and require no `unsafe`. Reach for `OnceLock` for one-time-init globals. `static mut` is a footgun retained mostly for FFI and niche low-level code; prefer the safe alternatives in new code.
+
 ::code-wrapper{language="rust"}
 ```rust
 static mut COUNTER: u32 = 0;
@@ -112,6 +120,10 @@ fn incr() {
 - No synchronization — use atomics instead.
 
 ## Unions
+
+### Why unions exist
+
+Unions exist for **C interop** — they mirror C's `union`, where multiple fields **share the same memory** (all fields start at the same address, so writing one overwrites the others). Rust enums already do this safely (tagged unions), so unions are needed *only* when matching a C ABI that expects a raw union, or for niche memory-overlay tricks. The compiler can't track which field is "active," so reading *any* field requires `unsafe`, and reading the *inactive* field is UB (reinterpreting bytes as the wrong type — e.g., reading an `f32` from an `i32` may produce a signaling NaN, which is UB). You reach for unions for FFI with C structs that contain unions; **otherwise use enums**, which give you the same memory overlap *with* a tag the compiler tracks.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -129,6 +141,10 @@ Unions overlap memory; reading the inactive field is UB. Reading requires `unsaf
 
 ## `MaybeUninit<T>` — Uninitialized Memory
 
+### Why it exists
+
+Rust requires that **all `T`s be valid** — reading an invalid `T` is UB (e.g., reading an uninitialized `bool` that holds `0x03` is UB because `bool` must be `0` or `1`). This makes plain `let x: T;` (read before write) a compile error. But some real patterns need to hold uninitialized memory briefly: FFI that writes into a buffer, manual `Vec`/array initialization, or reading into a stack slot before the data arrives. `MaybeUninit<T>` is the **safe holder** for this: it has *no validity invariant* (any bit pattern is a valid `MaybeUninit`), so creating one is safe. Reading the inner `T` requires `unsafe { .assume_init() }`, at which point *you* promise the inner `T` is now valid. You reach for `MaybeUninit` when interfacing with APIs that fill buffers (FFI, low-level initialization) — it's the modern replacement for the deprecated `mem::uninitialized`.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::mem::MaybeUninit;
@@ -143,6 +159,10 @@ let v: Vec<u8> = unsafe { mu.assume_init() };
 
 ## `ManuallyDrop<T>` — Suppress Drop
 
+### When you need this
+
+`ManuallyDrop<T>` wraps a `T` and makes its `Drop` a **no-op** — the inner value won't be dropped when the `ManuallyDrop` goes out of scope. You reach for this when ownership is transferred elsewhere (FFI: a C function takes ownership of the pointer, so Rust must *not* drop it), or for manual memory pools where you manage destruction explicitly. The inner `T` is then leaked unless you explicitly recover it (`into_inner` to take it back, or `unsafe { ManuallyDrop::take }` to extract without dropping). Conceptually it's a `#[repr(transparent)]` wrapper that simply skips the `Drop` impl — zero runtime cost, just disabling the destructor. Use it when you must hand a Rust value's ownership to something outside Rust's drop system.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::mem::ManuallyDrop;
@@ -155,6 +175,10 @@ unsafe { drop(ManuallyDrop::into_inner(s)) };   // no, into_inner extracts
 `ManuallyDrop<T>` wraps a `T` and disables its `Drop`. Use `ManuallyDrop::into_inner` to recover the value, or `unsafe { ManuallyDrop::take(&mut md) }` to extract without dropping.
 
 ## Splitting Borrows Safely
+
+### Why `split_at_mut` is internally `unsafe`
+
+When you split a slice into two mutable parts (`&mut v[..n]` and `&mut v[n..]`), the borrow checker rejects it: both borrows go through the same `&mut v`, and the compiler can't prove the ranges don't overlap. `split_at_mut` is the safe API that wraps an `unsafe` interior: its signature returns *both* borrows from one input, which is a contract the compiler trusts (the std function's body uses `unsafe` to prove disjointness via pointer arithmetic). You reach for `split_at_mut` whenever you need **two mutable views into disjoint regions of one buffer** — e.g., sorting the front half while processing the back, or a two-pointer algorithm. The general lesson: when the borrow checker can't prove disjointness but you can, look for an std safe wrapper that encodes the proof in its signature.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -304,6 +328,10 @@ fn main() {
 ::
 
 ## `extern "C"` vs `extern "Rust"`
+
+### What an ABI is and why it matters
+
+An **ABI** (Application Binary Interface) is the **calling convention**: how arguments are passed (registers vs stack), who cleans the stack, how return values are returned, and how names are mangled. Different ABIs are incompatible — calling a function through the wrong ABI corrupts the stack or reads garbage. Rust's default ABI is `extern "Rust"` (optimized, unstable across versions). `extern "C"` uses the **C calling convention**, which is stable and universal — that's why FFI uses it: C is the lingua franca of ABIs, and any language that can call C can call an `extern "C"` Rust function. Other ABIs (`stdcall`, `system`, `win64`, ...) matter on specific platforms (Windows API functions use `stdcall` on x86). You reach for `extern "C"` whenever crossing a language boundary; `extern "Rust"` for internal Rust-to-Rust calls where you don't need a stable ABI.
 
 The default ABI is `extern "Rust"` (not stable to name explicitly until 1.86+). C ABI is `extern "C"`. Other ABIs: `stdcall`, `system` (Windows: `stdcall` on x86, `C` on x64), `aapcs`, `fastcall`, `win64`, `sysv64`.
 

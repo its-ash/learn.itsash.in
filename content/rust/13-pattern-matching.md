@@ -4,6 +4,10 @@ Pattern matching is Rust's most expressive control-flow construct. This chapter 
 
 ## Where Patterns Appear
 
+### Why patterns are so pervasive
+
+Rust treats **destructuring as a first-class operation** that works uniformly across `match`, `let`, function parameters, and `if let`. The same pattern language — literal matching, binding, destructuring structs/tuples/enums, ranges, guards — applies in every context. This is why you can write `let (a, b) = pair;` and `match pair { (a, b) => ... }` with the same syntax. The unification exists because destructuring is the primary way Rust takes composite values apart, and the designers chose one consistent pattern grammar rather than per-context dialects. Patterns are *declarative shape-matchers*: they describe the shape of data, not the steps to extract it.
+
 - `match` arms
 - `if let` / `while let`
 - `let` declarations (destructure)
@@ -17,6 +21,7 @@ let (a, b) = (1, 2);
 fn first((a, _): (i32, i32)) -> i32 { a }
 for (i, v) in vec.iter().enumerate() { /* ... */ }
 ```
+::
 ::
 
 ## Pattern Forms
@@ -235,6 +240,10 @@ You can't write `Some(x + 1)` as a pattern. Guards exist for that. Patterns are 
 
 ## Exhaustiveness
 
+### Why exhaustiveness is enforced
+
+The compiler **guarantees** your `match` handles every possible variant — this eliminates an entire class of "forgot a case" bugs that plague languages with switch statements that silently fall through or default. When you add a new variant to an enum later, every `match` on it becomes a compile error until you handle the new case, which makes enum evolution *safe*: the compiler tells you every place that needs updating. This is one of Rust's headline safety guarantees and a major reason enums + `match` replace inheritance hierarchies in many designs.
+
 ::code-wrapper{language="rust"}
 ```rust
 fn classify(c: Color) -> &'static str {
@@ -271,6 +280,10 @@ Concise one-arm matcher returning `bool`.
 - **Tuple struct variants**: `Message::Move { x, y }` (struct form) vs `Message::Write(s)` (tuple form) — must use the form matching the variant.
 
 ## `let` Patterns and Refutability
+
+### Why `let` requires irrefutable patterns
+
+A `let` binding has **no failure path** — it must always succeed — so the pattern must be *irrefutable* (match every possible value of its type). `let (a, b) = tuple` always matches because every 2-tuple has two components. But `let Some(x) = opt` is *refutable*: if `opt` is `None`, what would `x` be? There's no answer, so the compiler rejects it. This is why `if let` (which has an `else` path) and `let-else` (which has a divergence path like `return`/`break`) accept refutable patterns — they have somewhere to go when the pattern fails. The rule exists to make "this binding always succeeds" a guarantee you can rely on, rather than a hidden runtime check.
 
 - `let PATTERN = expr` requires PATTERN to be **irrefutable** (always matches): `let (a, b) = tuple` is fine; `let Some(x) = opt` is an error (refutable).
 - `if let` and `while let` accept refutable patterns.

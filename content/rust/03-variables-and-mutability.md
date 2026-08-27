@@ -68,16 +68,32 @@ const ANSWER: i32 = double(21);
 
 ## Statics
 
+### Why does this exist?
+
+A `static` is a value that lives at a **single, fixed memory address for the entire program**. This is the key difference from `const`: a `const` is *inlined* at every use site (no single home), while a `static` has one home and every reference points to the same memory. You reach for `static` when you need that stable identity — most commonly to obtain a `&'static` reference (e.g., handing a string or config struct to FFI, or embedding a lookup table that must outlive every function call).
+
+Because `static` has a fixed address, it also enables patterns `const` can't: storing a heap type behind a lazy initializer (`OnceLock<String>`), or acting as a global singleton. The tradeoff: a `static` is a real runtime object, so it has a real memory footprint, unlike `const` which vanishes into immediate values.
+
+### How to use it
+
 ::code-wrapper{language="rust"}
 ```rust
-static LANGUAGE: &str = "Rust";
-static mut COUNTER: u32 = 0;   // mutable static — unsafe to read/write
+static LANGUAGE: &str = "Rust";       // &'static str — lives forever
+static mut COUNTER: u32 = 0;          // mutable static — unsafe to read/write
 ```
 ::
 
 - Have a fixed memory address for the program's lifetime.
-- `static mut` requires `unsafe` to access (no synchronization).
-- Use atomics (`std::sync::atomic`) instead of `static mut` for counters.
+- `static mut` requires `unsafe` to access (no synchronization) — **data races on `static mut` are undefined behavior.**
+- Use atomics (`std::sync::atomic`) instead of `static mut` for counters; use `OnceLock` for lazy globals.
+
+### When to choose `static` vs `const`
+
+| Need | Reach for |
+|---|---|
+| A compile-time constant value, inlined everywhere, no address identity | `const` |
+| A stable `&'static` reference, a global singleton, or a lazy-initialized global | `static` |
+| A mutable global counter / flag | atomics in a `static`, never `static mut` |
 
 ## Type Inference
 
@@ -103,7 +119,11 @@ let parsed = "42".parse::<i32>().unwrap();
 
 ## `let` Patterns (Destructuring)
 
-`let` is a pattern, not just a binding:
+### Why this works
+
+In Rust, `let` is a **pattern match**, not just a binding. The thing after `let` is a pattern that the right-hand side is matched against — for simple `let x = 5`, the pattern is just a variable binding (which always matches). But because it's a pattern, you can destructure tuples, arrays, slices, and structs *at the moment of binding*, pulling values out into named variables in one expression. This is why you can write `let (a, b) = pair;` — `pair` is being matched against the pattern `(a, b)`.
+
+You reach for destructuring-`let` whenever a function returns a composite value (a tuple of results, a struct with fields you care about, a `Result` you want to unpack) and you want named access to its parts without a follow-up field-access line. For `let` (and function parameters), the pattern must be **irrefutable** — it must match every possible value of the type, otherwise the compiler rejects it (use `let ... else` or `match` for refutable patterns).
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -114,6 +134,8 @@ let Point { x, y } = point;          // struct destructuring
 let (Ok(v) | Err(v)) = result.map(|n| n + 1).map_err(|e| 0); // or-pattern binding
 ```
 ::
+
+**When to use it**: destructure at the call boundary when you'd otherwise write `let p = make_point(); let x = p.x; let y = p.y;` — the destructure form is idiomatic and keeps helper functions terse, especially ones passed to `.map()`/`.and_then()`.
 
 ## Mutable References vs Mutable Variables
 

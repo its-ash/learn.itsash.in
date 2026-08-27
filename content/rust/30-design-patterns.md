@@ -134,6 +134,10 @@ Static dispatch via generics, or dynamic via `Box<dyn Compressor>`.
 
 ## 5. Visitor Pattern
 
+### Why it exists and when to use it
+
+The visitor pattern **separates traversal logic from the data structure**: instead of putting methods on every variant (which bloats the enum as you add operations), you define one `Visitor` trait with a method per variant, and each `accept` method dispatches to the right visitor method. This is valuable when you have a **fixed data structure** (the enum rarely changes) but **many operations** over it (serialize, pretty-print, type-check, optimize) — each operation is a `Visitor` impl, and adding one doesn't touch the enum. It works via **double dispatch**: the value calls `visitor.visit_X`, and the visitor is type-specific. You reach for it in AST/compiler code, `serde`-style deserializers, and any "many operations over a fixed shape" scenario. Prefer a plain `match` when you have few operations — the visitor pattern adds indirection that's only worth it past a handful of operations.
+
 For traversing heterogeneous structures:
 
 ::code-wrapper{language="rust"}
@@ -162,6 +166,10 @@ Common in `serde` deserializers and AST traversal.
 
 ## 6. Command Pattern
 
+### Why it exists and when to reach for it
+
+The command pattern **encapsulates an action as a value** — you turn a function call into a first-class object you can store, queue, serialize, undo, and replay. This is the foundation of undo/redo (each command records how to reverse itself), task queues (commands pile up and run later), and macro recording (record the command stream, replay it). You reach for it when you need to **treat actions as data**: a `Vec<Box<dyn Command>>` is a queue of deferred work; an `UndoStack` of commands is an undo system. The tradeoff: it's more ceremony than a plain function call, so reach for it only when the value-as-action property is genuinely useful (queuing, undo, replay) — not as a default way to call things.
+
 ::code-wrapper{language="rust"}
 ```rust
 pub trait Command { fn execute(&self, ctx: &mut Context); }
@@ -178,6 +186,7 @@ let cmds: Vec<Box<dyn Command>> = vec![
 ];
 for c in cmds { c.execute(&mut ctx); }
 ```
+::
 ::
 
 ## 7. RAII — Resource Acquisition Is Initialization
@@ -202,6 +211,10 @@ impl Drop for File {
 No leak, no double-close, no use-after-close — all enforced by the compiler.
 
 ## 8. Iterator Pattern
+
+### Why it's idiomatic in Rust
+
+Rust's iterator pattern is **lazy** (no work until consumed), **zero-cost** (adapters inline to tight loops), and **composable** (chains like `.filter().map().take()` build a single fused iterator). This is idiomatic because it cleanly **separates traversal from consumption**: you describe *what* to iterate over (the chain), then *how* to consume it (`collect`, `sum`, `for`). `next()` is **pull-based** — the consumer asks for the next item, and the iterator computes it on demand, so infinite iterators and short-circuiting work naturally. You reach for custom `impl Iterator` when no composition of existing adapters expresses your iteration (stateful generation, external sources); otherwise, **prefer composing existing adapters** over a hand-written `next()` — they're zero-cost and battle-tested.
 
 Lazy, composable:
 
@@ -248,6 +261,10 @@ use crate::StrExt;
 You can't implement an external trait for an external type (orphan rule), but you *can* implement your own trait for any type.
 
 ## 11. Handle / RAII Wrapper around Foreign Types
+
+### Why this pattern is valuable
+
+When you integrate a C library (or any "foreign" resource — a database connection, a file descriptor, a GPU buffer), the C API gives you a **raw handle** (`*mut sqlite3`, an integer fd) with manual lifecycle rules: you must call `close`/`free` exactly once, and use-after-free is UB. Wrapping the handle in a Rust struct with a `Drop` impl **turns this manual lifecycle into compiler-enforced RAII**: Rust's ownership and `Drop` guarantee the handle is closed exactly once (when the wrapper drops), can't be used after (the wrapper is moved/consumed), and propagates correctly through `?`/early returns. You reach for this whenever you integrate a foreign resource — it's the bridge between "manual C lifecycle" and "Rust's automatic safety."
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -401,6 +418,10 @@ pub fn add(a: i32, b: i32) -> i32 { a + b }
 - Lifetime params: `'a`, `'b`, `'src`, `'arena`.
 
 ## 27. Error vs Option Heuristic
+
+### Why the distinction and how to decide
+
+`Option` and `Result` encode different things: `Option` encodes **total absence** (a key not in a map, an optional config field) — there's no "why," it's just not there. `Result` encodes **a recoverable failure with a cause** (a parse that hit bad input, an I/O that errored) — the `Err` carries information about *what went wrong*. Reach for `Option` when "nothing" is a normal, expected state (the user might not have set that config); reach for `Result` when the operation *tried* and *failed*, and the caller might want to log/retry/recover based on the error. The judgment call: if the caller would ask "why?", use `Result`; if the caller only cares "is it there?", use `Option`. Using `Result` for mere absence forces every caller to handle an "error" that's really just "no value," which is noise.
 
 - `Option` for "absent" (looking up a key, optional config).
 - `Result` for "operation failed" (parse, IO, network).

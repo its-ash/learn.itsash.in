@@ -92,7 +92,11 @@ You rarely implement `Future` manually. Async functions desugar to anonymous `Fu
 
 ## `Pin`
 
-`Pin` guarantees a value won't be moved in memory. Required because self-referential futures (which reference their own stack across `.await`) would break if moved.
+### How pinning works conceptually
+
+`Pin<P>` is a pointer wrapper that **guarantees the pointee won't be moved in memory** after it's pinned. This matters because async blocks desugar to **state machines that can be self-referential** — an `async fn` stores its local variables in a struct, and a future paused at an `.await` may hold a reference to *another* field of the same struct. If that struct were moved, the internal reference would dangle. `Pin` exists to make "this won't be moved" a compile-time guarantee the `Future` API can rely on.
+
+The `Unpin` marker is the escape hatch: most types (heap boxes, plain integers, structs of `Unpin` fields) are `Unpin`, meaning pinning them is a no-op — they're safe to move even while pinned, because they don't self-reference. Only *self-referential* futures need the pin guarantee; that's why `Future::poll` takes `Pin<&mut Self>` — to protect self-referential futures. You mostly encounter `Pin` in trait signatures and `Box::pin`; the `Unpin` bound is what makes everyday pinned values movable. You rarely write `Pin` by hand — `Box::pin` and `pin-utils` handle the common cases.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -104,6 +108,10 @@ let pinned: Pin<&mut _> = Pin::new(&mut fut);
 You mostly encounter `Pin` in trait signatures and APIs (e.g., `Future::poll`). The `pin-utils` or `Box::pin` handle the common cases.
 
 ## `Box<dyn Future>` and `Pin<Box<dyn Future>>`
+
+### When you need boxing
+
+You box a future when you need **type erasure**: storing futures of *different* concrete types in one collection (`Vec<Pin<Box<dyn Future<Output = ()>>>`), or returning *different* future types from different branches of a function (`if cond { async { 1 } } else { other_async() }` — each branch has a different anonymous type, so you can't return `impl Future` without boxing). `Box::pin` heap-allocates the future and type-erases it to `dyn Future`, at the cost of one allocation + vtable dispatch. Use `impl Future` (below) when you *can* — it's zero-cost; reach for `Box::pin` only when the type erasure is genuinely needed.
 
 Because futures have unique unnameable types, storing them in collections or returning them generically requires boxing:
 
@@ -118,6 +126,10 @@ fn make_fut() -> Pin<Box<dyn Future<Output = i32> + Send>> {
 `Pin<Box<dyn Future>>` is the trait-object form of a future.
 
 ## `impl Future`
+
+### When to use `impl Future` vs `Pin<Box<dyn Future>>`
+
+`impl Future` returns a **concrete (but hidden) future type** with **static dispatch** — the compiler monomorphizes and can inline, so it's zero-cost. Reach for it when your function returns **a single future type** (one `async` block, one call chain). The limitation: every `return` must yield the *same* concrete future type, so you can't return different branch futures without boxing. `Pin<Box<dyn Future>>` is the fallback when you need type erasure (heterogeneous collections, multi-branch returns); it trades one allocation + vtable dispatch for that flexibility.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -157,6 +169,10 @@ Async `read`/`write` yield when the syscall would block. The runtime parks the t
 
 ## `tokio::select!`
 
+### How it works and when to reach for it
+
+`select!` **polls all branches concurrently** and completes when the *first* one is ready — the others are **dropped** (canceled). Conceptually, it's a race: every branch's future is polled; the winner produces the result; the losers are abandoned. This is why `select!` has **cancellation semantics** — unselected futures don't continue running, they're dropped (their state, including any held resources, is released). You reach for `select!` for **racing**: a timeout vs. the operation, two I/O sources where you take the first, or "wait for any of these." The `biased` option makes branches polled in declaration order (first-listed wins ties); without it, branches are randomized to avoid starvation. Branching with `&mut` futures instead of consuming them lets you keep using the unselected ones across loop iterations.
+
 Race multiple futures, take the first to complete:
 
 ::code-wrapper{language="rust"}
@@ -172,6 +188,10 @@ Unselected branches are dropped. Use `biased` for ordering, or branch with `&mut
 
 ## Streams (Async Iterators)
 
+### What a stream is and when to use one
+
+A `Stream` is the **async analog of `Iterator`**: it yields a sequence of values over time, but each `next()` is `async` — it awaits the next value rather than returning immediately. You reach for a stream when values arrive **asynchronously over time** (a websocket receiving messages, lines from an async file read, a queue being drained) and `for` won't work because each step needs `.await`. Conceptually, streams are **pull-based** (you ask for the next item) — contrast with channels, which are **push-based** (the sender pushes; you receive). Use a stream when you're iterating async-produced values; use a channel when you're decoupling a producer from a consumer across tasks.
+
 ::code-wrapper{language="rust"}
 ```rust
 use futures::stream::{self, StreamExt};
@@ -186,6 +206,15 @@ while let Some(v) = s.next().await {
 `StreamExt::next().await` is the async equivalent of `Iterator::next()`. `try_stream`/`tokio_stream` for building streams.
 
 ## Channels
+
+### Which async channel to use
+
+`tokio::sync` offers four channel types with distinct semantics — pick based on how many **receivers** you need and whether you need **history** or just the **latest** value:
+
+- **`mpsc`** — multi-producer, **single**-consumer. The workhorse: many tasks send, one task drains. Bounded (backpressure) or unbounded.
+- **`broadcast`** — multi-producer, **multi**-consumer. Every receiver sees every message (cloned to each). Use for fan-out (event broadcast to many subscribers).
+- **`oneshot`** — single-value, one-shot. Send exactly once, receive exactly once. Use for "a one-time response" (request/response where the request is a future).
+- **`watch`** — single-value **latest-only**. Receivers always see the most recent value, not the history. Use for "a config value that changes over time" where consumers just need the current state.
 
 `tokio::sync::mpsc`, `tokio::sync::broadcast`, `tokio::sync::oneshot`, `tokio::sync::watch`:
 
@@ -239,13 +268,25 @@ some_async().await;
 
 ## Canceling Futures
 
+### How cooperative cancellation works
+
+Cancellation in async Rust is **cooperative**: dropping a `Future` cancels it — the future's `Drop` runs, releasing resources, and it never resumes. This is why `select!` cancels unselected branches (it drops them). The subtlety: **dropping a future mid-`.await` can leak resources** if the future holds a lock, an open file, etc. — the `Drop` cleans up, but the work in progress is abandoned. `CancellationToken` exists for **explicit, graceful cancellation**: instead of dropping, you signal cancellation, and the future can `.await` the token, finish its current work cleanly (flush, release locks, log), then exit. Reach for `CancellationToken` when the future needs to clean up *before* stopping; reach for drop-cancellation when abrupt termination is fine.
+
 Dropping a future cancels it. The `select!` drop semantics mean unselected branches are canceled. Use `CancellationToken` for cooperative cancellation.
 
 ## Backpressure
 
+### What it is and why it matters
+
+Backpressure is the mechanism by which a **slow consumer slows down a fast producer** — without it, a fast producer floods a slow consumer, causing unbounded memory growth (the queue fills) and eventual OOM. A **bounded channel** (`mpsc::channel(n)`) is the canonical tool: when the buffer is full, `send().await` *suspends the sender* until space frees, naturally throttling production to match consumption. Unbounded channels have no backpressure — the producer never blocks, so memory grows with the queue. Reach for bounded channels whenever a producer *could* outrun a consumer; reach for unbounded only when the producer is provably slower than the consumer or you have a different flow-control mechanism.
+
 Use bounded channels (`mpsc::channel(n)`). `.send().await` blocks when full, naturally propagating backpressure to producers.
 
 ## Async Traits (1.75+)
+
+### Why this was historically hard
+
+Before 1.75, `async fn` in traits wasn't supported natively because **the return type of an async fn is an anonymous future** — you can't name it in a trait signature (`fn call() -> ???`), and the future may borrow from `self`, complicating lifetime bounds. The `async-trait` crate worked around this by **boxing** every async method's future (`Pin<Box<dyn Future>>`), which costs an allocation + vtable per call. Native support (1.75+) lets you write `async fn` in traits without boxing, but with limitations: `dyn` dispatch still needs `async-trait` (the native form is monomorphized, not object-safe), and some patterns (recursion) require care. Reach for native async traits in generic code (zero-cost); reach for `async-trait` when you need `dyn Trait` (object-safety) or older-toolchain compatibility.
 
 ::code-wrapper{language="rust"}
 ```rust

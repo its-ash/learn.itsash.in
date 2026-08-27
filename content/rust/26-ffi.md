@@ -159,6 +159,10 @@ let rust_str = cstr.to_str().unwrap();
 
 ## OS Strings: `OsString` and `OsStr`
 
+### Why these exist
+
+`OsString`/`OsStr` exist because **OS strings aren't guaranteed UTF-8**: on Unix, file paths and env vars are arbitrary bytes (any `u8` sequence); on Windows, they're UTF-16. `String`/`&str` enforce UTF-8, so they can't represent every valid OS path (a Unix path with invalid UTF-8 bytes can't be a `String`). `OsString`/`OsStr` wrap the OS-native representation directly, so they roundtrip any valid path. You reach for them whenever you handle **file paths or environment variables** from the OS — `std::env::args_os()`, `std::fs` APIs that take `AsRef<Path>`. For *path semantics* (joining, parent/basename, extensions) prefer `PathBuf`/`Path`, which wrap `OsStr` and add path operations. Use `String` when you've validated UTF-8 and want the byte-level guarantees.
+
 For platform-native strings (file paths, env):
 
 ::code-wrapper{language="rust"}
@@ -202,6 +206,10 @@ Rust's `Vec::push`/`String::push` use Rust's allocator. C's `malloc`/`free` use 
 
 ## Structs Across FFI
 
+### What `#[repr(C)]` guarantees
+
+`#[repr(C)]` forces **C-compatible field layout**: fields appear in declaration order with C ABI padding rules, so the struct's memory matches what a C compiler produces. Rust's default layout is *unspecified* — the compiler reorders fields to minimize padding, which is great for performance but **incompatible** with C (a C struct's field order is fixed). You reach for `#[repr(C)]` whenever a struct crosses the FFI boundary: passed to/from C, read from a binary format, or shared memory-mapped. The other `repr` variants: `#[repr(transparent)]` for a newtype that must be binary-identical to its single field (a `struct Wrapper(u64)` that's exactly a `u64` to C); `#[repr(packed)]` to disable padding (for matching packed C structs — but unaligned reads are UB). Avoid `Box`/`Vec`/`String` in `repr(C)` structs: they're Rust-specific layouts C can't interpret.
+
 ::code-wrapper{language="rust"}
 ```rust
 #[repr(C)]
@@ -223,6 +231,10 @@ pub extern "C" fn translate(p: Point, dx: f64, dy: f64) -> Point {
 
 ### Opaque Types
 
+### Why a ZST works
+
+When C exposes an **opaque pointer** (`typedef struct Foo Foo;` — C code uses `Foo*` without ever dereferencing the fields), Rust models this with a **zero-sized struct** (`[u8; 0]`). The struct is never instantiated — it exists only as a type for `*mut Foo` to point through. You reach for this whenever a C API hands you an opaque handle (a database connection, a window handle, a context) that you must not dereference from Rust — the ZST ensures you can't accidentally read fields (there are none), and the pointer is only ever passed back to C functions that know how to use it. The `_private` field naming convention signals "don't touch."
+
 When C uses an opaque pointer (`typedef struct Foo Foo;`), use a zero-sized ZST:
 
 ::code-wrapper{language="rust"}
@@ -240,6 +252,10 @@ extern "C" {
 `[u8; 0]` is the convention for opaque types.
 
 ## Function Pointers
+
+### When you need `Option<extern "C" fn>`
+
+C APIs often use **nullable callbacks** — a function pointer that may be `NULL` to mean "no callback." Rust models this with `Option<extern "C" fn(...)>`, which has a niche optimization: `None` is represented as a **null pointer**, so the ABI matches C's `NULL` exactly (no extra discriminant). You reach for this whenever a C struct has an optional callback slot. For non-optional callbacks, use `extern "C" fn` directly (a non-null pointer). The user-data `void*` is the standard way C passes context to a callback — from Rust, you typically pass a `Box::into_raw` pointer and recover it with `Box::from_raw` in the callback (then free it when done).
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -347,13 +363,15 @@ mod ffi {
 
 ## `extern "C"` and ABIs
 
+### How an ABI mismatch manifests
+
 Common ABIs:
 - `"C"` — System V / cdecl depending on platform.
 - `"stdcall"` — Windows x32.
 - `"system"` — `stdcall` on Win32, `"C"` on Win64.
 - `"win64"`, `"sysv64"` — explicit x64/SysV.
 
-Mismatched ABIs cause subtle corruption. Use `bindgen` to get them right.
+A mismatched ABI is one of the most insidious FFI bugs: it **doesn't error at compile time or link time** — the function compiles and links fine (the *name* matches), but at runtime the arguments land in the wrong registers/stack slots, producing silent corruption (garbage values, stack damage, crashes that disappear under a debugger). This is why `bindgen` is the standard tool: it reads the C headers and emits Rust declarations with the *exact* ABI the C compiler used, eliminating guesswork. Reach for `bindgen` whenever you're binding to a non-trivial C library; hand-writing `extern` declarations risks subtle ABI mismatches that only surface at runtime.
 
 ## Build Scripts for FFI
 

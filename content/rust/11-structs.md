@@ -48,6 +48,16 @@ let u2 = User { email: String::from("ada2@x.com"), ..u };
 
 ## Tuple Structs
 
+### Why this exists
+
+A tuple struct looks like a tuple but is a **distinct nominal type** — `Color(i32, i32, i32)` and `Point(i32, i32, i32)` are *different types* to the compiler even though they have the same fields. This is the foundation of the **newtype pattern**: wrapping a type in a struct (`struct Meters(f64)`) creates a new type the compiler won't freely mix with `f64` or with `struct Miles(f64)`. You get type safety (you can't accidentally add `Meters` to `Miles`) at **zero runtime cost** — the wrapper is erased in the final binary. Without this, you'd rely on naming conventions that the compiler can't enforce.
+
+### When to reach for it
+
+- **Newtype for type safety**: wrap a primitive (`UserId(u64)`, `Meters(f64)`) so it can't be confused with other values of the same primitive type.
+- **Tuple-like access**: when field *names* would be noise (e.g., a coordinate's `.0`/`.1` is clearer than `.x`/`.y` in some math code).
+- **Pattern matching**: `let Color(r, g, b) = c;` is a positional destructure, useful when you don't need named fields.
+
 ::code-wrapper{language="rust"}
 ```rust
 struct Color(i32, i32, i32);
@@ -61,6 +71,10 @@ let r = c.0;
 - Pattern match: `let Color(r, g, b) = c;`.
 
 ## Unit Structs
+
+### Why this exists
+
+A unit struct carries **no data** (it's zero-sized) but is still a distinct type. Its purpose is **type-level tagging**: a value that exists only to be a *type* you can attach trait implementations to, not to carry runtime information. This is how marker traits, type-state patterns, and trait-based dispatch work — you encode information in the *type* rather than in a runtime value. For example, a `struct Uninitialized;` vs `struct Initialized;` can encode a state machine at the type level with zero runtime cost.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -89,6 +103,10 @@ impl User {
 You can split `impl` across multiple blocks (common in real codebases: one for methods, one for trait impls).
 
 ## Methods vs Associated Functions
+
+### Why the distinction exists
+
+**Methods** take a receiver (`&self`/`&mut self`/`self`) and operate on an *instance* — they're called as `u.is_active()`. **Associated functions** don't take `self` — they're functions *namespaced* under the type, not tied to a value; the canonical example is a constructor (`User::new`). The distinction matters because methods are part of the type's *behavior* (they need an instance), while associated functions are part of the type's *namespace* (constructors, helpers, conversions that don't operate on an existing value). This is why you call `User::new(...)` (a static-like associated fn) but `u.is_active()` (a method on an instance).
 
 - Methods take `&self`/`&mut self`/`self` and are called on instances: `u.is_active()`.
 - Associated functions (no `self`) are constructors: `User::new(...)`.
@@ -138,6 +156,10 @@ Const generics (1.51+) allow parametrizing by compile-time constants. Limited to
 
 ## Derive Macros
 
+### How it works
+
+A `#[derive(...)]` attribute asks the compiler to **auto-generate a trait implementation** for you by expanding a macro at compile time. Derives exist because most trait impls for simple structs are pure boilerplate (`Debug` just walks the fields, `Clone` just clones each field, `PartialEq` just compares fields). Without derives, you'd hand-write the same field-by-field logic for every struct. With them, a one-line attribute produces the impl. Reach for derives for the common traits; write the impl by hand only when you need custom behavior (a `Debug` that hides a secret field, a `Display` that formats user-facing text — note `Display` is **not** derivable).
+
 ::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -169,8 +191,9 @@ Idiomatic way to provide "default with overrides".
 
 ## `Debug` vs `Display`
 
-- `Debug` is derived, machine-readable-ish (`{:?}` / pretty `{:#?}`).
-- `Display` is user-facing; you must write it manually.
+### Why two traits exist
+
+`Debug` and `Display` exist for the two *different audiences* of formatted output. `Debug` is for **developers/diagnostics** — it's auto-derivable, produces a `{:?}` representation that shows the structure (including private fields), and is meant for logging and debugging, not for users. `Display` is for **end users** — it's intentionally **not** derivable, because user-facing formatting is a design decision the compiler can't make for you (how should a `User` render to a human?). You must write `Display` by hand precisely so the output is a deliberate choice. This is why `{:?}` works on almost anything (derivable) while `{}` requires a hand-written impl.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -181,6 +204,9 @@ impl std::fmt::Display for User {
 }
 ```
 ::
+
+- `Debug` is derived, machine-readable-ish (`{:?}` / pretty `{:#?}`).
+- `Display` is user-facing; you must write it manually.
 
 ## Struct Updates and Moves
 
@@ -263,11 +289,21 @@ The fix is to change `heaviest_summary` to take `&self` (it doesn't actually nee
 
 ## `impl` Method Dispatch
 
+### How auto-ref/deref works
+
+When you call `u.is_active()` on an owned `User`, but `is_active` takes `&self`, the compiler **auto-inserts the `&`** for you — this is *auto-ref*. Deref chains go the other way: calling a `&self` method on a `Box<User>` auto-derefs through the `Box`. This is *why* you can call `u.is_active()` whether `u` is owned, borrowed, or behind a smart pointer, without manually writing `&u.is_active()` or `(*u).is_active()` — the receiver type is adjusted to match the method's signature. The compiler picks the receiver form that fits; if multiple methods match ambiguously, you must disambiguate explicitly.
+
 - Methods taking `self` by value consume the receiver.
 - Method resolution finds methods on `Self`, `&Self`, `&mut Self` automatically based on call syntax.
 - Auto-ref/deref lets you call `&self` methods on owned values and vice versa.
 
 ## Memory Layout
+
+### Why the compiler reorders fields
+
+By default, the compiler is free to **reorder your struct's fields** to minimize padding — gaps inserted for alignment. Because different types have different alignment requirements (e.g., `u64` must sit at an 8-byte boundary), a naive field order can waste memory on padding; the optimizer sorts fields to pack them tightly, producing a smaller struct that uses cache better. You give up a guaranteed layout in exchange for size/perf.
+
+You override this when a **specific layout is required**: FFI needs the C ABI's field order (`#[repr(C)]`); a newtype wrapper must have *exactly* the inner type's layout (`#[repr(transparent)]`, so `struct Wrapper(u64)` is binary-identical to `u64`); a binary format with no padding needs `#[repr(packed)]` (but unaligned reads become UB — read field-by-field through `addr_of!`).
 
 - Reorder fields for minimal padding — the compiler does this by default (repr optimization). Use `#[repr(C)]` to force C-compatible layout (FFI). Use `#[repr(transparent)]` for newtype wrappers (same layout as inner). Use `#[repr(packed)]` to disable padding (careful with alignment → unaligned reads are UB).
 

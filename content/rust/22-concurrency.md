@@ -86,6 +86,10 @@ println!("{:?}", counter);   // 10
 
 ## `RwLock` for Read-Heavy Workloads
 
+### When to reach for `RwLock` vs `Mutex`
+
+`RwLock` allows **many simultaneous readers or one writer** — versus `Mutex`, which allows **one accessor** regardless of read/write. You reach for `RwLock` when the access pattern is **read-heavy** (many threads read, few write): readers don't block each other, so reads scale with thread count. Use a plain `Mutex` when writes are common or when the read critical section is tiny — `RwLock` has higher overhead than `Mutex` (tracking reader count, writer starvation prevention), so it can be *slower* than `Mutex` under mixed or write-heavy loads. Watch for **writer starvation**: if readers continuously hold the lock, a writer may wait a long time; some implementations prioritize writers, others don't.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::RwLock;
@@ -150,6 +154,10 @@ s.send(5).unwrap();
 
 ## `park` and `unpark`
 
+### Why this primitive exists
+
+`park`/`unpark` is the **low-level thread-blocking primitive** underpinning `Condvar` and channels. `park()` blocks the current thread until `unpark()` is called on its handle (or a spurious wakeup occurs). The key design point: `unpark()` is **idempotent and sticky** — calling it *before* `park()` records a "permit," so the next `park()` returns immediately instead of blocking forever. This avoids the lost-wakeup race that plagues naive `wait`/`notify` implementations. You usually **don't** use `park`/`unpark` directly — it's easy to get wrong, and channels/`Condvar`/`Barrier` are clearer. Reach for it only when building a custom synchronization primitive that needs finer control than those abstractions provide.
+
 Threads can be paused and woken:
 
 ::code-wrapper{language="rust"}
@@ -195,6 +203,10 @@ The classic pattern: wait inside the lock; `wait` atomically releases + sleeps +
 
 ## `Barrier`
 
+### When to reach for it
+
+A `Barrier` blocks threads at a **checkpoint** until `n` have arrived, then releases them all simultaneously. You reach for it for **phased computation**: simulations where all threads must finish step `k` before any starts step `k+1`, or initialization where all workers wait for setup to complete before racing. It differs from `Condvar` (which signals a condition, not a count) and from `Mutex` (which serializes, not syncs phases). Use it when you need "everyone ready, then everyone go" semantics.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::Barrier;
@@ -205,6 +217,10 @@ let barrier = Arc::new(Barrier::new(3));
 
 ## `Once` and `OnceLock`
 
+### Why they exist
+
+`Once`/`OnceLock` provide **one-time initialization** that's safe across threads: the initializer runs exactly once, every other caller blocks until it's done, and subsequent accesses are fast (no locking on the read path). You reach for them for **thread-safe singletons** and lazy globals — a config loaded once on first use, a registry populated on demand. `Once` is the legacy primitive (runs a closure once, holds no value); `OnceLock` (1.70) is the modern form that *holds* the initialized value, so you read it back without a separate static. `LazyLock` (1.80) builds on `OnceLock` for the "initialize on first deref" ergonomics.
+
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::OnceLock;
@@ -212,10 +228,13 @@ static INIT: OnceLock<Vec<u8>> = OnceLock::new();
 let data = INIT.get_or_init(|| load_config());
 ```
 ::
+::
 
 ## Atomic Types
 
 `std::sync::atomic`: `AtomicBool`, `AtomicI32`, `AtomicUsize`, `AtomicPtr<T>`, etc.
+
+Atomics let you **read and modify shared state without a lock** — they map to the CPU's atomic instructions, so they're much cheaper than a `Mutex` for simple counters/flags. You reach for them when the shared state is *simple* (a counter, a flag, a once-init marker) and the lock overhead would dominate. For complex state or multi-step invariants, use a `Mutex` — atomics only protect *single* operations, not multi-variable invariants.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -228,15 +247,21 @@ n.compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed);
 
 ### Orderings
 
-- `Relaxed`: no ordering constraints, just atomicity.
-- `Acquire`: later reads see the latest writes (pair with `Release`).
-- `Release`: prior writes are visible to `Acquire` readers.
-- `AcqRel`: both.
-- `SeqCst`: total order across threads (most expensive).
+Memory ordering is about **visibility**: when thread A writes and thread B reads, what guarantees does B have about seeing A's writes (and writes that happened-before A's)? The CPU and compiler reorder instructions for performance; orderings constrain that reordering so concurrent code behaves correctly. Conceptually, atomics form a **happens-before graph** — `Release` on the write side and `Acquire` on the read side establish an edge that guarantees the reader sees the writer's prior writes.
 
-Use `SeqCst` if unsure; switch to `Relaxed`/`Acquire`/`Release` once you understand the memory model.
+- `Relaxed`: no ordering constraints, just atomicity. Safe for a counter where you don't care about ordering relative to other variables.
+- `Acquire`: later reads see the latest writes (pair with `Release`). Use on the *load* side of a synchronization point.
+- `Release`: prior writes are visible to `Acquire` readers. Use on the *store* side.
+- `AcqRel`: both — for read-modify-write operations (e.g., `fetch_add`) that act as both.
+- `SeqCst`: total order across threads (most expensive). Use when you need a single global order or are unsure.
+
+**Default to `SeqCst`** if unsure — it's always correct, only slower. Switch to `Relaxed`/`Acquire`/`Release` once you understand the memory model and have a specific reason (a hot lock-free counter can use `Relaxed` if it doesn't synchronize other data; a lock-free queue uses `Acquire`/`Release` for its head/tail indices).
 
 ## Thread-Local Storage
+
+### When to reach for it
+
+Thread-local storage gives **each thread its own private copy** of a variable — no synchronization needed, because no other thread can see it. You reach for it to **avoid lock contention** for per-thread state: a per-thread buffer (no allocation per use), a per-thread RNG (no locking), a per-thread accumulator that's merged at the end. It's also useful when a library needs thread-affine state (e.g., a per-thread connection cache). The cost: each thread has its own slot, destructors run on thread exit, and you can't share the value across threads without copying.
 
 ::code-wrapper{language="rust"}
 ```rust

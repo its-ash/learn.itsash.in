@@ -7,6 +7,12 @@ Macros generate code at compile time. Rust has two kinds:
 
 ## Why Macros?
 
+### Why they must exist
+
+Rust has **no function overloading and no variadic generics**, so several common patterns can't be expressed as regular functions: `println!` (variadic arguments + compile-time format checking), `vec!` (variadic values), `format!`, `assert_eq!`. Macros fill this gap by **expanding at compile time, before the type checker runs** — they generate code at the AST level, so they can take any number of arguments of any type and emit code the type checker then validates. This is why `println!("{}", x)` is a macro not a function: a function can't take a format string and a variadic list of values and check them at compile time.
+
+Macros also reduce **boilerplate** (derive macros auto-generate trait impls) and enable **DSLs** (`html!` in yew, `sql!` in sqlx). The cost: macros operate before type checking, so error messages can be opaque, and they can't see generic bounds. Reach for a macro only when a regular function or trait can't do the job (variadic args, compile-time codegen, custom syntax).
+
 - Variadic arguments (`println!`, `vec!`).
 - Compile-time string interpolation (format strings are checked).
 - Reducing boilerplate (derive macros).
@@ -31,6 +37,18 @@ let v = vec_of!(1, 2, 3);
 ::
 
 ### Macro Syntax
+
+### What each fragment specifier captures
+
+Fragment specifiers define **what kind of syntax tree the metavariable matches** — they're the macro's type system. The choice matters because it controls both flexibility and parsing:
+
+- `:expr` — a complete expression (e.g., `1 + 2`, `foo()`). Most permissive for values, but the greediest — it captures the whole expression, so `:expr,` can't tell if the `,` is a separator or part of the expression. This is why `:expr` has strict **follow rules** (below).
+- `:ident` — a single identifier (variable/type names). Use when you want a name to bind or pass along.
+- `:ty` — a type. Use when a macro takes a type parameter (e.g., `vec_of!<T>`).
+- `:tt` — a **single token tree** (any single token or balanced `<...>`/`(...)`/`{...}`/`[...]`). The most flexible — `:tt` can be re-parsed later, making it the basis for incremental/macro-lib parsing. But it matches *one* token tree at a time, so you need repetition to capture a list.
+- `:item`, `:pat`, `:stmt`, `:literal`, `:vis`, `:lifetime`, `:block`, `:path`, `:meta` — more specialized; see the reference.
+
+**When to choose which**: `:expr` for values (simplest); `:tt` when you need maximum flexibility (parsing a custom DSL incrementally); `:ident` for names; `:ty` for types. The greedier the specifier, the more constrained its follow rules (to avoid ambiguity).
 
 - `$name`: a "metavariable".
 - `:expr`, `:ident`, `:ty`, `:tt`, `:item`, `:pat`, `:stmt`, `:literal`, `:vis`, `:lifetime`, `:block`, `:path`, `:meta`, `:expr_2021` — fragment types.
@@ -69,6 +87,10 @@ Two arms handle empty/one/many. The first arm matches the empty case (sum of not
 
 ### Fragment Capturing and Follow Rules
 
+### How the macro parser works and why follow rules exist
+
+The macro parser is **greedy**: it matches as much as it can against a fragment specifier. `:expr` swallows a *complete* expression — including constructs that could *continue* (like `;` ending a statement, or `=>` separating arms). After matching a `:expr`, the parser then looks for the *next* token in the pattern; but because `:expr` greedily consumed everything valid, it's ambiguous whether a following `;` is part of the captured expression or the macro's separator. The **follow rules** resolve this by declaring which tokens may legally follow each fragment type — `:expr` may be followed by `=>` (clearly not part of the expression) but **not** by `;` (could be a statement separator or part of the expr). When you hit a follow-rule error, the fix is usually a workaround: use `$(,)?` for trailing commas, switch to `:tt` with manual parsing, or restructure the macro to avoid the ambiguous token.
+
 Each fragment type has rules about what can follow it (because the parser is ambiguous otherwise). E.g., `:expr` followed by `=>` is OK, but `:expr` followed by `;` is not (because `;` could be part of the expression). Common workaround: use `$(,)?` for trailing commas.
 
 ### Hygiene
@@ -90,6 +112,10 @@ swap!(a, b);
 ::
 
 ### `macro_export`
+
+### Why the placement quirk exists
+
+`macro_rules!` macros are **resolved at the crate root** because they expand *before* the module system is fully finalized — there's no module path for them yet. `#[macro_export]` exploits this: regardless of *where* in the module tree you define the macro, it's placed at the crate root for both internal and external use. This is why a macro defined in `mod a::b` is called as `my_crate::my_macro!()`, not `my_crate::a::b::my_macro!()` — the nesting is invisible to callers. You reach for `#[macro_export]` when you want a macro usable outside its defining module (or by downstream crates); use `pub use` to re-export it under a different path if you want it visible at a non-root location.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -149,7 +175,13 @@ macro_rules! vec {
 
 ## Procedural Macros
 
-Procedural macros run real Rust code (a separate crate of type `proc-macro = true`). Three flavors:
+### When to reach for each flavor
+
+Procedural macros run real Rust code (a separate crate of type `proc-macro = true`). Three flavors, each for a distinct use:
+
+- **Derive** (`#[derive(MyTrait)]`): the most common. Generate a trait impl from a struct/enum. Reach for this when you want users to "derive" your trait (`#[derive(Serialize)]`, `#[derive(Debug)]`) — it's the ergonomic, well-understood form.
+- **Attribute** (`#[my_attr]`): transforms the annotated item — add fields, rewrite the function, inject code. Reach for this when you need to *modify* existing items (e.g., `#[tokio::main]` rewrites `async fn main` into a runtime setup, `#[tracing::instrument]` adds span instrumentation).
+- **Function-like** (`custom_macro!(...)`): custom syntax that isn't a derive or attribute. Reach for this for DSLs (`html!`, `sql!`) or when you need parsing a function can't express. Least common of the three.
 
 1. **Function-like** (custom `macro!` syntax): `custom_macro!(...)`.
 2. **Derive**: `#[derive(MyTrait)]`.
@@ -248,6 +280,10 @@ pub fn log_calls(attr: TokenStream, item: TokenStream) -> TokenStream { /* ... *
 Receives both the attribute arguments and the item being annotated.
 
 ### Helper Crates
+
+### How they fit together
+
+Writing a proc-macro from scratch is a pipeline: **`syn` parses** the input token stream into a typed AST (e.g., `ItemStruct`), **you transform** that AST (extract fields, read attributes, build the generated code), and **`quote` emits** the result back as a token stream (the `quote!` macro splices Rust values into code with `#name`-style interpolation). `proc-macro2` is the stable-API shim (the `proc_macro` crate's types are only available inside a proc-macro crate; `proc-macro2` lets you write reusable parsing logic). Reach for **`darling`** when your derive has complex attributes (it parses `#[derive(MyTrait, helper = "value")]` ergonomically, saving you manual `syn` attribute walking). Reach for **`proc-macro-error`** when you want good error messages (it lets you emit span-located errors instead of panicking).
 
 - `syn`: parse Rust syntax.
 - `quote`: build TokenStreams with `quote!` macro.

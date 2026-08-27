@@ -124,6 +124,10 @@ Don't take `&Vec<T>` or `&String` — they impose ownership and lose the more ge
 
 ### 3. Choose Iterators Over Explicit Loops (Sometimes)
 
+### Why iterators can be faster
+
+Iterator chains can be **faster** than hand-written loops because LLVM can prove stronger properties about them: the adapters are pure (no aliasing into the source collection, no early-exit side effects), so the optimizer can **auto-vectorize**, unroll, and fuse passes (a `.filter().map().sum()` chain can fuse into one loop, no intermediate allocation). The "sometimes explicit wins" case is when you need **manual SIMD** or **hand-tuned inner loops** the optimizer won't find (intrinsics, explicit unrolling). **Profile both** — intuition about which is faster is often wrong, and the compiler keeps improving. Reach for iterators by default (clarity + usually-fast); reach for explicit/SIMD only in a profiled hot path where iterators measured slower.
+
 Iterators often compile to tighter loops because the compiler can reason about them. But for very tight inner loops, the explicit form sometimes wins (or with manual SIMD). Profile both.
 
 ### 4. Box Large Struct Fields
@@ -141,6 +145,10 @@ Vtable indirection is ~few ns but kills inlining. Genericize hot paths.
 - Structure-of-arrays over array-of-structures for SIMD-friendly access.
 
 ### 7. SIMD via `std::simd` (nightly) or `wide`/`pulp` (stable)
+
+### Why SIMD matters and when to hand-write it
+
+SIMD (Single Instruction, Multiple Data) processes **N values per instruction** using wide vector registers (e.g., 4 `f32`s in one `f32x4` operation). For **data-parallel** workloads (matrix math, image processing, DSP, anything doing the same op on many values), this is a 4-16x speedup. You reach for **auto-vectorization first**: write clean iterator chains, enable `opt-level = 3`, and let LLVM vectorize (check with `cargo asm` / Godbolt that it actually did). Reach for **hand-written SIMD** (`std::simd`, `wide`, `pulp`) only when auto-vectorization fails (complex logic, gathers/scatters) or you need a specific instruction set (AVX2, NEON). Hand-written SIMD is more code and platform-specific (use runtime detection via `is_x86_feature_detected!`), so only do it in profiled hot paths.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -187,6 +195,16 @@ fn sum_of_squares(v: &mut [i32]) {
 Avoids allocation; cache-friendly.
 
 ### 11. Lock Granularity
+
+### Why contention scales inversely
+
+Lock performance is dominated by **contention**: how many threads want the lock *simultaneously* and how long they hold it. The rule: contention scales **inversely** with critical-section size/frequency — big or frequent critical sections = lots of contention = poor scaling. Strategies:
+
+- **`RwLock` for read-heavy** — readers don't block each other, so reads scale with thread count. Switch from `Mutex` to `RwLock` when reads vastly outnumber writes.
+- **Shard locks across N buckets** — instead of one lock for a map, have N maps each with its own lock. A given key hashes to one bucket, so contention spreads N-way. Reach for `dashmap`/`sharded`-style designs when write contention on a single lock is the bottleneck.
+- **Lock-free via atomics** — for simple state (counters, flags, single-slot caches), atomics avoid the lock entirely. Reach for them when the protected state is a single primitive operation.
+
+Switch strategies when profiling shows lock contention as the bottleneck — measure with `perf`/`samply` before restructuring.
 
 - `RwLock` for read-heavy.
 - Shard locks across N buckets for parallel writes.
@@ -253,9 +271,17 @@ Avoid recomputing in hot paths.
 
 ### 18. String Interning
 
+### How it works and when it pays off
+
+Interning replaces **repeated string values with integer IDs**: a global table maps `&str → u32`, and you store/pass the `u32` instead. Comparing two IDs is one integer compare (vs. a byte-by-byte string compare); hashing an ID is hashing an integer (vs. hashing the whole string); and repeated strings share one allocation (vs. N copies). You reach for it when the **same short strings appear many times** (compiler symbol tables, AST node tags, enum-like string keys, log field names) — the payoff is large for *many-duplicates, few-unique* workloads. `string_interner`/`lasso` are the standard crates. Don't intern one-off strings — the table overhead isn't worth it.
+
 For repeated short strings, use `string_interner`/`lasso` to assign integer IDs.
 
 ### 19. Use `&'static` Where Appropriate
+
+### Why it helps and when "appropriate" applies
+
+`'static` is the **longest lifetime**, and a `&'static T` is universally substitutable for any `&'a T` (covariance). In some generic contexts, this lets the compiler **elide lifetime-parameter bookkeeping** — the type has no lifetime parameter to track, simplifying monomorphization. Reach for `'static` when the data genuinely lives for the whole program (string literals, once-initialized configs leaked via `OnceLock`/`Box::leak`). **Don't overuse**: manufacturing `'static` with `Box::leak` to silence lifetime errors leaks memory; it's appropriate only for data whose lifetime matches the process. Reserve `'static` for true globals, not as a band-aid for borrow-checker friction.
 
 Avoids lifetime-tracking overhead in some generic contexts. Don't overuse.
 
@@ -340,6 +366,14 @@ Or use Godbolt (godbolt.org) — paste Rust code, see assembly.
 
 ## Memory Layout
 
+### Why each `repr` exists and when to override
+
+The default Rust layout **reorders fields** to minimize padding (gaps for alignment), producing smaller structs that use cache better — let the compiler do this by default. Override only when a **specific layout is required**:
+
+- `#[repr(C)]` — fixed C ABI field order + padding. **FFI, binary formats, shared memory** — wherever the exact layout must match an external contract.
+- `#[repr(transparent)]` — wrapper has the *exact* layout of its single field. Newtypes that must be ABI-identical to the inner type (a `struct Meters(f64)` that's a `f64` to C).
+- `#[repr(packed)]` — no padding, alignment 1. For matching packed C structs/binary formats. **Slow on many platforms** (unaligned access) and UB risk — use only when you must match a packed format.
+
 - `#[repr(C)]`: fixed, predictable, no padding-optimization.
 - `#[repr(transparent)]`: same layout as inner.
 - `#[repr(packed)]`: no padding, alignment 1 — slow on many platforms, UB risk.
@@ -351,10 +385,12 @@ Allocations must be aligned to `Layout::align`. Mismatched alignment is UB. `Box
 
 ## Async Performance
 
-- Avoid `Box<dyn Future>` in hot paths; use generics.
-- Avoid `tokio::spawn` for short-lived work — overhead. Use `join!`/`FuturesUnordered` instead.
-- Bounded channels for backpressure (vs unbounded that grow).
-- `current_thread` runtime for single-threaded apps.
+### Why these choices matter
+
+- **Avoid `Box<dyn Future>` in hot paths; use generics** — `Box::pin(async {...})` allocates per call and adds vtable dispatch (no inlining), which kills the zero-cost property. Use `impl Future` (static dispatch, monomorphized) when you can.
+- **Avoid `tokio::spawn` for short-lived work — use `join!`/`FuturesUnordered`** — `spawn` has overhead (task scheduling, a heap-allocated task struct). For many short tasks you await immediately, `join!`/`FuturesUnordered` keeps them in the current task, avoiding per-task spawn overhead.
+- **Bounded channels for backpressure** (vs unbounded that grow) — bounded channels throttle the producer to match consumer speed, preventing unbounded memory growth under load. Unbounded channels have no backpressure, so a fast producer + slow consumer = OOM eventually.
+- **`current_thread` runtime** for single-threaded apps — avoids the multi-thread scheduler's worker-thread overhead when you have no need for parallelism.
 
 ## Performance Tricks & Anti-Patterns to Avoid
 

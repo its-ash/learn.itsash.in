@@ -4,6 +4,10 @@ Rust's error handling is a defining strength. There's no exceptions, no `null`. 
 
 ## `Option<T>` — Absence
 
+### Why this exists
+
+`Option<T>` replaces `null` with a **type-level distinction**: a value of type `Option<T>` is *either* `Some(T)` *or* `None`, and you can't access the `T` without handling both cases. This eliminates an entire class of "forgot to null-check" bugs — there's no way to accidentally use an absent value, because the compiler forces you to acknowledge `None` at every use site. A plain `T` is *guaranteed present*; an `Option<T>` is *possibly absent*. You reach for `Option` whenever a value is **logically absent** (a key not in a map, a parse that yielded nothing, an optional config field) — as opposed to `Result`, which is for *failure* (the operation tried and errored).
+
 ::code-wrapper{language="rust"}
 ```rust
 enum Option<T> { Some(T), None }
@@ -18,8 +22,13 @@ let v: Option<i32> = Some(5);
 let s = match v { Some(x) => x.to_string(), None => String::from("none") };
 ```
 ::
+::
 
 ## `Result<T, E>` — Recoverable Errors
+
+### Why this exists
+
+`Result<T, E>` encodes **fallible operations in the type system** so failures can't be silently ignored — unlike exceptions, every caller must handle the error path (via `match`, `?`, `unwrap`, etc.) because the return type *is* `Result`. This forces error handling at the type level rather than relying on convention or memory. You reach for `Result` for **any operation that can fail** (parsing, I/O, network, validation, locking). The key contrast with exception-based systems: errors are ordinary values with ordinary types, there's no hidden control flow, and the compiler verifies you handle them.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -37,6 +46,7 @@ match parse("42") {
     Err(e) => println!("err: {e}"),
 }
 ```
+::
 ::
 
 ## The `?` Operator
@@ -94,7 +104,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 If `main` returns `Err`, the program exits with code 1 and prints the error.
 
 ## Recovering Values
+### When to use each combinator
 
+These methods extract the inner value, but they differ in **what happens on `None`/`Err`**: `unwrap`/`expect` **panic** (use only when the value is *provably* present, or in prototypes/tests); `unwrap_or`/`unwrap_or_default`/`unwrap_or_else` **substitute a fallback** (use when you have a sensible default); `map`/`and_then` **transform** without extracting (use to chain operations while staying in `Option`/`Result`); `or`/`or_else` **provide an alternative** when the first is absent; `take` empties the `Option` in place (use to move the value out while leaving `None`). The panic variants are for cases you've already proven can't happen; the non-panicking variants are for production code where a missing value is a real, handled case.
 ::code-wrapper{language="rust"}
 ```rust
 let v = opt.unwrap();          // panics on None
@@ -114,6 +126,10 @@ let v = opt.take();             // leaves None in opt
 Same combinator suite exists for `Result` (with `map_err`, `map`, `and_then`, etc.).
 
 ## The `std::error::Error` Trait
+
+### How it works and when to implement it
+
+`Error` is the **minimal contract** for an error type: it requires `Debug + Display` (so it can be printed for both developers and users) and provides an optional `source` method (for error chaining — linking to the underlying cause). A type implementing `Error` can be used with `Result<_, MyError>`, chained with `?` via `From` conversions, and printed uniformly. You **implement `Error`** when you define your own error enum that callers will handle generically (libraries especially — a public `Error` impl lets users box your errors, chain them, and print them). For apps (not libraries), you often **skip** the manual impl and use `anyhow` (which boxes any `Error`-implementing type) for ergonomics, or `thiserror` (which derives `Error` + `Display` + `From` from an enum) to avoid the boilerplate shown below.
 
 ::code-wrapper{language="rust"}
 ```rust

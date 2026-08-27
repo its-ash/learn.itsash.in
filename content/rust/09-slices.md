@@ -4,6 +4,14 @@ A slice is a **borrowed view** into a contiguous sequence of elements. It's the 
 
 ## The Slice Type
 
+### Why slices exist
+
+A slice `&[T]` is a **borrowed view** into a contiguous run of elements — it carries a pointer and a length (a "fat pointer"), but no ownership. This is the key abstraction that lets you write **one function** that operates on `Vec<T>`, fixed arrays `[T; N]`, and other slices interchangeably: any contiguous buffer can be viewed as a slice without copying or taking ownership. Without slices, every function would either need its own container type or force callers to allocate a `Vec` just to pass a few elements.
+
+### When to reach for it
+
+Use `&[T]` in function signatures whenever you only need to *read* a contiguous run of elements. The caller can pass `&vec`, `&array`, or a sub-slice with zero ceremony, and you never take ownership or force a copy. This is why the standard library's APIs (sort, binary search, iteration) all take slices rather than `Vec`.
+
 ::code-wrapper{language="rust"}
 ```rust
 let arr = [1, 2, 3, 4, 5];
@@ -83,11 +91,19 @@ let s: &[u8] = unsafe { std::slice::from_raw_parts(ptr, len) };
 
 ## `&[T]` vs `&[T; N]`
 
+### Why the distinction matters
+
+`&[T]` is a slice — **dynamically sized**: the length lives in the fat pointer, known only at runtime. `&[T; N]` is a reference to a fixed-size array — the length `N` is part of the *type*, known at compile time. The distinction matters when `N` is meaningful: const generics encode the length in the type system (e.g., a fixed-size matrix, a cryptographic block), so `&[T; 16]` preserves the length guarantee that `&[T]` loses. `&[T; N]` coerces to `&[T]` (you can always view a fixed array as a dynamic slice), but not vice versa — you can't recover the compile-time length from a `&[T]`.
+
 - `&[T]` is the slice type (dynamically sized).
 - `&[T; N]` is a reference to a fixed-size array (size known at compile time).
 - `&[T; N]` coerces to `&[T]`.
 
 ## Mutable Slices
+
+### When to reach for a mutable slice
+
+A `&mut [T]` lets you **mutate elements in place** over a borrowed view — useful when you want to modify a sub-range of a `Vec` without taking ownership of the whole thing (e.g., sorting a sub-slice, reversing a window, zeroing a range). You get the ergonomics of indexing and iterator adapters over the sub-range while the original container retains ownership. The borrow rules apply: only one `&mut [T]` to overlapping memory at a time.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -100,6 +116,10 @@ s[0] = 99;
 One mutable slice at a time (borrow rules still apply).
 
 ## Splitting Slices
+
+### Why `split_at_mut` is needed
+
+If you write `let a = &mut v[..n]; let b = &mut v[n..];`, the borrow checker rejects it: both borrows go through the same `&mut v`, and the compiler can't prove the two ranges don't overlap. `split_at_mut` solves this with a signature that returns *both* borrows from a single input — `fn split_at_mut(&mut [T], mid) -> (&mut [T], &mut [T])` — which lets the compiler trust that the two outputs are disjoint (it's an std function with an `unsafe` interior that proves non-overlap). This is the canonical way to get two non-overlapping mutable views into one buffer.
 
 ::code-wrapper{language="rust"}
 ```rust

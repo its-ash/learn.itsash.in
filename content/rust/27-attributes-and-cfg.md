@@ -9,6 +9,10 @@ Attributes are metadata annotations that influence compilation, linting, codegen
 - `pub`, `pub(crate)`, `pub(super)`, `pub(in path)`
 - `extern "C"`, `#[no_mangle]`, `#[export_name]`, `#[link_name]`
 
+**Visibility scopes** (`pub(crate)` etc.) let you choose *who* can see an item. `pub(crate)` is the common choice for **internal API stability**: usable anywhere in your crate, but invisible to external users — so you can refactor it freely without a semver break. `pub(super)` exposes to the parent module (useful for "internal helpers shared with siblings"). `pub(in path)` scopes to a specific path. Reach for `pub(crate)` by default for non-public items; reserve `pub` for your actual public API.
+
+`#[no_mangle]` disables Rust's name mangling so the symbol keeps its plain name — needed when C calls a Rust function by name (`pub extern "C" fn my_fn` becomes the C symbol `my_fn`). `#[export_name]` lets you rename; `#[link_name]` names a C symbol to link against.
+
 ### Code Generation
 
 - `#[inline]` / `#[inline(always)]` / `#[inline(never)]`
@@ -85,6 +89,12 @@ Returns `true`/`false` at compile time — the dead branch is still type-checked
 
 ## `#[derive(...)]`
 
+### What each derive does and when to derive vs. implement
+
+`#[derive(...)]` asks the compiler to auto-generate trait impls by walking the fields. Standard derives: `Debug` (developer-facing `{:?}`), `Clone` (`.clone()`), `Copy` (bitwise copy — only if all fields are `Copy`), `PartialEq`/`Eq` (`==`), `PartialOrd`/`Ord` (ordering), `Hash` (usable in `HashSet`/`HashMap`), `Default` (`::default()` — requires all fields implement `Default`). External crates add `Serialize`, `Error`, etc.
+
+Reach for `#[derive]` whenever the auto-generated impl is what you want (the trivial field-by-field version). **Implement manually** when you need custom behavior: a `Debug` that hides a secret field, a `PartialEq` that compares by id only, a `Display` (not derivable), a `Default` for fields that don't impl `Default`. The derives give you the 90% case for free; reach for a manual impl only when the derived behavior is wrong for your type.
+
 ::code-wrapper{language="rust"}
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -132,6 +142,10 @@ Configure in `Cargo.toml` or source.
 
 ## `#[non_exhaustive]`
 
+### Why it exists
+
+`#[non_exhaustive]` is a **semver tool**: it marks an enum/struct as "I may add variants/fields in the future, in a non-breaking release." External crates must then include a `_ => ...` arm (for enums) or `..Default::default()`/`..` (for structs) — so when you add a new variant/field downstream, their code still compiles (the `_` or `..` handles it). Without `#[non_exhaustive]`, adding a variant is a breaking change: every downstream `match` would fail to compile. Reach for `#[non_exhaustive]` on public enums/structs you intend to evolve — it's the contract that says "this isn't closed."
+
 ::code-wrapper{language="rust"}
 ```rust
 #[non_exhaustive]
@@ -146,6 +160,10 @@ pub struct Config { pub host: String }
 - Allows adding variants/fields in non-breaking minor releases.
 
 ## `#[must_use]`
+
+### Why this exists
+
+`#[must_use]` warns if the return value is **silently discarded** — preventing the common bug of calling a function whose result indicates success/failure and ignoring it. It's applied to `Result`/`Option` by default (which is why bare `result_fn();` warns). You reach for `#[must_use]` on functions/types where **ignoring the result is almost always a bug**: a `try_connect()` returning `bool`, a `compute_hash()` returning bytes, a guard type that does work on drop. The message (`#[must_use = "..."]`) documents *why* it must be used, surfacing in the warning.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -291,6 +309,16 @@ Applied by `#[derive(...)]` to prevent lints from firing on generated code.
 
 ## `#[repr(...)]` (Layout)
 
+### What each does and when to use it
+
+`#[repr(...)]` controls a type's **memory layout** — field order, padding, alignment. The default Rust layout is *unspecified* (the optimizer reorders for size/perf), which is great for Rust code but wrong for FFI or binary formats. Reach for the variant matching your need:
+
+- `#[repr(C)]` — C-compatible field order + padding. **FFI, binary formats, shared memory** — whenever a struct crosses a boundary where exact layout matters.
+- `#[repr(transparent)]` — the wrapper has the *exact* layout of its single field. Newtypes that must be ABI-identical to the inner type (`struct Wrapper(u64)` is a `u64` to C).
+- `#[repr(packed)]` / `#[repr(packed(N))]` — disable padding. For matching packed C structs/binary formats. **Danger**: unaligned reads are UB; use `addr_of!` to read fields.
+- `#[repr(align(N))]` — force alignment (e.g., 16-byte aligned buffers for SIMD).
+- `#[repr(C, u8)]` — C layout + explicit enum discriminant width (control the tag size for FFI enums).
+
 ::code-wrapper{language="rust"}
 ```rust
 #[repr(C)]              // C-compatible layout
@@ -301,8 +329,13 @@ Applied by `#[derive(...)]` to prevent lints from firing on generated code.
 #[repr(C, u8)]           // C layout + explicit enum discriminant width
 ```
 ::
+::
 
 ## `#[panic_handler]`
+
+### What it is and when to customize it
+
+A `#[panic_handler]` is the **function the compiler calls when a panic occurs** — it defines panic behavior for the target. In normal `std` programs it's provided by `std` (prints a message, unwinds or aborts). In `no_std` environments (embedded, WASM, kernels) there's no `std`, so *you* must provide a panic handler — it's a required symbol. You reach for a custom one when targeting an environment where the default isn't suitable: embedded (log the panic and reset), WASM (throw a JS exception), or a kernel (halt and dump). The simplest version is `loop {}` (halt forever); real ones log via a serial port, capture the panic info, and recover/reboot.
 
 In `no_std` environments:
 
@@ -316,6 +349,10 @@ fn panic(_: &PanicInfo) -> ! { loop {} }
 Defines the panic behavior for a custom target.
 
 ## `#[global_allocator]`
+
+### When to replace the global allocator
+
+`#[global_allocator]` designates a static that becomes the **allocator for all of Rust's heap** — every `Box`/`Vec`/`String` allocation routes through it. The default is the system allocator, which is fine for most cases. You reach for a custom allocator when your workload benefits from a different one: `jemalloc` for allocation-heavy multi-threaded programs (it has per-thread arenas, reducing lock contention), a tracking allocator for debugging leaks/allocation patterns, or a pool allocator for embedded targets. The `#[global_allocator]` static must implement `GlobalAlloc` (an `unsafe trait` — your allocator must be sound under concurrent calls). It's a global, program-wide choice; you can't have different allocators for different parts of a program.
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -335,6 +372,10 @@ static A: MyAlloc = MyAlloc;
 Replace Rust's default allocator (e.g., for `jemalloc`).
 
 ## `#[no_std]` and `#![no_std]`
+
+### What `core`/`alloc`/`std` provide and when to go `no_std`
+
+`#![no_std]` removes the `std` crate, leaving only `core` (the OS-independent subset: iterators, options, basic types — no heap, no I/O, no threads) and optionally `alloc` (heap types: `Box`, `Vec`, `String` — available if you have an allocator). You reach for `no_std` when targeting an environment without an OS or without the runtime `std` assumes: **embedded** (microcontrollers, no OS), **WASM** components, **kernels/OS dev**, or library crates that must work in all of these. The tradeoff: you lose `std`'s conveniences (file I/O, threads, `HashMap` requiring `std`), but your crate becomes usable everywhere. The hierarchy is `core ⊂ alloc ⊂ std` — pick the smallest layer that covers what you need.
 
 ::code-wrapper{language="rust"}
 ```rust
