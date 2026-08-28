@@ -15,9 +15,9 @@ useHead({
   ],
   link: [
     { rel: 'canonical', href: () => 'https://learn.itsash.in' + (route.path || '/') },
-    { rel: 'icon', type: 'image/png', href: '/favicon.png' },
+    { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
     { rel: 'manifest', href: '/site.webmanifest' },
-    { rel: 'apple-touch-icon', href: '/favicon.png' },
+    { rel: 'apple-touch-icon', href: '/favicon.svg' },
     { rel: 'preconnect', href: 'https://fonts.googleapis.com', crossorigin: '' },
     { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
     { rel: 'dns-prefetch', href: 'https://fonts.googleapis.com' },

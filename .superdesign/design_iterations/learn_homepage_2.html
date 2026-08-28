@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Learn — Explore Courses & Docs</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html { scroll-behavior: smooth; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .star { color: #000000; }
+</style>
+</head>
+<body class="bg-white text-black">
+
+<!-- Top Bar -->
+<header class="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-gray-200">
+  <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center gap-4">
+
+    <!-- Logo -->
+    <a href="#" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-xl bg-black flex items-center justify-center">
+        <span class="text-white text-sm font-black">L</span>
+      </div>
+      <span class="text-black text-lg font-bold tracking-tight hidden sm:inline">learn</span>
+    </a>
+
+    <!-- Search -->
+    <div class="flex-1 max-w-2xl mx-auto">
+      <label class="relative flex items-center w-full">
+        <span class="absolute left-4 flex items-center pointer-events-none">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+        </span>
+        <input
+          type="text"
+          placeholder="Search Rust, Python, JavaScript, DevOps..."
+          class="w-full bg-gray-100 border border-gray-200 rounded-full py-3 pl-12 pr-4 text-sm text-black placeholder:text-black/40 focus:outline-none focus:ring-2 focus:ring-black focus:bg-white transition"
+        >
+      </label>
+    </div>
+
+    <!-- Nav / Sign in -->
+    <nav class="hidden md:flex items-center gap-6 shrink-0">
+      <a href="#" class="text-sm font-medium text-black/70 hover:text-black transition">Docs</a>
+      <a href="#" class="text-sm font-medium text-black/70 hover:text-black transition">Courses</a>
+      <a href="#" class="text-sm font-medium text-black/70 hover:text-black transition">Community</a>
+    </nav>
+    <button class="shrink-0 bg-black text-white text-sm font-semibold px-4 py-2 sm:px-5 sm:py-2.5 rounded-full hover:bg-black/80 transition">
+      Sign in
+    </button>
+
+    <!-- Mobile menu icon -->
+    <button class="md:hidden shrink-0 w-8 h-8 flex items-center justify-center">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <line x1="3" y1="12" x2="21" y2="12"></line>
+        <line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Category Filter Pills -->
+  <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 pb-4">
+    <div class="flex items-center gap-2 overflow-x-auto no-scrollbar">
+      <button class="shrink-0 bg-black text-white text-xs font-semibold px-4 py-2 rounded-full">All</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">Languages</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">Web</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">Systems</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">Data</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">DevOps</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">Mobile</button>
+      <button class="shrink-0 bg-white text-black text-xs font-semibold px-4 py-2 rounded-full border border-gray-300 hover:border-black transition">Tools</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
+
+  <!-- Hero-lite -->
+  <section class="pt-8 pb-4">
+    <h1 class="text-2xl sm:text-3xl font-black text-black tracking-tight">Explore courses & docs</h1>
+    <p class="text-sm text-black/60 mt-1">Zero-to-hero tracks across languages, frameworks, and tools — pick a topic and start building.</p>
+  </section>
+
+  <!-- Editor's Picks - Horizontal Scroll -->
+  <section class="py-4">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-black">Editor's Picks</h2>
+      <div class="flex items-center gap-2">
+        <button class="w-8 h-8 rounded-full border border-gray-300 flex items-center justify-center hover:border-black transition">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        <button class="w-8 h-8 rounded-full border border-gray-300 flex items-center justify-center hover:border-black transition">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="flex gap-4 overflow-x-auto no-scrollbar pb-4 -mx-4 px-4 sm:mx-0 sm:px-0">
+
+      <!-- Feature Card 1 -->
+      <div class="shrink-0 w-72 sm:w-80 bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition">
+        <div class="w-full h-32 rounded-2xl mb-4 flex items-center justify-center" style="background: linear-gradient(135deg,#1a1a1a 0%,#4a4a4a 100%);">
+          <span class="text-white text-4xl font-black">Rs</span>
+        </div>
+        <h3 class="text-black font-bold text-base">Rust: Zero to Hero</h3>
+        <p class="text-black/60 text-xs mt-1 leading-relaxed">Ownership, lifetimes, async, and unsafe — a complete systems programming track.</p>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-black px-2 py-1 rounded-full">Advanced</span>
+          <span class="star text-xs">★★★★★</span>
+        </div>
+      </div>
+
+      <!-- Feature Card 2 -->
+      <div class="shrink-0 w-72 sm:w-80 bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition">
+        <div class="w-full h-32 rounded-2xl mb-4 flex items-center justify-center" style="background: linear-gradient(135deg,#2b2b2b 0%,#6e6e6e 100%);">
+          <span class="text-white text-4xl font-black">Py</span>
+        </div>
+        <h3 class="text-black font-bold text-base">Python for Everyone</h3>
+        <p class="text-black/60 text-xs mt-1 leading-relaxed">From syntax basics to data science, web frameworks, and packaging.</p>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-black px-2 py-1 rounded-full">Beginner</span>
+          <span class="star text-xs">★★★★☆</span>
+        </div>
+      </div>
+
+      <!-- Feature Card 3 -->
+      <div class="shrink-0 w-72 sm:w-80 bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition">
+        <div class="w-full h-32 rounded-2xl mb-4 flex items-center justify-center" style="background: linear-gradient(135deg,#111111 0%,#555555 100%);">
+          <span class="text-white text-4xl font-black">Js</span>
+        </div>
+        <h3 class="text-black font-bold text-base">Modern JavaScript</h3>
+        <p class="text-black/60 text-xs mt-1 leading-relaxed">ES2024 features, async patterns, module systems, and tooling deep dives.</p>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-black px-2 py-1 rounded-full">Intermediate</span>
+          <span class="star text-xs">★★★★★</span>
+        </div>
+      </div>
+
+      <!-- Feature Card 4 -->
+      <div class="shrink-0 w-72 sm:w-80 bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition">
+        <div class="w-full h-32 rounded-2xl mb-4 flex items-center justify-center" style="background: linear-gradient(135deg,#3a3a3a 0%,#7a7a7a 100%);">
+          <span class="text-white text-4xl font-black">Go</span>
+        </div>
+        <h3 class="text-black font-bold text-base">Go for Backends</h3>
+        <p class="text-black/60 text-xs mt-1 leading-relaxed">Concurrency, channels, and building production-grade microservices.</p>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-black px-2 py-1 rounded-full">Intermediate</span>
+          <span class="star text-xs">★★★★☆</span>
+        </div>
+      </div>
+
+      <!-- Feature Card 5 -->
+      <div class="shrink-0 w-72 sm:w-80 bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition">
+        <div class="w-full h-32 rounded-2xl mb-4 flex items-center justify-center" style="background: linear-gradient(135deg,#000000 0%,#3d3d3d 100%);">
+          <span class="text-white text-4xl font-black">K8</span>
+        </div>
+        <h3 class="text-black font-bold text-base">Kubernetes Essentials</h3>
+        <p class="text-black/60 text-xs mt-1 leading-relaxed">Pods, deployments, services, and real-world cluster operations.</p>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-black px-2 py-1 rounded-full">Advanced</span>
+          <span class="star text-xs">★★★★★</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Main Grid -->
+  <section class="py-8">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-black">All Topics</h2>
+      <span class="text-xs text-black/50 font-medium">16 topics</span>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5">
+
+      <!-- Card: Rust -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#1a1a1a,#5a5a5a);">
+          <span class="text-white text-3xl sm:text-4xl font-black">R</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Rust</h3>
+        <p class="text-black/50 text-[11px] font-medium">Systems</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★★</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Adv</span>
+        </div>
+      </a>
+
+      <!-- Card: Python -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#242424,#6a6a6a);">
+          <span class="text-white text-3xl sm:text-4xl font-black">P</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Python</h3>
+        <p class="text-black/50 text-[11px] font-medium">Languages</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Beg</span>
+        </div>
+      </a>
+
+      <!-- Card: JavaScript -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#111111,#4d4d4d);">
+          <span class="text-white text-3xl sm:text-4xl font-black">J</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">JavaScript</h3>
+        <p class="text-black/50 text-[11px] font-medium">Web</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★★</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: TypeScript -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#2e2e2e,#767676);">
+          <span class="text-white text-3xl sm:text-4xl font-black">T</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">TypeScript</h3>
+        <p class="text-black/50 text-[11px] font-medium">Web</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★★</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: Go -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#0d0d0d,#454545);">
+          <span class="text-white text-3xl sm:text-4xl font-black">G</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Go</h3>
+        <p class="text-black/50 text-[11px] font-medium">Systems</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: SQL -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#1c1c1c,#585858);">
+          <span class="text-white text-3xl sm:text-4xl font-black">S</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">SQL</h3>
+        <p class="text-black/50 text-[11px] font-medium">Data</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Beg</span>
+        </div>
+      </a>
+
+      <!-- Card: Docker -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#262626,#626262);">
+          <span class="text-white text-3xl sm:text-4xl font-black">D</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Docker</h3>
+        <p class="text-black/50 text-[11px] font-medium">DevOps</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★★</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: Kubernetes -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#000000,#4a4a4a);">
+          <span class="text-white text-3xl sm:text-4xl font-black">K</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Kubernetes</h3>
+        <p class="text-black/50 text-[11px] font-medium">DevOps</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★★</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Adv</span>
+        </div>
+      </a>
+
+      <!-- Card: React -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#1f1f1f,#5f5f5f);">
+          <span class="text-white text-3xl sm:text-4xl font-black">R</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">React</h3>
+        <p class="text-black/50 text-[11px] font-medium">Web</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: C++ -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#141414,#4f4f4f);">
+          <span class="text-white text-3xl sm:text-4xl font-black">C</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">C++</h3>
+        <p class="text-black/50 text-[11px] font-medium">Systems</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Adv</span>
+        </div>
+      </a>
+
+      <!-- Card: Swift -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#2a2a2a,#6b6b6b);">
+          <span class="text-white text-3xl sm:text-4xl font-black">S</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Swift</h3>
+        <p class="text-black/50 text-[11px] font-medium">Mobile</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Beg</span>
+        </div>
+      </a>
+
+      <!-- Card: Pandas -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#181818,#525252);">
+          <span class="text-white text-3xl sm:text-4xl font-black">P</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Pandas</h3>
+        <p class="text-black/50 text-[11px] font-medium">Data</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: Git -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#212121,#5c5c5c);">
+          <span class="text-white text-3xl sm:text-4xl font-black">G</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Git</h3>
+        <p class="text-black/50 text-[11px] font-medium">Tools</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★★</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Beg</span>
+        </div>
+      </a>
+
+      <!-- Card: Terraform -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#0a0a0a,#484848);">
+          <span class="text-white text-3xl sm:text-4xl font-black">T</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Terraform</h3>
+        <p class="text-black/50 text-[11px] font-medium">DevOps</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Adv</span>
+        </div>
+      </a>
+
+      <!-- Card: Kotlin -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#232323,#636363);">
+          <span class="text-white text-3xl sm:text-4xl font-black">K</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">Kotlin</h3>
+        <p class="text-black/50 text-[11px] font-medium">Mobile</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+      <!-- Card: GraphQL -->
+      <a href="#" class="group flex flex-col">
+        <div class="aspect-square w-full rounded-2xl shadow-sm group-hover:shadow-md transition flex items-center justify-center" style="background: linear-gradient(135deg,#161616,#565656);">
+          <span class="text-white text-3xl sm:text-4xl font-black">G</span>
+        </div>
+        <h3 class="text-black text-sm font-bold mt-2 truncate">GraphQL</h3>
+        <p class="text-black/50 text-[11px] font-medium">Web</p>
+        <div class="flex items-center justify-between mt-1">
+          <span class="star text-[10px]">★★★★☆</span>
+          <span class="text-[9px] font-bold uppercase bg-gray-100 text-black px-1.5 py-0.5 rounded-full">Int</span>
+        </div>
+      </a>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- Footer -->
+<footer class="border-t border-gray-200 mt-8">
+  <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-lg bg-black flex items-center justify-center">
+          <span class="text-white text-xs font-black">L</span>
+        </div>
+        <span class="text-black text-sm font-bold">learn</span>
+      </div>
+
+      <nav class="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <a href="#" class="text-xs font-medium text-black/60 hover:text-black transition">About</a>
+        <a href="#" class="text-xs font-medium text-black/60 hover:text-black transition">Docs</a>
+        <a href="#" class="text-xs font-medium text-black/60 hover:text-black transition">Courses</a>
+        <a href="#" class="text-xs font-medium text-black/60 hover:text-black transition">Community</a>
+        <a href="#" class="text-xs font-medium text-black/60 hover:text-black transition">Contact</a>
+        <a href="#" class="text-xs font-medium text-black/60 hover:text-black transition">Privacy</a>
+      </nav>
+    </div>
+
+    <div class="mt-8 pt-4 border-t border-gray-100">
+      <p class="text-[11px] text-black/40">&copy; 2026 learn. All rights reserved.</p>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
