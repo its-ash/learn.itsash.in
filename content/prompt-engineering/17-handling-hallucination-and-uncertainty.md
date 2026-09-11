@@ -1,30 +1,65 @@
+---
+title: "17 — Handling Hallucination & Uncertainty"
+description: "The mechanism of hallucination, calibrated uncertainty prompting, grounding with citations, explicit I-don't-know permission, self-review for risky claims, and domain-specific risk patterns. Code-first reference for mid-to-senior engineers."
+---
+
 # 17 — Handling Hallucination & Uncertainty
 
-## What Hallucination Actually Is
+## What Hallucination Mechanistically Is
 
-"Hallucination" is the term for a model producing fluent, confident, plausible-sounding output that is factually wrong — a fabricated citation, a nonexistent API method, a legal case that doesn't exist, a biography detail invented wholesale. It's worth being precise about the mechanism, because the precision changes what prompting can and can't fix. A language model, at its core (Chapter 1), is trained to predict a statistically likely continuation of text given everything before it. It has no built-in mechanism that separates "things I'm recalling from training data with high confidence" from "things I'm generating because they're a plausible-sounding continuation" — both processes produce the same kind of fluent, grammatical, confident-sounding token stream, because fluency and confidence-sounding are properties of *how* text is generated, not signals the model is separately tracking about *whether the content is true*.
+::code-wrapper{language="python" filename="hallucination_mechanism.py"}
+```python
+# Hallucination = fluent, confident, plausible-sounding output that is factually wrong.
+# A fabricated citation, a nonexistent API method, a legal case that doesn't exist.
+#
+# The model has NO built-in mechanism separating "things I'm recalling with high
+# confidence" from "things I'm generating because they're a plausible continuation."
+# Both produce the same kind of fluent, confident-sounding token stream.
+#
+# Fluency and confidence-sounding are properties of HOW text is generated,
+# not signals the model separately tracks about WHETHER the content is true.
 
-This means hallucination isn't a bug in the sense of an occasional malfunction — it's an expected consequence of the underlying mechanism, most likely to surface exactly where the model's training data was thin, contradictory, or absent: obscure facts, recent events past its training cutoff, exact citations and quotations, precise numerical details, and anything requiring the kind of exact lookup a model structurally cannot do reliably from parametric memory (the same limitation Chapter 13 cited as a reason to reach for a tool rather than trust unaided model output for exact facts).
-
-## Why Prompting Can Help, But Can't Fully Fix It
-
-No prompt can make a model's parametric knowledge more accurate than it actually is — if the training data didn't contain the fact, or contained it inconsistently, no amount of clever phrasing recovers information that was never reliably encoded. What prompting *can* do is change how the model behaves at the boundary of its knowledge: whether it fabricates a confident-sounding answer to fill a gap, or instead signals uncertainty, declines to answer, or asks a clarifying question. That behavioral shift is a real, substantial, and prompt-influenceable effect — it's just a different thing from making the model's knowledge more accurate, and conflating the two leads to over-trusting a "please don't hallucinate" instruction as if it were a fact-checking mechanism rather than a nudge on response *behavior*.
+# Hallucination is NOT a bug — it's an expected consequence of the mechanism.
+# Most likely to surface where training data was thin, contradictory, or absent:
+HALLUCINATION_RISK_ZONES = {
+    "obscure_facts": "training data was thin or inconsistent",
+    "recent_events": "past training cutoff — info may not exist in training at all",
+    "exact_citations": "high-precision, low-redundancy facts — hard to reproduce reliably",
+    "precise_numbers": "exact statistics are rarely memorized precisely",
+    "version_specific_apis": "training data mixes many versions; model blends across them",
+}
+```
+::
 
 ## The Naive Fix (And Why It's Weak)
 
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="naive_anti_hallucination.md"}
 ```markdown
+<!-- ANTI-PATTERN: close to useless -->
 Don't hallucinate. Only tell me true things.
 ```
 ::
 
-This instruction is close to useless on its own, for a structural reason: the model doesn't have a labeled internal flag for "this specific claim is a hallucination" that this instruction could suppress. Asking it not to hallucinate is asking it to distinguish confident-recall from plausible-generation at the moment of production, when — per the mechanism above — both processes look identical from the inside. It's a bit like telling someone "don't misremember things" — the instruction is well-intentioned but doesn't give the person any new capability to act on. What actually helps is more specific: giving the model an explicit, low-cost way to express partial confidence, forcing it to ground claims in provided material rather than parametric memory, and structuring the task so fabrication has a clear, nameable alternative.
+::code-wrapper{language="python" filename="why_naive_fails.py"}
+```python
+# WHY THIS FAILS: the model doesn't have a labeled internal flag for "this specific
+# claim is a hallucination" that this instruction could suppress. Asking it not to
+# hallucinate is asking it to distinguish confident-recall from plausible-generation
+# at the moment of production — when both processes look identical from the inside.
+#
+# It's like telling someone "don't misremember things" — well-intentioned but gives
+# no new capability to act on.
+#
+# What ACTUALLY helps:
+# 1. Give the model an explicit, low-cost way to express PARTIAL confidence
+# 2. Force it to ground claims in provided material rather than parametric memory
+# 3. Structure the task so fabrication has a clear, nameable ALTERNATIVE
+```
+::
 
 ## Prompting for Calibrated Uncertainty
 
-A model given explicit permission — and a concrete format — for expressing partial confidence uses it far more than one given a binary "answer or refuse" framing:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="calibrated_uncertainty.md"}
 ```markdown
 For each claim in your answer, tag it with your confidence:
 [HIGH] — you're confident this is accurate based on well-established
@@ -39,10 +74,8 @@ don't know rather than guessing.
 ```
 ::
 
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="calibrated_output_example.md"}
 ```markdown
-Example output:
-
 The company was founded in 2014 [HIGH]. Its headquarters moved to Austin
 sometime around 2019 [MEDIUM] — I recall this but am not fully certain
 of the exact year. I don't have reliable information on its current
@@ -51,13 +84,23 @@ source rather than relying on my answer for that figure.
 ```
 ::
 
-This works because it changes the *response shape* the model is optimizing toward — a flat, uniformly confident answer is no longer the only available shape, and the explicit tagging format gives the model a concrete, low-friction way to express graded confidence instead of forcing an all-or-nothing choice between a fully confident claim and an outright refusal. This is the same principle Chapter 7 established for structured output generally: the model produces what the format makes easy to produce, and a format with no slot for "I'm not sure" tends to produce full confidence even when it isn't warranted, purely because there's nowhere else for the uncertainty to go.
+::code-wrapper{language="python" filename="calibration_principle.py"}
+```python
+# This works because it changes the RESPONSE SHAPE the model is optimizing toward.
+# A flat, uniformly confident answer is no longer the only available shape.
+# The explicit tagging format gives the model a concrete, low-friction way to
+# express graded confidence instead of forcing an all-or-nothing choice.
+#
+# This is the same principle as Chapter 7: the model produces what the format
+# makes EASY to produce. A format with no slot for "I'm not sure" tends to
+# produce full confidence even when unwarranted, purely because there's nowhere
+# else for the uncertainty to go.
+```
+::
 
 ## Grounding: Requiring Citations to Provided Material
 
-The most reliable hallucination mitigation available through prompting is not asking the model to somehow "know" when it might be wrong — it's restructuring the task so the model's job is to work from material you provide, rather than from parametric memory, and requiring it to point to that material:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="grounding_prompt.md"}
 ```markdown
 Answer the question using only the information in the <sources>
 provided below. For every factual claim in your answer, include a
@@ -74,15 +117,31 @@ Question: {{user question}}
 ```
 ::
 
-This is precisely the retrieval-augmented pattern from Chapter 12, and the hallucination-mitigation framing here is the same mechanism restated: a model asked to *find and cite support* for each claim in a bounded, inspectable source set behaves very differently from one asked to *recall and state* a fact from its parametric memory, because the former task has a natural check built in — a claim that can't be traced to a citation is, by the task's own rules, out of scope, whereas a claim from parametric memory has no equivalent built-in check at all. The citation requirement also gives *you* a cheap verification mechanism: a human (or an automated check, Chapter 19) can spot-verify that a cited claim actually appears in the referenced source, something that's impossible to do against an uncited claim from parametric memory.
+::code-wrapper{language="python" filename="grounding_principle.py"}
+```python
+# This is Chapter 12's RAG pattern, restated as a hallucination mitigation.
+# A model asked to FIND AND CITE SUPPORT for each claim behaves very differently
+# from one asked to RECALL AND STATE a fact from parametric memory.
+#
+# The former has a natural check: a claim that can't be traced to a citation is,
+# by the task's own rules, out of scope.
+# The latter has no equivalent built-in check.
+#
+# The citation requirement also gives YOU a cheap verification mechanism:
+# a human (or automated check) can spot-verify that a cited claim actually
+# appears in the referenced source — impossible against an uncited parametric claim.
 
-Grounding is not airtight, though — a model can still misread or over-generalize from a real source (citing source 2 for a claim source 2 doesn't quite support), which is a real failure mode distinct from pure fabrication and worth checking for separately rather than assuming "it cited something" is equivalent to "the citation is accurate."
+# GROUNDING IS NOT AIRTIGHT:
+# The model can still MISREAD or OVER-GENERALIZE from a real source — citing
+# source 2 for a claim source 2 doesn't quite support. A distinct failure mode
+# from pure fabrication, worth checking separately. "It cited something" ≠
+# "the citation is accurate."
+```
+::
 
 ## Explicitly Permitting "I Don't Know"
 
-A surprisingly effective and frequently-omitted instruction is simply stating, in plain terms, that not knowing is an acceptable and expected outcome:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="i_dont_know_permission.md"}
 ```markdown
 It's fine, and expected, for you to not know the answer to some
 questions — especially ones about recent events, niche technical
@@ -93,13 +152,24 @@ or declining to answer.
 ```
 ::
 
-This matters because a model's default behavior, absent this kind of explicit permission, skews toward attempting a complete, confident-sounding answer — plausibly because the vast majority of its training data consists of people writing confidently (question-answering content, reference material, technical documentation rarely models an author saying "I don't know" mid-explanation), so a fluent, complete-sounding answer is a more statistically typical continuation than an honest hedge, independent of whether the content is actually correct. Explicitly telling the model that hedging or declining is an acceptable, rewarded response shape counteracts that default tendency directly, the same way the confidence-tagging format above gives uncertainty a concrete place to go rather than leaving a flat "answer or don't" choice as the only option.
+::code-wrapper{language="python" filename="why_permission_matters.py"}
+```python
+# WHY THIS MATTERS: a model's default behavior, absent this permission, skews
+# toward attempting a complete, confident-sounding answer. Plausibly because
+# training data consists mostly of people writing confidently (Q&A content,
+# reference material, technical docs rarely model someone saying "I don't know"
+# mid-explanation). A fluent complete-sounding answer is a more statistically
+# typical continuation than an honest hedge.
+#
+# Explicitly telling the model that hedging/declining is acceptable and rewarded
+# counteracts that default directly — same way confidence-tagging gives uncertainty
+# a concrete place to go rather than a flat "answer or don't" binary.
+```
+::
 
-## Asking the Model to Flag Its Own Risky Claims
+## Self-Review for Risky Claims
 
-A related technique: after a first answer is produced, ask the model to review its *own* output specifically for claims that are most likely to be wrong:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="self_review_prompt.md"}
 ```markdown
 Review the answer you just gave. Identify any specific factual claims —
 names, dates, statistics, exact quotations, citations — that you are
@@ -109,39 +179,100 @@ relying on it.
 ```
 ::
 
-This is a direct application of Chapter 11's self-consistency and verification ideas, aimed specifically at hallucination rather than reasoning errors generally — and it inherits the same limitation flagged there: a model reviewing its own output for confidence is still using the same underlying judgment that produced the (possibly wrong) claim in the first place, so this catches genuinely useful cases (the model actually does have latent signal that a particular claim was shakier than the rest) without being a reliable universal detector. It's a meaningfully better-than-nothing check, not a guarantee — treat a "no risky claims found" result as weak evidence, not proof of accuracy, especially for claims your eval process (Chapter 19) considers high-stakes.
+::code-wrapper{language="python" filename="self_review_limits.py"}
+```python
+# This is Chapter 11's self-verification applied specifically to hallucination.
+# It inherits the SAME limitation: a model reviewing its own output uses the same
+# underlying judgment that produced the (possibly wrong) claim.
+#
+# It catches genuinely useful cases (the model has latent signal that a particular
+# claim was shakier) without being a reliable universal detector.
+# Treat "no risky claims found" as WEAK EVIDENCE, not proof of accuracy.
+# Especially for claims your eval process (Chapter 19) considers high-stakes.
+```
+::
 
-## Domains Where the Risk Is Structurally Highest
+## Domain-Specific Risk Table
 
-Some categories of task carry meaningfully elevated hallucination risk, independent of how well the prompt is written, because they ask the model to produce exactly the kind of precise, low-redundancy detail that's hardest for parametric memory to reproduce reliably:
-
-| Task type | Why risk is elevated | Mitigation |
-|---|---|---|
-| Citations and bibliographic references | Exact titles, authors, years, and URLs are high-precision, low-redundancy facts | Require retrieval/grounding (Chapter 12); never trust an unverified generated citation |
-| Legal case names and statute citations | Same precision problem, with high real-world stakes for being wrong | Ground in an actual legal database; treat any unverified citation as provisional |
-| Version-specific software APIs | Training data mixes many library versions; the model can blend details across versions that never coexisted | Ground in current, version-specific documentation rather than relying on memory |
-| Numerical statistics | Exact numbers are rarely memorized precisely; a plausible-sounding but wrong number is common | Require a cited source for any number that matters, or compute it via a tool (Chapter 13) |
-| Recent events past training cutoff | The information may simply not exist in training data at all | Explicit "if this is after your knowledge cutoff, say so" instruction, or retrieval |
+::code-wrapper{language="markdown" filename="risk_table.md"}
+```markdown
+| Task type                    | Why risk is elevated                              | Mitigation                                      |
+|------------------------------|---------------------------------------------------|-------------------------------------------------|
+| Citations / bibliographic    | Exact titles, authors, years are high-precision   | Require retrieval/grounding; never trust        |
+|                              | low-redundancy facts                              | unverified generated citations                  |
+| Legal case names / statutes  | Same precision problem, high real-world stakes    | Ground in actual legal database; treat any      |
+|                              |                                                   | unverified citation as provisional              |
+| Version-specific APIs        | Training data mixes library versions; model can   | Ground in current, version-specific docs        |
+|                              | blend details across versions that never coexisted| rather than memory                              |
+| Numerical statistics         | Exact numbers rarely memorized precisely;         | Require cited source for any number that        |
+|                              | plausible-sounding wrong number is common         | matters, or compute via tool (Chapter 13)       |
+| Recent events past cutoff    | Information may not exist in training data at all | Explicit "if after your knowledge cutoff, say   |
+|                              |                                                   | so" instruction, or retrieval                   |
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug** — When you suspect a hallucinated fact, ask the model directly, in a fresh turn, "how confident are you in that specific claim, and why?" — this sometimes (not reliably) surfaces a hedge the original answer didn't include, because the follow-up specifically asks the model to reconsider one claim in isolation rather than as part of a longer confident narrative.
-- **Idiom** — Pair an uncertainty-tagging format (like the [HIGH]/[MEDIUM]/[LOW] example above) with a short explanation of *why* a claim is tagged at a given confidence level, not just the tag alone — the explanation itself is a useful signal to a human reviewer and tends to make the tagging itself more careful, since the model has to justify the label rather than just attach one.
-- **Performance** — For any task where factual precision genuinely matters, grounding (Chapter 12's retrieval pattern) is a far higher-leverage investment than prompt wording alone — a well-grounded prompt with mediocre wording usually beats a beautifully-worded ungrounded prompt on actual factual accuracy.
-- **Idiom** — Explicitly separate "creative" and "factual" sections within a single request when a task mixes both (e.g., "write a product description, but the specifications listed must exactly match the provided spec sheet") — an unmarked mix of creative latitude and required factual precision is a common source of the model applying creative-writing-style embellishment to the factual part.
-- **Safety** — For any hallucination-sensitive production feature, log which claims were grounded (cited to a real source) versus ungrounded (from parametric memory) — this distinction is cheap to compute at generation time and expensive to reconstruct after the fact if a hallucinated claim causes a downstream problem.
+::code-wrapper{language="python" filename="tips.py"}
+```python
+# [Debug] When you suspect a hallucinated fact, ask the model directly in a fresh
+# turn: "how confident are you in that specific claim, and why?" Sometimes surfaces
+# a hedge the original answer didn't include — but not reliably.
+
+# [Idiom] Pair uncertainty-tagging with a short explanation of WHY a claim is
+# tagged at a given level, not just the tag alone. The explanation is a useful
+# signal to a human reviewer and tends to make the tagging itself more careful.
+
+# [Performance] For any task where factual precision matters, grounding (Chapter 12)
+# is a far higher-leverage investment than prompt wording alone. A well-grounded
+# prompt with mediocre wording beats a beautifully-worded ungrounded prompt.
+
+# [Idiom] Explicitly separate "creative" and "factual" sections when a task mixes
+# both: "write a product description, but the specifications must exactly match
+# the provided spec sheet." An unmarked mix is a common source of creative-writing-
+# style embellishment applied to the factual part.
+
+# [Safety] Log which claims were grounded (cited) vs ungrounded (parametric) for
+# any hallucination-sensitive production feature. Cheap to compute at generation
+# time, expensive to reconstruct after the fact if a claim causes a problem.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **A confidently-worded refusal is not the same as an accurate uncertainty signal.** A model can hedge on an actually-correct answer just as easily as it can confidently state a wrong one — calibration means confidence tracking actual correctness in both directions, and an over-cautious model that hedges everything is miscalibrated in the opposite direction from one that hallucinates confidently, with real costs (a user ignoring a correct answer because it was needlessly hedged).
-- **Grounding fails silently when the retrieved sources themselves are wrong, outdated, or irrelevant** — a model faithfully citing a real but incorrect or stale source produces an answer that looks maximally trustworthy (specific citation, precise claim) while still being wrong, and a citation-format check alone won't catch this, only substantive verification of source quality will (Chapter 12's retrieval-quality concerns apply directly here).
-- **Asking "are you sure?" repeatedly can degrade a correct answer into an incorrect hedge or reversal**, not just correct an actual mistake — a model pressed hard enough on a genuinely correct claim can flip to a wrong one to satisfy apparent pressure to reconsider, which is a distinct failure mode from the useful self-review technique above; a single, clearly-scoped self-review request tends to be more reliable than repeated adversarial "are you sure?" pressure.
-- **A model can hallucinate the citation format itself, not just the fact** — producing a citation that looks structurally correct (plausible journal name, plausible year, plausible page numbers) but points to a source that doesn't exist at all is a well-documented failure mode, and it's more dangerous than an obviously-fabricated fact precisely because the citation's surface plausibility invites less scrutiny, not more.
-- **Uncertainty tags can become a rote formatting exercise rather than genuine calibration** if the model is used to producing them in a fixed pattern — watch for a suspiciously uniform distribution of confidence tags (everything marked MEDIUM, for instance) as a sign the tagging has become a formatting habit rather than a substantive judgment, and treat that as a prompt or eval issue worth investigating (Chapter 19).
+::code-wrapper{language="python" filename="edge_cases.py"}
+```python
+# [Gotcha] A confidently-worded REFUSAL is not the same as accurate uncertainty
+# signal. A model can hedge on a CORRECT answer just as easily as confidently
+# state a wrong one. Over-cautious hedging is miscalibrated in the opposite
+# direction, with real costs (user ignores a correct answer because it was
+# needlessly hedged).
 
-## 🧠 Spot the Issue
+# [Gotcha] Grounding fails silently when retrieved sources themselves are wrong,
+# outdated, or irrelevant. A model faithfully citing a real but incorrect source
+# produces an answer that looks maximally trustworthy while still being wrong.
+# Citation presence ≠ citation quality.
 
-::code-wrapper{language="markdown"}
+# [Gotcha] Asking "are you sure?" REPEATEDLY can degrade a correct answer into an
+# incorrect hedge or reversal. A model pressed hard enough on a genuinely correct
+# claim can flip to a wrong one to satisfy apparent pressure. A single clearly-
+# scoped self-review is more reliable than repeated adversarial pressure.
+
+# [Gotcha] A model can hallucinate the CITATION FORMAT itself, not just the fact.
+# Producing a citation that looks structurally correct (plausible journal name,
+# year, page numbers) but points to a source that doesn't exist — more dangerous
+# than an obviously-fabricated fact because the surface plausibility invites less
+# scrutiny, not more.
+
+# [Gotcha] Uncertainty tags can become a ROTE FORMATTING EXERCISE rather than
+# genuine calibration. Watch for a suspiciously uniform distribution (everything
+# MEDIUM) as a sign tagging has become habit rather than judgment.
+```
+::
+
+## 🧠 Spot the Bug
+
+::code-wrapper{language="markdown" filename="spot_the_bug.md"}
 ```markdown
 Answer the user's question. Be accurate and don't make anything up. If
 you're not sure, use your best judgment to give the most likely correct
@@ -155,17 +286,41 @@ election}}?
 <details>
 <summary>Answer</summary>
 
-The instruction directly undermines its own stated goal: "don't make anything up" is immediately followed by "if you're not sure, give the most likely correct answer anyway" — which is, in effect, an explicit instruction to fabricate a plausible-sounding guess rather than disclose uncertainty, for exactly the category of fact (an obscure, low-redundancy, highly specific historical statistic) most likely to be outside reliable parametric memory in the first place. This is the naive "don't hallucinate" instruction from earlier in this chapter, made actively worse by then explicitly authorizing a confident guess as the fallback behavior instead of leaving room for a hedge or an "I don't know." The fix removes the contradiction and replaces the "guess anyway" fallback with an explicit permission to express uncertainty or decline: state that guessing confidently is worse than saying "I don't have reliable information on this and would be guessing if I gave you a specific number" and, if precision genuinely matters, ground the question in an actual source (an archived election record, a retrieval tool) rather than asking the model to produce a memorized figure at all.
+The instruction directly undermines its own stated goal. "Don't make anything up" is immediately followed by "if you're not sure, give the most likely correct answer anyway" — which is an explicit instruction to **fabricate a plausible-sounding guess** rather than disclose uncertainty, for exactly the category of fact (obscure, low-redundancy, highly specific historical statistic) most likely to be outside reliable parametric memory.
 
-**The lesson**: an instruction that says "don't hallucinate" but then tells the model to answer confidently anyway when uncertain is not a hallucination mitigation — it's an explicit request for one, dressed up in language that sounds like the opposite.
+This is the naive "don't hallucinate" instruction made actively WORSE by then explicitly authorizing a confident guess as the fallback. The fix removes the contradiction and replaces "guess anyway" with explicit permission to express uncertainty: "Saying 'I don't have reliable information on this and would be guessing if I gave you a specific number' is a better answer than a confident guess." If precision matters, ground the question in an actual source (archived election record, retrieval tool).
+
+The lesson: an instruction that says "don't hallucinate" but then tells the model to answer confidently anyway when uncertain is not a hallucination mitigation — it's an explicit request for one, dressed up in language that sounds like the opposite.
 
 </details>
 
 ## Key Takeaways
 
-- Hallucination is an expected consequence of how language models generate text, not an occasional malfunction — fluency and confidence-sounding are properties of generation, not a signal the model separately tracks about truthfulness, which is why "just don't hallucinate" instructions are weak on their own.
-- Prompting can reliably change *behavior at the boundary of knowledge* (whether the model hedges, cites, or declines) but cannot make parametric knowledge more accurate than it actually is — grounding in retrieved sources (Chapter 12) is the strongest available lever, not clever wording alone.
-- Give uncertainty a concrete place to go — explicit confidence tagging, citation requirements, and plain permission to say "I don't know" all work by giving the model a viable response shape other than full confidence, not by asking it to somehow detect its own fabrication.
-- Grounding requires claims to be traceable to provided sources, which gives both the model and a human reviewer something concrete to check — but a faithfully-cited wrong or stale source still produces a wrong answer, so citation presence is not the same as citation quality.
-- Precision-heavy, low-redundancy tasks (citations, exact statistics, version-specific APIs, recent events) carry structurally elevated hallucination risk regardless of prompt quality, and should default to retrieval or tool-based grounding rather than parametric recall.
-- Self-review for risky claims (Chapter 11's verification pattern applied to hallucination specifically) is a useful additional check, not a reliable detector — and repeated adversarial "are you sure?" pressure can degrade a correct answer as easily as it corrects a wrong one.
+::code-wrapper{language="python" filename="key_takeaways.py"}
+```python
+"""
+Handling hallucination & uncertainty.
+"""
+
+# 1. Hallucination is an EXPECTED consequence of how LLMs generate text, not a
+#    malfunction. Fluency and confidence-sounding are properties of generation,
+#    not signals the model tracks about truthfulness. "Just don't hallucinate"
+#    is weak — the model can't distinguish confident-recall from plausible-generation.
+
+# 2. Prompting can change BEHAVIOR at the boundary of knowledge (hedging, citing,
+#    declining) but CANNOT make parametric knowledge more accurate. Grounding in
+#    retrieved sources (Chapter 12) is the strongest lever, not clever wording.
+
+# 3. Give uncertainty a concrete place to go: confidence tagging, citation
+#    requirements, plain permission to say "I don't know." A format with no slot
+#    for uncertainty tends to produce full confidence even when unwarranted.
+
+# 4. Grounding requires claims traceable to provided sources → checkable by humans
+#    and automated groundedness checks. But a faithfully-cited WRONG source still
+#    produces a wrong answer. Citation presence ≠ citation quality.
+
+# 5. Precision-heavy, low-redundancy tasks (citations, exact statistics, version-
+#    specific APIs, recent events) carry structurally elevated risk regardless of
+#    prompt quality. Default to retrieval or tool-based grounding, not parametric recall.
+```
+::

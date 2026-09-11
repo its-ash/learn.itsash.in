@@ -1,8 +1,12 @@
 # 26 — FFI (Foreign Function Interface)
 
-Rust talks to C — and through C, to almost every other language. This chapter covers calling C from Rust, Rust from C, and the supporting ecosystem.
+FFI is where Rust's compile-time safety guarantees stop and the operating system's contract begins. There is no runtime enforcement across a `.so` boundary — get the layout, ownership, or unwind semantics wrong and the borrow checker has no jurisdiction to save you.
 
-## Calling C from Rust
+This chapter covers the mechanics of that boundary: the ABI contract, the cost of crossing it safely, how "safe-looking" wrappers fail in production, and how to architect crate boundaries so unsafe surface area stays small and auditable.
+
+## Under-the-Hood Mechanics
+
+### `extern "C"` is a compile-time trust exercise, not a runtime check
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -17,429 +21,562 @@ fn main() {
 ```
 ::
 
-- `extern "C"` declares a foreign function with the C ABI.
-- Calling requires `unsafe` (the compiler can't verify the signature or memory safety).
-- The linker resolves the symbol at link time.
-
-### Linking
-
-Add the C library to `Cargo.toml` via `build.rs`:
+rustc never verifies this signature against the real C declaration — the linker only matches the *symbol name*:
 
 ::code-wrapper{language="rust"}
 ```rust
-// build.rs
-fn main() {
-    println!("cargo:rustc-link-lib=c");
-}
-```
-::
-
-Or use `#[link(name = "mylib")]`:
-
-::code-wrapper{language="rust"}
-```rust
-#[link(name = "mylib")]
+// The real libc signature is `long abs(long)`. Declaring i32 instead
+// compiles and links fine on platforms where long != i32 — silent
+// truncation/garbage, zero compiler diagnostics.
 extern "C" {
-    fn my_func(x: i32) -> i32;
+    fn abs(x: i32) -> i32; // WRONG width, links anyway
 }
 ```
 ::
 
-### `bindgen` for Auto-Binding
+`unsafe` adds no runtime check — it's purely a compile-time marker:
 
-Hand-writing extern blocks is error-prone. `bindgen` generates Rust bindings from C headers:
+::code-wrapper{language="rust"}
+```rust
+// Identical machine code either way; `unsafe` only satisfies the compiler
+// that a human reviewed the invariants it can't check.
+let a = unsafe { abs(-5) };
+let b = abs(-5); // hypothetically, if it compiled — same instructions
+```
+::
+
+Wrong calling-convention string silently misreads the stack on affected targets:
+
+::code-wrapper{language="rust"}
+```rust
+// On 32-bit Windows, "stdcall" and "C" disagree on stack cleanup.
+extern "stdcall" { fn SomeWinApi(x: i32) -> i32; } // correct for many WinAPI fns
+extern "C" { fn SomeWinApi(x: i32) -> i32; }        // WRONG convention string
+```
+::
+
+### Symbol mangling: link-time errors, not compile-time ones
+
+::code-wrapper{language="rust"}
+```rust
+// Rust mangles `foo` into something like `_ZN4crate3foo17h...E`.
+fn foo() {}
+
+// extern blocks skip mangling for the *expected* name and rely on a literal
+// string match against the library's exported symbols.
+extern "C" {
+    fn strlen(s: *const std::os::raw::c_char) -> usize; // must match libc exactly
+    fn strlenn(s: *const std::os::raw::c_char) -> usize; // typo: "undefined symbol" at LINK time
+}
+
+#[no_mangle]
+pub extern "C" fn my_exported_fn() {} // disables mangling so C can find it by name
+```
+::
+
+### `#[repr(C)]` and layout determinism
+
+::code-wrapper{language="rust"}
+```rust
+struct Default3 { a: u8, b: u64, c: u8 }
+// Rust's default repr may reorder to [b, a, c] or [b, c, a] to cut padding —
+// no guarantee which, and it can change across compiler versions.
+
+#[repr(C)]
+struct Compat3 { a: u8, b: u64, c: u8 }
+// Guarantees declaration-order fields + C's platform alignment/padding rules.
+// This is the ONLY layout Rust can promise matches a C compiler's output.
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Mixing the two is the actual footgun: a repr(C) struct that CONTAINS a
+// default-repr struct is still undefined at the boundary.
+#[repr(C)]
+struct Outer {
+    tag: u32,
+    inner: Default3, // WRONG — inner's layout is still unspecified
+}
+
+#[repr(C)]
+struct Inner { a: u8, b: u64, c: u8 } // give it repr(C) too
+
+#[repr(C)]
+struct OuterFixed {
+    tag: u32,
+    inner: Inner, // RIGHT — every layer of the FFI struct graph needs repr(C)
+}
+```
+::
+
+### Opaque handles: the vtable that isn't there
+
+::code-wrapper{language="rust"}
+```rust
+#[repr(C)]
+pub struct DbHandle { _private: [u8; 0] } // zero-sized: never constructed, never read
+
+extern "C" {
+    pub fn db_open(path: *const std::os::raw::c_char) -> *mut DbHandle;
+    pub fn db_close(h: *mut DbHandle);
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG — guessing at the C struct's real fields breaks the moment the
+// library adds a field in a minor version bump; you never had the real layout.
+#[repr(C)]
+pub struct DbHandleGuessed {
+    fd: i32,
+    buffer_ptr: *mut u8,
+    buffer_len: usize,
+}
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+The call itself is free — a direct `call` instruction, same cost as any Rust call:
+
+::code-wrapper{language="rust"}
+```rust
+extern "C" { fn c_add(a: i32, b: i32) -> i32; }
+fn rust_add(a: i32, b: i32) -> i32 { a + b }
+// Both compile to a single `call` under the same ABI — FFI itself isn't slow.
+```
+::
+
+The safety machinery around the call is where cost actually lives:
+
+::code-wrapper{language="rust"}
+```rust
+// CString conversion: one allocation + UTF-8 -> NUL-terminated copy, PER CALL.
+fn log_hot_path(msg: &str) {
+    let c = std::ffi::CString::new(msg).unwrap(); // allocates every time
+    unsafe { c_syslog(c.as_ptr()); }
+}
+
+// Cache the CString when the underlying string is stable across calls.
+struct CachedLogger { tag: std::ffi::CString } // built once
+impl CachedLogger {
+    fn log(&self) { unsafe { c_syslog(self.tag.as_ptr()); } } // zero allocs here
+}
+```
+::
+
+`catch_unwind` at hot boundaries adds a landing pad per call — measure before paying it millions of times a second:
+
+::code-wrapper{language="rust"}
+```rust
+// Per-call cost: nonzero branch + unwind-table bookkeeping, and it can block
+// inlining across the boundary.
+#[no_mangle]
+pub extern "C" fn hot_callback(x: i32) -> i32 {
+    std::panic::catch_unwind(|| x * 2).unwrap_or(-1)
+}
+```
+::
 
 ::code-wrapper{language="toml"}
 ```toml
-# Cargo.toml
-[build-dependencies]
-bindgen = "0.69"
+# For a callback invoked millions of times/sec, prefer aborting the whole
+# process over paying catch_unwind per call — accept process death over UB.
+[profile.release]
+panic = "abort"
 ```
 ::
+
+`bindgen` compile-time cost — cache the output instead of regenerating from scratch every build:
 
 ::code-wrapper{language="rust"}
 ```rust
 // build.rs
-use std::env;
-use std::path::PathBuf;
-
 fn main() {
+    println!("cargo:rerun-if-changed=vendor/lib.h"); // only regen on header change
     let bindings = bindgen::Builder::default()
-        .header("wrapper.h")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .header("vendor/lib.h")
         .generate()
-        .expect("Unable to generate bindings");
-
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings.write_to_file(out_path.join("bindings.rs")).unwrap();
+        .expect("bindgen failed");
+    bindings
+        .write_to_file(std::path::Path::new("src/bindings.rs"))
+        .expect("write failed");
 }
 ```
 ::
 
-::code-wrapper{language="rust"}
-```rust
-// src/lib.rs
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-```
-::
-
-### Wrapping in Safe APIs
-
-Raw FFI bindings are unsafe. Wrap them:
-
-::code-wrapper{language="rust"}
-```rust
-mod sys {
-    extern "C" {
-        pub fn strlen(s: *const u8) -> usize;
-    }
-}
-
-pub fn strlen(s: &CStr) -> usize {
-    unsafe { sys::strlen(s.as_ptr()) }
-}
-```
-::
-
-`CStr`/`CString` are the safe wrappers around C's null-terminated strings.
-
-## Calling Rust from C
-
-::code-wrapper{language="rust"}
-```rust
-#[no_mangle]
-pub extern "C" fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-```
-::
-
-- `#[no_mangle]`: keep the symbol name exactly `add` (don't mangle).
-- `pub extern "C"`: export with C ABI.
-
-Build as a static or dynamic library:
+Binary size: even a two-function cdylib drags in panic machinery and allocator shims — routinely several hundred KB before real logic:
 
 ::code-wrapper{language="toml"}
 ```toml
 [lib]
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib"]
+
+[profile.release]
+panic = "abort"   # trims unwind tables
+lto = true        # trims further when embedding many small cdylibs
+strip = true
 ```
 ::
 
-- `staticlib`: `.a`/`.lib` static archive.
-- `cdylib`: `.so`/`.dylib`/`.dll` dynamic library.
-- `rlib`: Rust-specific (for other Rust crates).
-
-### C Header
-
-Generate a header for C consumers with `cbindgen`:
-
-::code-wrapper{language="bash"}
-```bash
-cargo install cbindgen
-cbindgen --crate my_lib --output my_lib.h
-```
-::
-
-## C Strings: `CString` and `CStr`
+Maintenance drift: Rust re-checks itself on every build, but nothing re-checks a hand-written `extern` block against an upgraded C header:
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::ffi::{CString, CStr};
-
-let c_string = CString::new("hello").unwrap();
-let ptr: *const u8 = c_string.as_ptr();    // null-terminated
-let cstr = unsafe { CStr::from_ptr(ptr) };
-let rust_str = cstr.to_str().unwrap();
-```
-::
-
-- `CString`: owned, null-terminated; can't contain interior NUL bytes (constructor returns `Result`).
-- `CStr`: borrowed, null-terminated; from `from_ptr` (unsafe) or by deref of `CString`.
-
-## OS Strings: `OsString` and `OsStr`
-
-### Why these exist
-
-`OsString`/`OsStr` exist because **OS strings aren't guaranteed UTF-8**: on Unix, file paths and env vars are arbitrary bytes (any `u8` sequence); on Windows, they're UTF-16. `String`/`&str` enforce UTF-8, so they can't represent every valid OS path (a Unix path with invalid UTF-8 bytes can't be a `String`). `OsString`/`OsStr` wrap the OS-native representation directly, so they roundtrip any valid path. You reach for them whenever you handle **file paths or environment variables** from the OS — `std::env::args_os()`, `std::fs` APIs that take `AsRef<Path>`. For *path semantics* (joining, parent/basename, extensions) prefer `PathBuf`/`Path`, which wrap `OsStr` and add path operations. Use `String` when you've validated UTF-8 and want the byte-level guarantees.
-
-For platform-native strings (file paths, env):
-
-::code-wrapper{language="rust"}
-```rust
-use std::ffi::OsString;
-let s: OsString = std::env::args_os().next().unwrap();
-```
-::
-
-- `OsString`/`OsStr` are the OS-native string equivalents.
-- `PathBuf`/`Path` are wrappers for path semantics (cross-platform).
-
-## Memory Ownership Across FFI
-
-::code-wrapper{language="rust"}
-```rust
-// Rust allocates, C frees
-#[no_mangle]
-pub extern "C" fn make_string() -> *mut u8 {
-    let s = CString::new("hello").unwrap();
-    s.into_raw()      // leaks ownership to C
-}
-
-// C frees via this
-#[no_mangle]
-pub extern "C" fn free_string(ptr: *mut u8) {
-    unsafe { let _ = CString::from_raw(ptr); }
-}
-```
-::
-
-`CString::into_raw`/`from_raw` are the standard pattern for handing Rust strings to C and getting them back.
-
-### C allocates, Rust frees
-
-If C allocates with `malloc`, Rust must call `free` (or the equivalent), not Rust's allocator. Provide a destructor function on the C side.
-
-### Common Pitfall: Mismatched Allocators
-
-Rust's `Vec::push`/`String::push` use Rust's allocator. C's `malloc`/`free` use the C library. Mixing them is UB. Always free with the allocator that allocated.
-
-## Structs Across FFI
-
-### What `#[repr(C)]` guarantees
-
-`#[repr(C)]` forces **C-compatible field layout**: fields appear in declaration order with C ABI padding rules, so the struct's memory matches what a C compiler produces. Rust's default layout is *unspecified* — the compiler reorders fields to minimize padding, which is great for performance but **incompatible** with C (a C struct's field order is fixed). You reach for `#[repr(C)]` whenever a struct crosses the FFI boundary: passed to/from C, read from a binary format, or shared memory-mapped. The other `repr` variants: `#[repr(transparent)]` for a newtype that must be binary-identical to its single field (a `struct Wrapper(u64)` that's exactly a `u64` to C); `#[repr(packed)]` to disable padding (for matching packed C structs — but unaligned reads are UB). Avoid `Box`/`Vec`/`String` in `repr(C)` structs: they're Rust-specific layouts C can't interpret.
-
-::code-wrapper{language="rust"}
-```rust
-#[repr(C)]
-struct Point {
-    x: f64,
-    y: f64,
-}
-
-#[no_mangle]
-pub extern "C" fn translate(p: Point, dx: f64, dy: f64) -> Point {
-    Point { x: p.x + dx, y: p.y + dy }
-}
-```
-::
-
-- `#[repr(C)]` forces C-compatible layout (no Rust-specific reordering).
-- Field order matters and matches C's.
-- Avoid `Box<T>`/`Vec<T>` in `repr(C)` structs (Rust-specific layout).
-
-### Opaque Types
-
-### Why a ZST works
-
-When C exposes an **opaque pointer** (`typedef struct Foo Foo;` — C code uses `Foo*` without ever dereferencing the fields), Rust models this with a **zero-sized struct** (`[u8; 0]`). The struct is never instantiated — it exists only as a type for `*mut Foo` to point through. You reach for this whenever a C API hands you an opaque handle (a database connection, a window handle, a context) that you must not dereference from Rust — the ZST ensures you can't accidentally read fields (there are none), and the pointer is only ever passed back to C functions that know how to use it. The `_private` field naming convention signals "don't touch."
-
-When C uses an opaque pointer (`typedef struct Foo Foo;`), use a zero-sized ZST:
-
-::code-wrapper{language="rust"}
-```rust
-#[repr(C)]
-pub struct Foo { _private: [u8; 0] }
-
+// bindings.rs, hand-written against libfoo 1.2 — never regenerated
 extern "C" {
-    pub fn foo_new() -> *mut Foo;
-    pub fn foo_free(f: *mut Foo);
+    fn foo_process(data: *const u8, len: usize) -> i32;
+}
+// libfoo 1.3 changes the signature to (data, len, flags) — this still
+// LINKS (symbol name unchanged) and silently reads garbage for `flags`.
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: `unwrap()` on `CString::new` with untrusted input
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG — panics the moment a log message contains an embedded NUL byte,
+// which is a perfectly valid &str (Rust strings are length-prefixed).
+pub fn log_message(msg: &str) {
+    let c_msg = CString::new(msg).unwrap();
+    unsafe { c_syslog(c_msg.as_ptr()); }
 }
 ```
 ::
 
-`[u8; 0]` is the convention for opaque types.
-
-## Function Pointers
-
-### When you need `Option<extern "C" fn>`
-
-C APIs often use **nullable callbacks** — a function pointer that may be `NULL` to mean "no callback." Rust models this with `Option<extern "C" fn(...)>`, which has a niche optimization: `None` is represented as a **null pointer**, so the ABI matches C's `NULL` exactly (no extra discriminant). You reach for this whenever a C struct has an optional callback slot. For non-optional callbacks, use `extern "C" fn` directly (a non-null pointer). The user-data `void*` is the standard way C passes context to a callback — from Rust, you typically pass a `Box::into_raw` pointer and recover it with `Box::from_raw` in the callback (then free it when done).
-
 ::code-wrapper{language="rust"}
 ```rust
-#[repr(C)]
-struct Callbacks {
-    on_event: Option<extern "C" fn(data: *mut u8)>,
-}
-
-extern "C" fn my_callback(data: *mut u8) {
-    let s = unsafe { CStr::from_ptr(data as *const i8) };
-    println!("event: {:?}", s);
-}
-```
-::
-
-C callbacks into Rust: store as `Option<extern "C" fn(...)>`, pass `my_callback as extern "C" fn(...)`, handle the user-data void pointer.
-
-## Panic Across FFI — UB
-
-Unwinding across an FFI boundary is UB. Solutions:
-- Set `panic = "abort"` in `Cargo.toml` (kills the process on panic).
-- Use `std::panic::catch_unwind` at the boundary and convert to a C error code.
-
-::code-wrapper{language="rust"}
-```rust
-#[no_mangle]
-pub extern "C" fn safe_call() -> i32 {
-    match std::panic::catch_unwind(|| risky_fn()) {
-        Ok(_) => 0,
-        Err(_) => -1,
-    }
-}
-```
-::
-
-## Calling Other Languages
-
-### Python (PyO3)
-
-::code-wrapper{language="rust"}
-```rust
-use pyo3::prelude::*;
-
-#[pyfunction]
-fn add(a: i64, b: i64) -> i64 { a + b }
-
-#[pymodule]
-fn my_module(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(add, m)?)?;
+// RIGHT — sanitize deliberately, or propagate the error to the caller.
+pub fn log_message(msg: &str) -> Result<(), std::ffi::NulError> {
+    let sanitized: String = msg.chars().filter(|&c| c != '\0').collect();
+    let c_msg = CString::new(sanitized).expect("NUL bytes filtered above");
+    unsafe { c_syslog(c_msg.as_ptr()); }
     Ok(())
 }
 ```
 ::
 
-Build with `maturin develop`. PyO3 handles Python ABI.
-
-### Node.js (`napi-rs`)
+### Anti-pattern: mismatched allocators disguised as working code
 
 ::code-wrapper{language="rust"}
 ```rust
-#[napi]
-pub fn add(a: i32, b: i32) -> i32 { a + b }
-```
-::
-
-Build with `napi build`.
-
-### WebAssembly
-
-::code-wrapper{language="bash"}
-```bash
-rustup target add wasm32-unknown-unknown
-cargo build --target wasm32-unknown-unknown --release
-```
-::
-
-For JS interop, use `wasm-bindgen`:
-
-::code-wrapper{language="rust"}
-```rust
-use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen]
-pub fn add(a: i32, b: i32) -> i32 { a + b }
-```
-::
-
-### C++ (`cxx`)
-
-The `cxx` crate provides safe bidirectional FFI:
-
-::code-wrapper{language="rust"}
-```rust
-#[cxx::bridge]
-mod ffi {
-    extern "C++" {
-        include!("mylib.h");
-        fn cpp_func(x: i32) -> i32;
+// WRONG — Rust's global allocator frees memory malloc'd by C.
+// "Works" on Linux glibc by coincidence (both call the same malloc/free),
+// breaks the moment a custom #[global_allocator] (jemalloc, mimalloc) appears.
+#[no_mangle]
+pub extern "C" fn process(data: *mut u8, len: usize) {
+    unsafe {
+        let slice = std::slice::from_raw_parts_mut(data, len);
+        let _boxed = Box::from_raw(data); // UB: data was malloc'd in C
     }
 }
 ```
 ::
 
-`cxx` generates both sides; types are restricted to a safe subset.
-
-## `extern "C"` and ABIs
-
-### How an ABI mismatch manifests
-
-Common ABIs:
-- `"C"` — System V / cdecl depending on platform.
-- `"stdcall"` — Windows x32.
-- `"system"` — `stdcall` on Win32, `"C"` on Win64.
-- `"win64"`, `"sysv64"` — explicit x64/SysV.
-
-A mismatched ABI is one of the most insidious FFI bugs: it **doesn't error at compile time or link time** — the function compiles and links fine (the *name* matches), but at runtime the arguments land in the wrong registers/stack slots, producing silent corruption (garbage values, stack damage, crashes that disappear under a debugger). This is why `bindgen` is the standard tool: it reads the C headers and emits Rust declarations with the *exact* ABI the C compiler used, eliminating guesswork. Reach for `bindgen` whenever you're binding to a non-trivial C library; hand-writing `extern` declarations risks subtle ABI mismatches that only surface at runtime.
-
-## Build Scripts for FFI
-
 ::code-wrapper{language="rust"}
 ```rust
-// build.rs
-fn main() {
-    cc::Build::new()
-        .file("src/c_code.c")
-        .compile("my_c_code");
-    println!("cargo:rerun-if-changed=src/c_code.c");
+// RIGHT — never take Rust ownership of C-allocated memory; require the
+// C side to free what it allocated, via its own free function.
+extern "C" { fn c_free(ptr: *mut u8); }
+
+#[no_mangle]
+pub extern "C" fn process(data: *mut u8, len: usize) {
+    unsafe {
+        let slice = std::slice::from_raw_parts_mut(data, len);
+        // use slice; caller (C) remains responsible for freeing `data`
+    }
 }
 ```
 ::
 
-`cc` crate compiles C/C++ as part of `cargo build`. Add it as a build dependency:
+::code-wrapper{language="rust"}
+```rust
+// RIGHT (alternative) — if Rust must own it, allocate it in Rust and hand
+// out a matching free function so ownership never crosses allocators unpaired.
+#[no_mangle]
+pub extern "C" fn rust_alloc_buf(len: usize) -> *mut u8 {
+    let mut v = vec![0u8; len];
+    let ptr = v.as_mut_ptr();
+    std::mem::forget(v);
+    ptr
+}
 
-::code-wrapper{language="toml"}
-```toml
-[build-dependencies]
-cc = "1.0"
+#[no_mangle]
+pub unsafe extern "C" fn rust_free_buf(ptr: *mut u8, len: usize) {
+    drop(Vec::from_raw_parts(ptr, len, len)); // only valid on Rust-allocated ptr
+}
 ```
 ::
 
-## Common Pitfalls
+### Anti-pattern: letting a panic unwind into C stack frames
 
-- **Mismatched allocators**: UB; always free with the originating allocator.
-- **Wrong ABI**: silent corruption; use `bindgen`.
-- **Unwinding across FFI**: UB; use `catch_unwind` or `panic = "abort"`.
-- **Returning references to stack data**: classic UB; return owned or pass buffers in.
-- **`#[repr(C)]` missing**: Rust may reorder fields; mismatch with C struct.
-- **Nullable function pointers**: use `Option<extern "C" fn(...)>` so the `None` variant is a null pointer.
-- **Variadic FFI**: only `extern "C"` functions can be variadic.
-- **Thread-local state**: FFI calls into Rust from C threads don't have Rust's thread-local set up.
-- **String encoding**: C strings are NUL-terminated byte arrays; Rust strings are UTF-8. `OsStr` for paths.
-- **`Box<T>` across FFI**: not stable layout; use raw pointers explicitly with `Box::into_raw`/`from_raw`.
+::code-wrapper{language="rust"}
+```rust
+// WRONG — panicking here unwinds into C's stack frames: UB. Might abort
+// cleanly, might corrupt the stack, differs by platform/opt level.
+#[no_mangle]
+pub extern "C" fn parse_config(json: *const c_char) -> i32 {
+    let s = unsafe { CStr::from_ptr(json) }.to_str().unwrap(); // can panic
+    let cfg: Config = serde_json::from_str(s).unwrap();        // can panic
+    cfg.value
+}
+```
+::
 
-## Useful Crates
+::code-wrapper{language="rust"}
+```rust
+// RIGHT — catch_unwind at every extern "C" boundary; convert to an error code.
+#[no_mangle]
+pub extern "C" fn parse_config(json: *const c_char) -> i32 {
+    let result = std::panic::catch_unwind(|| {
+        let s = unsafe { CStr::from_ptr(json) }.to_str()?;
+        let cfg: Config = serde_json::from_str(s)?;
+        Ok::<_, Box<dyn std::error::Error>>(cfg.value)
+    });
+    match result {
+        Ok(Ok(value)) => value,
+        _ => -1, // signal failure via the C-side error convention
+    }
+}
+```
+::
 
-- `bindgen`: auto-generate Rust bindings from C.
-- `cbindgen`: generate C headers from Rust.
-- `cc`: compile C/C++ in `build.rs`.
-- `cxx`: safe C++ interop.
-- `pyo3`: Python bindings.
-- `napi-rs`: Node.js bindings.
-- `wasm-bindgen`: JS/WebAssembly bindings.
-- `jni`: Java/JVM bindings.
-- `libc`: raw C types and constants (`c_int`, `c_char`, `size_t`, etc.).
-- `raw-cpuid`, `nix`, `winapi`/`windows-sys`: OS bindings.
+::code-wrapper{language="rust"}
+```rust
+// BETTER — don't rely on every contributor remembering; wrap it once.
+macro_rules! ffi_boundary {
+    ($body:expr) => {
+        match std::panic::catch_unwind(|| $body) {
+            Ok(v) => v,
+            Err(_) => -1,
+        }
+    };
+}
+
+#[no_mangle]
+pub extern "C" fn parse_config2(json: *const c_char) -> i32 {
+    ffi_boundary!({
+        let s = unsafe { CStr::from_ptr(json) }.to_str().unwrap();
+        serde_json::from_str::<Config>(s).unwrap().value
+    })
+}
+```
+::
+
+### Anti-pattern: trusting `bindgen` output without pinning the header version
+
+::code-wrapper{language="toml"}
+```toml
+# WRONG — "any 1.x" lets the C lib change struct layout under you; your
+# checked-in bindings.rs silently goes stale.
+[dependencies]
+# vendored via build.rs: fetch("libfoo", "^1.0")
+```
+::
+
+::code-wrapper{language="bash"}
+```bash
+# RIGHT — pin exactly, regenerate in CI on every bump, diff the output.
+# vendor/libfoo == 1.4.2 (exact, checked into vendor/VERSION)
+bindgen vendor/libfoo-1.4.2/foo.h -o src/bindings.rs
+git diff --exit-code src/bindings.rs || echo "bindings drifted — review before merging"
+```
+::
+
+## Architectural Application
+
+Split raw bindings from the safe API — the `-sys` crate convention:
+
+::code-wrapper{language="rust" filename="libfoo-sys/src/lib.rs"}
+```rust
+// libfoo-sys: ONLY extern "C" declarations, repr(C) structs, and build.rs.
+// No safe API, no ergonomic promises — this is the entire unsafe surface.
+#[repr(C)]
+pub struct FooHandle { _private: [u8; 0] }
+
+extern "C" {
+    pub fn foo_open(path: *const std::os::raw::c_char) -> *mut FooHandle;
+    pub fn foo_close(h: *mut FooHandle);
+    pub fn foo_query(h: *mut FooHandle, key: *const std::os::raw::c_char) -> i32;
+}
+```
+::
+
+::code-wrapper{language="rust" filename="libfoo/src/lib.rs"}
+```rust
+// libfoo: safe wrapper. No raw pointers or `unsafe` visible to consumers.
+use libfoo_sys as sys;
+use std::ffi::CString;
+
+pub struct Foo(*mut sys::FooHandle);
+
+impl Foo {
+    pub fn open(path: &str) -> Result<Self, std::ffi::NulError> {
+        let c_path = CString::new(path)?;
+        let handle = unsafe { sys::foo_open(c_path.as_ptr()) };
+        Ok(Foo(handle))
+    }
+
+    pub fn query(&self, key: &str) -> Result<i32, std::ffi::NulError> {
+        let c_key = CString::new(key)?;
+        Ok(unsafe { sys::foo_query(self.0, c_key.as_ptr()) })
+    }
+}
+
+impl Drop for Foo {
+    fn drop(&mut self) { unsafe { sys::foo_close(self.0); } }
+}
+```
+::
+
+Never let raw FFI types leak into the public API:
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG — consumer now needs `unsafe` and must understand pointer lifetime.
+pub fn open_db(path: *const std::os::raw::c_char) -> *mut sys::FooHandle { /* ... */ }
+
+// RIGHT — ordinary Rust types in, ordinary Rust types (or Result) out.
+pub fn open_db(path: &str) -> Result<Foo, std::ffi::NulError> { Foo::open(path) }
+```
+::
+
+Panic strategy is a workspace-level decision, not per-crate:
+
+::code-wrapper{language="toml"}
+```toml
+# top-level Cargo.toml — applies to the whole binary; you cannot mix
+# unwind/abort across crates in one compiled artifact that embeds a cdylib.
+[profile.release]
+panic = "abort"
+```
+::
+
+Treat generated headers/bindings as CI-checked build artifacts:
+
+::code-wrapper{language="yaml"}
+```yaml
+# .github/workflows/ffi-drift.yml
+- run: cbindgen --crate my_lib --output include/my_lib.h
+- run: git diff --exit-code include/my_lib.h # fail build on undocumented drift
+- run: bindgen vendor/my_lib.h -o src/bindings.rs
+- run: git diff --exit-code src/bindings.rs
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: run `cargo miri test` on any FFI wrapper's safe-Rust boundary tests where feasible — Miri catches misaligned pointers, use-after-free, and uninitialized reads that regular tests silently tolerate on x86 due to lenient hardware.
-- **Idiom**: wrap every raw `extern "C"` block in a private `mod sys` and expose only a safe, `Result`-returning API from the parent module — never let `unsafe extern` signatures leak directly into your crate's public API.
-- **Debug**: `cbindgen --crate my_lib --output my_lib.h` regenerates the C header from your actual Rust signatures — run it in CI so a signature change that isn't reflected in a hand-maintained header fails the build instead of corrupting memory silently.
-- **Idiom**: for `Option<extern "C" fn(...)>` fields, remember `None` is guaranteed to be represented as a null pointer at the ABI level (a niche optimization) — this is *why* that pattern works for nullable C callbacks instead of using a raw function pointer with a sentinel value.
-- **Performance**: prefer passing large structs to FFI functions by pointer (`*const MyStruct`) rather than by value once they exceed a few machine words — C ABI value-passing conventions for large structs vary and add copying overhead that a pointer avoids.
-- **Debug**: `RUST_BACKTRACE=1` doesn't help across an FFI boundary if the C side segfaults — use `rust-gdb`/`rust-lldb` with `catch signal SIGSEGV` to get a native-code-aware backtrace spanning both sides.
+- **Debug**: run Miri on FFI wrapper boundary tests — catches what x86 tolerates silently.
+  ::code-wrapper{language="bash"}
+  ```bash
+  cargo +nightly miri test -p libfoo
+  ```
+  ::
+- **Idiom**: keep raw declarations private, expose only safe `Result` APIs.
+  ::code-wrapper{language="rust"}
+  ```rust
+  mod sys { extern "C" { pub fn raw_call(x: i32) -> i32; } }
+  pub fn safe_call(x: i32) -> Result<i32, &'static str> {
+      if x < 0 { return Err("negative input"); }
+      Ok(unsafe { sys::raw_call(x) })
+  }
+  ```
+  ::
+- **Debug**: regenerate the C header from Rust signatures in CI, don't hand-maintain it.
+  ::code-wrapper{language="bash"}
+  ```bash
+  cbindgen --crate my_lib --output my_lib.h
+  ```
+  ::
+- **Idiom**: `Option<extern "C" fn(...)>` niche-optimizes `None` to a null pointer — this is *why* it models nullable C callbacks correctly.
+  ::code-wrapper{language="rust"}
+  ```rust
+  #[repr(C)]
+  struct Callbacks {
+      on_event: Option<extern "C" fn(i32)>, // None <=> NULL at the ABI level
+  }
+  ```
+  ::
+- **Performance**: pass large structs by pointer once they exceed a few machine words.
+  ::code-wrapper{language="rust"}
+  ```rust
+  #[repr(C)]
+  struct BigStruct { data: [u64; 32] } // 256 bytes
+
+  extern "C" {
+      fn process_big(s: *const BigStruct); // RIGHT — pointer, no copy
+      fn process_big_by_value(s: BigStruct); // avoid — ABI copy overhead
+  }
+  ```
+  ::
+- **Debug**: `RUST_BACKTRACE` doesn't help when the C side segfaults — use a native debugger.
+  ::code-wrapper{language="bash"}
+  ```bash
+  rust-gdb --args ./my_binary
+  (gdb) catch signal SIGSEGV
+  (gdb) run
+  ```
+  ::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Mismatched allocators are silent until they aren't**: freeing Rust-allocated memory with C's `free()` (or vice versa) is undefined behavior that often *appears to work* in simple tests because both allocators may use the same underlying `malloc` on some platforms — the corruption surfaces later, often nondeterministically, and rarely at the actual site of the mismatch.
-- **Unwinding across an `extern "C"` boundary is UB, not a clean panic**: if Rust code called from C panics and the unwind tries to cross back into C stack frames, the behavior is undefined — it might abort cleanly, might corrupt the stack, and the failure mode differs by platform and optimization level, making it a "works in debug, corrupts in release" class of bug.
-- **`#[repr(C)]` is required, and its absence fails silently at the type level**: a struct shared with C that's missing `#[repr(C)]` still compiles fine in isolation (Rust's default layout is unspecified, but *a* layout exists) — the bug only appears when the field order/padding Rust picked doesn't match what the C side expects, producing corrupted field reads with no compiler warning.
-- **`CString::new` rejects interior NUL bytes at runtime, not compile time**: `CString::new("hi\0there")` returns `Err`, not a truncated or escaped string — code that `.unwrap()`s this call will panic on user-controlled input containing an embedded NUL, a realistic scenario when data originates from untrusted files or network input.
-- **Returning a pointer to a local/stack variable is classic UB across FFI**: `fn get_ptr() -> *const i32 { let x = 5; &x }` compiles (with a warning in safe contexts, but the raw-pointer FFI version often doesn't even warn) and hands C a dangling pointer the moment the function returns.
-- **Variadic FFI functions can only be declared `extern "C"`**: you cannot write a Rust-native (non-FFI) variadic function — `printf`-style APIs can only be *called* via FFI declarations, never authored in ordinary Rust, which surprises people trying to build a `format!`-like variadic function from scratch.
-- **Platform quirk — ABI mismatches on Windows**: `"system"` resolves to `"stdcall"` on 32-bit Windows targets but `"C"`-equivalent on Win64 — code hardcoding `extern "C"` for a Windows DLL built with `stdcall` conventions links but corrupts the stack on 32-bit targets only, a bug that vanishes when testing exclusively on 64-bit machines.
+- **Portability**: allocator mismatch appears to work on Linux glibc, then corrupts elsewhere.
+  ::code-wrapper{language="rust"}
+  ```rust
+  // "Works" today; breaks the day #[global_allocator] = Jemalloc is added.
+  unsafe { let _ = Box::from_raw(c_malloced_ptr); } // UB regardless of "working"
+  ```
+  ::
+- **Safety**: unwinding into C frames is UB, not a clean panic.
+  ::code-wrapper{language="rust"}
+  ```rust
+  #[no_mangle]
+  pub extern "C" fn callback() { panic!("boom"); } // UB once C is on the stack above
+  ```
+  ::
+- **Safety**: missing `#[repr(C)]` fails silently — no compiler warning, just wrong reads.
+  ::code-wrapper{language="rust"}
+  ```rust
+  struct Shared { a: u8, b: u64 } // compiles fine; layout NOT guaranteed to match C
+  ```
+  ::
+- **Idiom**: `CString::new` rejects interior NUL at runtime, not compile time.
+  ::code-wrapper{language="rust"}
+  ```rust
+  assert!(CString::new("hi\0there").is_err()); // Err, never a truncated string
+  ```
+  ::
+- **Safety**: returning a pointer to a stack local is classic dangling-pointer UB.
+  ::code-wrapper{language="rust"}
+  ```rust
+  fn get_ptr() -> *const i32 {
+      let x = 5;
+      &x as *const i32 // dangles the instant this function returns
+  }
+  ```
+  ::
+- **Idiom**: variadic functions can only be *declared* via FFI, never authored in plain Rust.
+  ::code-wrapper{language="rust"}
+  ```rust
+  extern "C" {
+      fn printf(fmt: *const c_char, ...) -> i32; // legal only in an extern block
+  }
+  // fn my_variadic(fmt: &str, ...) {} // not valid Rust syntax outside FFI
+  ```
+  ::
+- **Portability**: `"system"` means different things on 32-bit vs 64-bit Windows.
+  ::code-wrapper{language="rust"}
+  ```rust
+  // Correct cross-target choice for a WinAPI DLL built with stdcall:
+  extern "system" { fn SomeWinApi(x: i32) -> i32; } // resolves per-target correctly
+  extern "C" { fn SomeWinApi(x: i32) -> i32; }       // WRONG on 32-bit Windows only
+  ```
+  ::
 
 ## 🧠 Spot the Bug
 
@@ -472,14 +609,50 @@ fn main() {
 
 It panics: `called \`Result::unwrap()\` on an \`Err\` value: NulError(...)`.
 
-`CString::new` scans the input for interior NUL bytes and returns `Err` if it finds one, because a C string's length is defined by where the first `\0` occurs — a Rust `&str` is free to contain `\0` as an ordinary byte (Rust strings are length-prefixed, not null-terminated), but that same byte would silently truncate the string on the C side. Rather than truncate silently (which would be a worse, harder-to-detect bug — `puts` would just print "hello" and drop "world" with no error), `CString::new` refuses construction entirely and hands back a `Result`. The bug in `print_line` is calling `.unwrap()` on that `Result` without considering that its input comes from a public, `&str`-typed function signature — any caller passing arbitrary user data (a file, network payload, or database field) can trigger this panic, and there is nothing in the type signature (`fn print_line(s: &str)`) that hints a NUL byte is dangerous.
+::code-wrapper{language="rust"}
+```rust
+// Rust &str can hold an embedded \0 as an ordinary byte (length-prefixed,
+// not null-terminated). CString::new refuses to construct rather than
+// silently truncate at the first \0 — which would drop "world" with no error.
+assert!(CString::new("hello\0world").is_err());
+```
+::
 
-**The lesson**: `&str` can contain embedded NUL bytes but C strings cannot — always propagate `CString::new`'s `Result` instead of `unwrap`ing it in code that accepts external string input.
+The fix: never `.unwrap()` a `CString::new` whose input is externally controlled.
+
+::code-wrapper{language="rust"}
+```rust
+pub fn print_line(s: &str) -> Result<(), std::ffi::NulError> {
+    let c_string = CString::new(s)?; // propagate instead of panicking
+    unsafe { puts(c_string.as_ptr()); }
+    Ok(())
+}
+```
+::
 
 </details>
 
 ## Summary
 
-`extern "C"` declares FFI. `#[no_mangle] pub extern "C" fn` exports Rust to C. `#[repr(C)]` controls struct layout. Use `bindgen`/`cbindgen`/`cxx` for safe interop. Memory ownership must match allocators. Panics must not cross FFI. `CString`/`CStr`/`OsString`/`OsStr` for string interop. Wrap unsafe bindings in safe abstractions.
+::code-wrapper{language="rust"}
+```rust
+// extern "C" = calling-convention promise, not a runtime check.
+extern "C" { fn f(x: i32) -> i32; }
 
-Next: Attributes and conditional compilation.
+// #[repr(C)] = the only guaranteed-C-compatible layout; absence fails silently.
+#[repr(C)] struct S { a: u8, b: u64 }
+
+// Ownership never crosses allocators unpaired.
+extern "C" { fn c_free(p: *mut u8); } // C-allocated memory: freed by C, always
+
+// Panics never cross extern "C" boundaries.
+#[no_mangle]
+pub extern "C" fn entry() -> i32 {
+    std::panic::catch_unwind(|| 0).unwrap_or(-1)
+}
+```
+::
+
+Architect FFI as an isolated `-sys` crate (raw bindings only) wrapped by a safe crate (no `unsafe` visible to consumers) — this keeps the unsafe surface small, auditable, and separate from ordinary Rust code churn.
+
+Next: Attributes and conditional compilation — how `#[cfg]`, `#[repr]`, and friends control what actually gets compiled.

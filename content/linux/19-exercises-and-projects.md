@@ -6,17 +6,9 @@ Apply everything from chapters 1–18 in real-world projects. These exercises pr
 
 Write a script that produces a system inventory report. Covers chapters 02–05 (shell, text processing, files, permissions).
 
-**Requirements**:
-- OS, kernel version, architecture.
-- CPU model and core count.
-- Total and available memory.
-- Disk usage for each mounted filesystem.
-- Top 5 processes by CPU and memory.
-- List of listening TCP ports.
-- Output as a formatted report (text table).
+**Requirements**: OS, kernel version, architecture, CPU model and core count, total and available memory, disk usage per filesystem, top 5 processes by CPU and memory, listening TCP ports.
 
 ::code-wrapper{language="bash"}
-```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -64,13 +56,7 @@ ss -tlnp | awk 'NR>1 {print $4, $6}' | column -t
 
 Build a pipeline to analyze web server logs. Covers chapters 05 (text processing) and 12 (logging).
 
-**Requirements**:
-- Top 10 requesting IP addresses (by count).
-- Top 10 requested paths.
-- Top 10 HTTP status codes.
-- Count of 4xx and 5xx errors.
-- Total bandwidth transferred.
-- Output a summary report.
+**Requirements**: Top 10 requesting IPs, top 10 requested paths, top 10 HTTP status codes, count of 4xx and 5xx errors, total bandwidth.
 
 ::code-wrapper{language="bash"}
 #!/usr/bin/env bash
@@ -105,7 +91,7 @@ awk '{sum += $10} END{printf "Total: %.2f MB\n", sum/1024/1024}' "$LOG"
 
 **Verification**:
 - [ ] Top IPs/paths/status codes are correct (verify with manual `grep | wc`).
-- [ ] 4xx/5xx counts are correct.
+- [ ] `sort` before `uniq -c` (common bug: forgetting to sort).
 - [ ] Bandwidth is in MB (converted from bytes).
 
 ---
@@ -113,14 +99,6 @@ awk '{sum += $10} END{printf "Total: %.2f MB\n", sum/1024/1024}' "$LOG"
 ## Project 3 — User & Group Audit
 
 Audit user accounts and sudo access. Covers chapter 07.
-
-**Requirements**:
-- List all users with UID ≥ 1000 (regular users).
-- List users with login shells (not `nologin`/`false`).
-- Show which users are in the `sudo` group (or `wheel`).
-- Show password aging for all regular users (`chage -l`).
-- Flag accounts with no password (`!` or `*` in shadow).
-- Flag accounts that are locked.
 
 ::code-wrapper{language="bash"}
 #!/usr/bin/env bash
@@ -163,26 +141,12 @@ sudo awk -F: '($2 == "!" || $2 == "*" || $2 == "!!") {print "  " $1 ": " $2}' /e
 
 Set up an nginx web server with full hardening. Covers chapters 11, 14, 10.
 
-**Requirements**:
-- Install nginx via package manager.
-- Create a systemd service for nginx (or use the package's unit).
-- Configure UFW: allow 22, 80, 443 only.
-- Configure SSH: key-only auth, no root login.
-- Set up `fail2ban` for SSH.
-- Configure nginx with a server block, proper headers (HSTS, X-Frame-Options).
-- Enable SELinux/AppArmor (don't disable).
-- Set up logrotate for nginx logs.
-- Generate a self-signed TLS cert (or use Let's Encrypt).
-- Verify with `curl -I` and `ss -tlnp`.
-
 ::code-wrapper{language="bash"}
-```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
 # 1. Install
-sudo apt update && sudo apt install -y nginx ufw fail2ban    # Debian
-# sudo dnf install -y nginx firewalld fail2ban               # RHEL
+sudo apt update && sudo apt install -y nginx ufw fail2ban
 
 # 2. Firewall
 sudo ufw allow 22/tcp
@@ -204,7 +168,7 @@ sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -out /etc/ssl/certs/selfsigned.crt \
   -subj "/CN=localhost"
 
-# 6. nginx config
+# 6. nginx config with security headers
 sudo tee /etc/nginx/sites-available/hardened <<'EOF'
 server {
     listen 80;
@@ -235,9 +199,7 @@ sudo ufw status
 **Verification**:
 - [ ] `curl -kI https://localhost/` returns 200.
 - [ ] `ufw status` shows only 22/80/443.
-- [ ] `sshd -T | grep -E 'permitrootlogin|passwordauthentication'` shows `no`.
 - [ ] `fail2ban-client status sshd` shows the jail active.
-- [ ] `getenforce` (RHEL) shows `Enforcing` or AppArmor profiles active.
 - [ ] HTTP redirects to HTTPS.
 
 ---
@@ -246,16 +208,7 @@ sudo ufw status
 
 Create a backup system using systemd timers (replacing cron). Covers chapters 09, 11.
 
-**Requirements**:
-- Back up a directory to a timestamped tar archive.
-- Keep the last 7 backups (rotate).
-- Run daily via a systemd timer (not cron).
-- Log to journald.
-- Handle errors (exit non-zero, journald captures it).
-- Verify the backup integrity (tar test).
-
 ::code-wrapper{language="bash"}
-```bash
 #!/usr/bin/env bash
 # /opt/backup/backup.sh
 set -euo pipefail
@@ -288,8 +241,6 @@ fi
 
 echo "Backup complete: $archive ($(du -h "$archive" | cut -f1))"
 ```
-
-systemd units:
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -326,7 +277,6 @@ systemctl list-timers | grep backup
 
 **Verification**:
 - [ ] `systemctl start backup.service` creates a backup.
-- [ ] `systemctl list-timers` shows `backup.timer`.
 - [ ] `journalctl -u backup.service` shows log output.
 - [ ] Old backups are rotated (keep 7).
 - [ ] Corrupt backup detection works (test with `gzip -t`).
@@ -336,14 +286,6 @@ systemctl list-timers | grep backup
 ## Project 6 — Process & Resource Monitor
 
 Build a monitoring script that alerts on resource thresholds. Covers chapters 06, 15, 12.
-
-**Requirements**:
-- Alert if CPU load > 80% for 5+ minutes.
-- Alert if disk usage > 90%.
-- Alert if memory usage > 90%.
-- Alert if a critical process is not running.
-- Send alerts to journald (and optionally email).
-- Run as a systemd service.
 
 ::code-wrapper{language="bash"}
 #!/usr/bin/env bash
@@ -415,8 +357,7 @@ journalctl -t monitor -f
 
 **Verification**:
 - [ ] High load (use `stress --cpu $(nproc)`) triggers a log entry.
-- [ ] Filling disk (create a large file) triggers a warning.
-- [ ] Stopping nginx (`systemctl stop nginx`) triggers "not running" alert.
+- [ ] Stopping nginx triggers "not running" alert.
 - [ ] `journalctl -t monitor` shows all alerts.
 
 ---
@@ -425,22 +366,13 @@ journalctl -t monitor -f
 
 Configure a resilient storage setup. Covers chapter 09.
 
-**Requirements**:
-- Create a RAID 1 mirror from two disks.
-- Put LVM on top of the RAID.
-- Create a logical volume, format with ext4.
-- Mount persistently (UUID in fstab).
-- Take an LVM snapshot, back it up, remove the snapshot.
-- Simulate a disk failure and replace it.
-
 ::code-wrapper{language="bash"}
-```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
 # 1. Create RAID 1
 sudo mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sdb /dev/sdc
-cat /proc/mdstat                    # watch it build
+cat /proc/mdstat
 
 # 2. LVM on the RAID
 sudo pvcreate /dev/md0
@@ -464,9 +396,6 @@ sudo lvremove -f /dev/vg_data/lv_data_snap
 sudo mdadm --fail /dev/md0 /dev/sdb
 sudo mdadm --remove /dev/md0 /dev/sdb
 cat /proc/mdstat                    # shows degraded
-# (in real life: insert a new disk, then:)
-# sudo mdadm --add /dev/md0 /dev/sdd
-# cat /proc/mdstat                  # shows rebuilding
 
 # Save RAID config
 sudo mdadm --detail --scan | sudo tee -a /etc/mdadm/mdadm.conf
@@ -475,8 +404,6 @@ sudo update-initramfs -u
 
 **Verification**:
 - [ ] `lsblk` shows the RAID + LVM stack.
-- [ ] `mount | grep /mnt/data` shows it mounted.
-- [ ] `sudo vgs` / `lvs` show the VG and LV.
 - [ ] `cat /proc/mdstat` shows the RAID status.
 - [ ] Snapshot was created and removed cleanly.
 - [ ] `mdadm --fail` showed the array going degraded.
@@ -486,16 +413,6 @@ sudo update-initramfs -u
 ## Project 8 — Containerized App Stack
 
 Deploy a multi-container app stack. Covers chapter 17.
-
-**Requirements**:
-- A web app (nginx) + backend (Python/Node) + database (PostgreSQL).
-- Use Docker Compose (or Podman Compose).
-- Persistent data in named volumes.
-- Custom network with DNS resolution between containers.
-- Healthchecks for each service.
-- Resource limits (memory, CPU).
-- Runs as a non-root user inside containers.
-- Restart policy.
 
 ```yaml
 # docker-compose.yml
@@ -573,9 +490,7 @@ docker compose down -v        # also remove volumes (data!)
 - [ ] `docker compose ps` shows all services healthy.
 - [ ] `curl http://localhost:8080` returns the app.
 - [ ] Backend can reach `db:5432` (DNS resolution works).
-- [ ] Stopping the db container triggers backend restart (via `depends_on`).
 - [ ] Data persists across `docker compose down` + `up` (volume).
-- [ ] `docker stats` shows resource limits enforced.
 
 ---
 
@@ -599,29 +514,15 @@ Combine everything into a fully configured production server.
 **Verification (full checklist)**:
 - [ ] `apt upgrade` / `dnf upgrade` shows nothing to update.
 - [ ] `ufw status` shows only 22/80/443.
-- [ ] `sshd -T` shows `permitrootlogin no`, `passwordauthentication no`.
-- [ ] `fail2ban-client status` shows the sshd jail.
-- [ ] `getenforce` (RHEL) = Enforcing / AppArmor profiles active (Ubuntu).
+- [ ] `sshd -T | grep permitrootlogin` shows `no`.
+- [ ] `fail2ban-client status sshd` is active.
+- [ ] `getenforce` (RHEL) shows `Enforcing` or AppArmor profiles active.
 - [ ] `systemctl list-units --state=failed` shows nothing.
-- [ ] `lsblk` shows LVM on `/data`.
-- [ ] `systemctl list-timers` shows the backup timer.
-- [ ] `journalctl --disk-usage` is under your limit.
+- [ ] `journalctl --disk-usage` is within limits.
+- [ ] `df -h` shows adequate free space.
+- [ ] `docker ps` (or `podman ps`) shows the app container running.
+- [ ] `curl -I https://localhost` returns 200.
+- [ ] Backup timer is active (`systemctl list-timers | grep backup`).
+- [ ] Monitor is running (`systemctl status monitor`).
+- [ ] Logs are persistent (`ls /var/log/journal/`).
 - [ ] `sysctl vm.swappiness` shows 10.
-- [ ] `podman ps` shows the app container running.
-- [ ] `curl -I https://localhost/` returns 200.
-- [ ] Simulate a service failure — it restarts automatically.
-- [ ] Simulate disk failure on the data volume — RAID survives.
-- [ ] Reboot the server — everything comes back up automatically.
-- [ ] The README documents: how to restore from backup, how to add a user, where TLS certs are, the recovery procedure for a failed boot.
-
----
-
-## Bonus Challenges
-
-- **Write a kernel module**: a "hello world" module that logs to the kernel ring buffer on load/unload. (`module_init`, `module_exit`, `printk`.)
-- **Build a custom kernel**: configure with `menuconfig`, build, install, boot. Measure boot time difference.
-- **Set up Prometheus + Grafana**: monitor the server's metrics (node_exporter), visualize in Grafana.
-- **Write an Ansible playbook**: automate the entire capstone setup (idempotent, repeatable).
-- **Set up WireGuard VPN**: site-to-site or road warrior. Configures interfaces, routes, firewall.
-- **Build a PXE boot server**: netboot Linux installers over the network (DHCP + TFTP + HTTP).
-- **Configure a mail server**: Postfix + Dovecot + SPF/DKIM/DMARC. The final boss of Linux sysadmin.

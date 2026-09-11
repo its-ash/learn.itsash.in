@@ -1,235 +1,401 @@
+---
+title: "09 — Structs"
+description: "Field layout and alignment, embedding as composition, struct tags for serialization, the zero-value-is-useful idiom, and the empty struct set pattern."
+---
+
 # 09 — Structs
 
-Structs are Go's way of grouping data — the closest thing to a class, but without inheritance. Go favors **composition over inheritance**.
-
-## Declaration and Use
+## Field Layout and Memory Alignment
 
 ::code-wrapper{language="go"}
 ```go
-type Point struct {
-	X, Y int
+// The Go compiler lays out struct fields in declaration order, adding
+// PADDING for alignment. The field order affects memory usage.
+
+// ┌─────────────────────────────────────────────────────────────────┐
+// │ struct { a bool; b int64; c bool }                             │
+// │   a (1 byte) + 7 padding + b (8 bytes) + c (1 byte) + 7 pad = 24 │
+// │                                                                 │
+// │ struct { b int64; a bool; c bool }                             │
+// │   b (8 bytes) + a (1 byte) + c (1 byte) + 6 padding = 16        │
+// │                                                                 │
+// │ Reordering fields from largest to smallest eliminates padding. │
+// │ The `fieldalignment` linter (go vet -vettool) detects this.     │
+// └─────────────────────────────────────────────────────────────────┘
+
+// ❌ Poorly aligned — 24 bytes (8 bytes wasted as padding):
+type Bad struct {
+	a bool    // 1 byte + 7 padding
+	b int64   // 8 bytes
+	c bool    // 1 byte + 7 padding
 }
 
-p := Point{1, 2}           // positional (fragile — order matters)
-p := Point{X: 1, Y: 2}     // named (clear, order-independent)
-p := Point{}               // zero value: {0 0}
-p.X = 5                    // field access
-
-// Nested struct (anonymous field type)
-type Circle struct {
-	Point          // embedded — promotes Point's fields
-	Radius int
+// ✅ Well aligned — 16 bytes (fields ordered by size):
+type Good struct {
+	b int64   // 8 bytes
+	a bool    // 1 byte
+	c bool    // 1 byte
+	// 6 bytes padding (to align to 8-byte boundary)
 }
 
-c := Circle{Point: Point{1, 2}, Radius: 5}
-c.X            // 1 (promoted from embedded Point)
-c.Point.X      // 1 (explicit)
-``
-::
+// Check alignment in practice:
+// go install golang.org/x/tools/go/analysis/passes/fieldalignment/cmd/fieldalignment@latest
+// fieldalignment -fix ./...
+```
 
-## Struct Literals
-
-::code-wrapper{language="go"}
-```go
-// Named fields (preferred — order-independent, clear)
-p := Point{X: 1, Y: 2}
-
-// Positional (fragile — adding a field breaks all literals)
-p := Point{1, 2}
-
-// Partial (omitted fields are zero)
-p := Point{X: 1}   // Y = 0
-
-// Empty (all zero)
-p := Point{}
-``
-::
-
-Prefer named-field literals — they're robust to field additions/reorderings. Positional literals break when the struct changes.
-
-## Embedding (Composition)
-
-Go has no inheritance. Instead, a struct can **embed** another type, promoting its fields and methods:
-
-::code-wrapper{language="go"}
-```go
-type Animal struct {
-	Name string
-}
-
-func (a Animal) Speak() string {
-	return a.Name + " makes a sound"
-}
-
-type Dog struct {
-	Animal   // embedded — Dog "is-an" Animal (composition)
-	Breed string
-}
-
-d := Dog{Animal: Animal{Name: "Rex"}, Breed: "Lab"}
-d.Name       // "Rex" (promoted from Animal)
-d.Speak()    // "Rex makes a sound" (promoted method)
-d.Animal.Speak()  // explicit access
-``
-::
-
-Embedding promotes the embedded type's fields and methods to the outer struct — `d.Name` is shorthand for `d.Animal.Name`. The outer struct can override:
-
-::code-wrapper{language="go"}
-```go
-func (d Dog) Speak() string {
-	return d.Name + " barks"
-}
-d.Speak()    // "Rex barks" (Dog's method overrides the promoted one)
-d.Animal.Speak()  // "Rex makes a sound" (explicit access to the embedded method)
-``
-::
-
-### Embedding vs Inheritance
-
-Embedding is **composition**, not inheritance:
-- There's no "is-a" relationship (no subtype polymorphism via embedding — use interfaces for that).
-- The outer struct *has-a* inner struct; the inner's methods are *delegated*.
-- No virtual dispatch: `d.Speak()` calls `Dog.Speak` if defined, else `Animal.Speak` — resolved at compile time by the method set.
-
-## Struct Tags
-
-Tags are metadata on struct fields, read by reflection — used by `encoding/json`, `database/sql`, validation, etc.:
+## Struct Literals — Named vs Positional
 
 ::code-wrapper{language="go"}
 ```go
 type User struct {
-	ID       int    `json:"id"`
-	Username string `json:"username" db:"user_name" validate:"required"`
-	Email    string `json:"email,omitempty"`
-	Password string `json:"-"`           // never serialized
+	ID       int64
+	Name     string
+	Email    string
+	IsActive bool
 }
+
+// ✅ Named fields — order-independent, survives field additions:
+u := User{
+	ID:       1,
+	Name:     "Alice",
+	Email:    "alice@example.com",
+	IsActive: true,
+}
+
+// ❌ Positional — fragile: adding a field breaks ALL literals:
+// u := User{1, "Alice", "alice@example.com", true}
+
+// ✅ Partial — omitted fields get their zero value:
+u2 := User{Name: "Bob"}  // ID=0, Email="", IsActive=false
+
+// ✅ Zero value — all fields zero:
+var u3 User  // User{ID:0, Name:"", Email:"", IsActive:false}
 ```
-::
 
-- `json:"name"` — serializes the field as `"name"` in JSON.
-- `json:"name,omitempty"` — omits the field if it's the zero value.
-- `json:"-"` — never serializes the field.
-- Tags are raw strings; the format is `key:"value"` repeated, space-separated.
-
-## Anonymous Structs
+## Embedding — Composition, Not Inheritance
 
 ::code-wrapper{language="go"}
 ```go
-// Inline, for one-off use
-p := struct{ X, Y int }{1, 2}
+// Go has NO inheritance. Embedding is COMPOSITION with method promotion.
+// The embedded type's fields and methods are "promoted" to the outer struct.
 
-// As a field type
-type Config struct {
-	Limits struct {
-		Max int
-		Min int
+type Repository struct {
+	db *sql.DB
+}
+
+func (r *Repository) Save(ctx context.Context, entity any) error {
+	return r.db.QueryRowContext(ctx, "INSERT ...", entity).Err()
+}
+
+func (r *Repository) FindByID(ctx context.Context, id int64) (any, error) {
+	return nil, nil
+}
+
+// Embed Repository — UserService gets Save and FindByID promoted:
+type UserService struct {
+	*Repository          // embedded POINTER — must be initialized
+	cache     redis.Cache
+}
+
+// UserService can override (shadow) promoted methods:
+func (s *UserService) FindByID(ctx context.Context, id int64) (any, error) {
+	// Check cache first, fall back to repo:
+	if v, ok := s.cache.Get(ctx, fmt.Sprintf("user:%d", id)); ok {
+		return v, nil
+	}
+	return s.Repository.FindByID(ctx, id)  // explicit access to the embedded method
+}
+
+// Usage:
+func newUserService(db *sql.DB, cache redis.Cache) *UserService {
+	return &UserService{
+		Repository: &Repository{db: db},  // must initialize embedded pointer
+		cache:      cache,
 	}
 }
-``
-::
+```
 
-Useful for ad-hoc grouping (test data, local organization). Don't overuse — named types are clearer for anything reused.
-
-## Struct Comparison
-
-Structs are comparable if **all fields are comparable**:
+### Embedding an interface — the decorator pattern
 
 ::code-wrapper{language="go"}
 ```go
+// Embedding an interface lets you wrap/decorate any implementation:
+type Logger interface {
+	Log(msg string)
+}
+
+type LoggingService struct {
+	Logger               // embedded interface — accepts any Logger
+	inner Service
+}
+
+func (l *LoggingService) DoWork(ctx context.Context) error {
+	l.Log("starting work")
+	err := l.inner.DoWork(ctx)
+	if err != nil {
+		l.Log(fmt.Sprintf("work failed: %v", err))
+	}
+	return err
+}
+
+// Usage — inject any Logger:
+svc := &LoggingService{
+	Logger: log.New(os.Stderr, "", 0),
+	inner:  realService{},
+}
+```
+
+### The embedding ambiguity trap
+
+::code-wrapper{language="go"}
+```go
+type A struct{ X int }
+type B struct{ X int }
+
+// ❌ Ambiguous — which X is promoted?
+type C struct {
+	A
+	B
+}
+// c.X   // compile error: ambiguous selector c.X
+// c.A.X // ok — explicit disambiguation
+// c.B.X // ok
+
+// This is the "diamond" problem — Go handles it by requiring explicit
+// disambiguation. There's no virtual inheritance to resolve it automatically.
+```
+
+## Struct Tags — Serialization Metadata
+
+::code-wrapper{language="go"}
+```go
+// Tags are raw strings read by reflection (encoding/json, database/sql, etc.)
+// Format: `key:"value" key2:"value2"` (space-separated, double-quoted)
+
+type User struct {
+	// JSON tags:
+	ID       int64  `json:"id"`                          // serialize as "id"
+	Name     string `json:"name" validate:"required"`    // multiple tags
+	Email    string `json:"email,omitempty"`             // omit if zero value
+	Password string `json:"-"`                           // never serialize
+	Age      int    `json:"age,string"`                  // serialize as string "25"
+
+	// DB tags:
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+// ─── JSON tag options ───
+//   json:"name"            — field name in JSON
+//   json:"name,omitempty"  — omit if zero value (0, "", false, nil)
+//   json:"-"               — never serialize
+//   json:"-,omitempty"      — field literally named "-" (edge case)
+//   json:"name,string"      — serialize as a JSON string ("42" not 42)
+//   json:"name,omitempty,omitempty"  — last wins (just omitempty)
+
+// ─── Validation tags (go-playground/validator) ───
+//   validate:"required"        — must be non-zero
+//   validate:"min=1,max=100"  — numeric range
+//   validate:"email"          — must be a valid email
+//   validate:"oneof=active inactive suspended"
+
+// go vet checks json tag syntax:
+//   go vet ./...
+//   // "struct field tag X not compatible with reflect.StructTag.Get"
+```
+
+## The Zero-Value-Is-Useful Idiom
+
+::code-wrapper{language="go"}
+```go
+// Go idiom: design structs so the zero value is immediately usable.
+// This eliminates the need for constructors in the common case.
+
+// ✅ Standard library examples:
+//   sync.Mutex{}     — zero value is an unlocked mutex, ready to use
+//   bytes.Buffer{}   — zero value is an empty buffer, ready to use
+//   http.Server{}    — zero value is a server with sensible defaults
+
+type Counter struct {
+	mu    sync.Mutex
+	count int
+}
+
+// Zero value is a usable counter (unlocked, count=0):
+var c Counter
+c.Inc()
+fmt.Println(c.Value())  // 1
+
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.count++
+}
+
+func (c *Counter) Value() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
+}
+
+// ❌ ANTI-PATTERN: struct where zero value panics:
+type BadConfig struct {
+	dsn string  // zero value is "" → sql.Open("", "") panics
+}
+// User writes `var cfg BadConfig; db, _ := sql.Open(cfg.dsn)` → runtime panic
+
+// ✅ Fix: provide a constructor for required fields:
+func NewConfig(dsn string) *Config {
+	return &Config{dsn: dsn, timeout: 30 * time.Second}
+}
+```
+
+## Empty Struct — The Zero-Byte Type
+
+::code-wrapper{language="go"}
+```go
+// struct{} occupies 0 bytes. Use as a set value or a signal channel.
+
+// ─── Set implementation (map[string]struct{} is Go's set) ───
+type Set[T comparable] struct {
+	m map[T]struct{}
+}
+
+func NewSet[T comparable]() *Set[T] {
+	return &Set[T]{m: make(map[T]struct{})}
+}
+
+func (s *Set[T]) Add(v T) {
+	s.m[v] = struct{}{}  // struct{}{} is the zero-byte value
+}
+
+func (s *Set[T]) Contains(v T) bool {
+	_, ok := s.m[v]
+	return ok
+}
+
+func (s *Set[T]) Remove(v T) {
+	delete(s.m, v)
+}
+
+func (s *Set[T]) Len() int {
+	return len(s.m)
+}
+
+// ─── Signal channel (chan struct{} carries no data, zero-size) ───
+done := make(chan struct{})
+go func() {
+	// work
+	close(done)  // signal completion — all receivers unblock
+}()
+<-done  // wait for completion
+
+// ┌───────────────────────────────────────────────┐
+// │ Why struct{} is 0 bytes:                      │
+// │  It has no fields, so no data to store.       │
+// │  The compiler knows it's zero-width, so       │
+// │  all struct{}{} values share the same         │
+// │  address (or no address at all).              │
+// │  This makes map[T]struct{} more memory-      │
+// │  efficient than map[T]bool (bool is 1 byte). │
+// └───────────────────────────────────────────────┘
+```
+
+## Struct Comparison and `reflect.DeepEqual`
+
+::code-wrapper{language="go"}
+```go
+// Structs are comparable with == ONLY if all fields are comparable.
+// Slices, maps, and functions are NOT comparable — a struct containing
+// them can't use ==.
+
 type Point struct{ X, Y int }
 p1 := Point{1, 2}
 p2 := Point{1, 2}
-fmt.Println(p1 == p2)   // true
+fmt.Println(p1 == p2)  // true — all fields comparable
 
-type Bad struct{ S []int }
-// b1 == b2 is illegal — []int is not comparable
-``
-::
+type WithSlice struct {
+	Name string
+	Tags []string  // slice — not comparable
+}
+// w1 == w2  // compile error: struct containing []string cannot be compared
 
-Comparable structs can be map keys; non-comparable (with slices/maps/funcs) can't.
+// ✅ Use reflect.DeepEqual for structs with non-comparable fields:
+import "reflect"
+w1 := WithSlice{Name: "a", Tags: []string{"x"}}
+w2 := WithSlice{Name: "a", Tags: []string{"x"}}
+fmt.Println(reflect.DeepEqual(w1, w2))  // true
+
+// ⚠️ reflect.DeepEqual is slow (reflection + recursion). For hot paths,
+// implement a custom Equals method:
+func (w WithSlice) Equals(other WithSlice) bool {
+	if w.Name != other.Name { return false }
+	return slices.Equal(w.Tags, other.Tags)
+}
+
+// Comparable structs can be MAP KEYS:
+m := map[Point]string{{0, 0}: "origin", {1, 1}: "diagonal"}
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use named-field literals (`Point{X: 1, Y: 2}`) over positional (`Point{1, 2}`) — named literals are robust to field additions/reorderings and self-documenting. Positional literals break silently when a field is inserted.
-- **Idiom**: use embedding for composition and method promotion — `type Service struct { Logger; DB }` gives `Service` the `Logger`'s and `DB`'s methods without boilerplate delegation. This is Go's alternative to inheritance: *has-a* with delegation, not *is-a* with virtual dispatch.
-- **Idiom**: use struct tags for serialization metadata — `json:"name,omitempty"` and `db:"column"` are read by reflection in `encoding/json` and `database/sql`. Keep tags consistent and use `go vet` (it checks tag syntax).
-- **Idiom**: prefer embedding an **interface** (not a struct) when you want to delegate a capability without forcing a concrete type — `type Service struct { Logger interface{ Log(string) } }` lets `Service` accept any logger, and the embedded interface promotes the method.
-- **Idiom**: use `omitempty` in JSON tags for optional fields — `json:"email,omitempty"` omits the field from JSON when it's the zero value (empty string, 0, false, nil), keeping the output clean. Without it, every field appears (often as `""`/`0`), cluttering the response.
+- **Performance**: order struct fields from largest to smallest (int64 before bool) to minimize padding. Use the `fieldalignment` linter to detect wasted space. For hot-path structs (one per request), saving 8-16 bytes × millions of requests = significant memory.
+- **Idiom**: design zero values to be usable (`sync.Mutex{}`, `bytes.Buffer{}`, `Counter{}`) — eliminates constructor boilerplate. Reserve constructors for required fields that have no sensible zero value (DSN, API keys).
+- **Idiom**: use named-field literals (`User{ID: 1, Name: "Alice"}`) — they're robust to field additions and self-documenting. Positional literals break silently when a field is inserted in the middle.
+- **Idiom**: embed interfaces for decoration (`type LoggingService struct { Logger; inner Service }`) — the embedded interface promotes its methods, letting the outer struct delegate or wrap.
+- **Idiom**: use `struct{}` as the map value for sets — `map[string]struct{}` uses 0 bytes per entry (vs 1 byte for `bool`). For large sets, this saves meaningful memory.
+- **Safety**: `reflect.DeepEqual` is slow and can be surprising (it compares unexported fields too). For production code, implement a custom `Equals` method using `slices.Equal` for slice fields.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Embedding promotes fields *and* methods**: `d.X` and `d.Speak()` both work via promotion. If the outer struct defines a method with the same name, it shadows (not overrides) the promoted one — no virtual dispatch.
-- **Embedding two types with the same field/method name**: ambiguous — `d.X` is a compile error if both embedded types have `X`. Disambiguate with `d.Type1.X`.
-- **Embedding a pointer**: `type S struct { *T }` — the pointer must be initialized before use (`S{T: &T{}}`); a nil embedded pointer causes nil-pointer panics on promoted method calls.
-- **Embedding is not inheritance**: there's no subtype polymorphism — a `Dog` is not an `Animal` for interface purposes (unless `Animal` is an interface). You can't pass a `Dog` where an `Animal` is expected without an interface.
-- **Struct tags are raw strings**: the `json:"x" db:"y"` syntax is a convention, not enforced by the language. `go vet` checks the `json` tag syntax; other packages have their own parsers.
-- **Positional literals are fragile**: `Point{1, 2}` — if you add a `Z int` field, the literal still compiles (Z gets 0) but the intent is lost, or it breaks if Z is inserted in the middle. Named literals survive.
-- **Struct comparison requires all-comparable fields**: a struct with a slice/map/func field isn't comparable (`==` is a compile error). Use `reflect.DeepEqual` for deep comparison, or compare a key field.
-- **Empty struct `struct{}`**: takes 0 bytes — useful as a set value: `map[string]struct{}`. `struct{}{}` is the empty struct value.
-- **Field alignment**: Go pads structs for alignment — `struct{ a bool; b int64 }` is 16 bytes (bool + 7 padding + int64), while `struct{ b int64; a bool }` is also 16 but orders fields for cache efficiency. `go vet`'s `fieldalignment` linter suggests reorderings to save memory.
+- **Field order affects struct size**: padding between misaligned fields wastes memory. `struct{ a bool; b int64 }` = 16 bytes; `struct{ b int64; a bool }` = 12 bytes (with 4 trailing padding to align to 8). Use `fieldalignment` to optimize.
+- **Embedding promotes fields AND methods**: `d.X` and `d.Speak()` both work. If the outer struct defines a method with the same name, it shadows (not overrides) — no virtual dispatch.
+- **Embedding a pointer**: `type S struct { *T }` leaves the field as `nil` unless initialized. Promoted method calls on a nil embedded pointer panic. Initialize in the literal or constructor.
+- **Ambiguous embedding**: embedding two types with the same field/method name → `c.X` is a compile error. Disambiguate with `c.A.X` / `c.B.X`.
+- **Embedding is not inheritance**: a `Dog` embedding `Animal` is not an `Animal` for interface purposes. Embedding is composition; interfaces provide polymorphism.
+- **Positional literals break on field insertion**: `Point{1, 2}` still compiles if you add `Z int` (it gets 0), but the intent is lost. Named literals survive.
+- **Struct with non-comparable fields can't use `==`**: a struct with a slice/map/func field can't be compared with `==` (compile error). Use `reflect.DeepEqual` or a custom method.
+- **`struct{}` is 0 bytes**: all `struct{}{}` values may share the same address. Don't take `&struct{}{}` and compare addresses — they may be equal even for "different" values.
+- **Struct tags are raw strings**: the `json:"x" db:"y"` format is a convention. `go vet` checks `json` tag syntax but not custom tags. Malformed tags are silently ignored by the consuming package.
+- **`omitempty` checks for zero value**: `json:"x,omitempty"` omits the field if it's 0, "", false, or nil. For a field where 0 is a valid value, `omitempty` will incorrectly omit it — use a `*int` (nil = omit, 0 = include).
 
-## 🧠 Spot the Bug
-
-A developer embeds a pointer type and gets a nil pointer panic:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-type Logger struct{}
-
-func (l *Logger) Log(msg string) { fmt.Println(msg) }
-
-type Service struct {
-	*Logger
+type S struct {
+	A int64
+	B bool
+	C int64
+	D bool
 }
-
-func main() {
-	s := Service{}
-	s.Log("hello")   // panic: nil pointer dereference
+type T struct {
+	A int64
+	C int64
+	B bool
+	D bool
 }
+fmt.Println(unsafe.Sizeof(S{}), unsafe.Sizeof(T{}))
 ```
+
+What's printed (on a 64-bit system)?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`Service` embeds `*Logger` (a pointer). `s := Service{}` leaves the embedded `*Logger` as `nil` (the zero value of a pointer). Calling `s.Log("hello")` invokes the promoted `(*Logger).Log` method on a nil receiver — a nil pointer dereference panic.
-
-The fix — initialize the embedded pointer:
-
-```go
-func main() {
-	s := Service{Logger: &Logger{}}
-	s.Log("hello")   // OK
-}
 ```
-::
-Or provide a constructor:
-
-```go
-func NewService() *Service {
-	return &Service{Logger: &Logger{}}
-}
+32 24
 ```
-::
-Or embed the value (not the pointer) if `Logger` doesn't need pointer receivers:
 
-```go
-type Service struct {
-	Logger   // value, not pointer — zero value is a usable Logger
-}
-s := Service{}
-s.Log("hello")   // OK — Logger is a zero-value Logger, not nil
-```
-::
-But value embedding requires the type to be usable with a zero value (and copies the value into `Service`). Pointer embedding is common for shared dependencies (a logger, a database) that should be injected.
+**`S`** (poorly ordered): A(8) + B(1) + 7 padding + C(8) + D(1) + 7 padding = 32 bytes
 
-**The lesson**: embedding a pointer (`*T`) leaves the embedded field as `nil` unless initialized — promoted method calls on a nil embedded pointer panic. Initialize embedded pointers in the literal or via a constructor.
+**`T`** (well ordered): A(8) + C(8) + B(1) + D(1) + 6 padding = 24 bytes
+
+The same fields, different order, 8 bytes saved (25% smaller). For a struct allocated millions of times (one per request, one per row), this is significant — 8 bytes × 1M = 8MB saved.
+
+This is why the `fieldalignment` linter exists — it detects and can auto-fix (`-fix`) field ordering.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now declare structs, use named/positional/partial literals, embed types for composition and method promotion, use struct tags for serialization, and understand embedding vs. inheritance (composition, no virtual dispatch). Next: pointers — when and why.
+→ [10 — Pointers](/go/10-pointers) — escape analysis, value vs pointer receivers, nil pointer semantics, and when pointers help vs hurt performance.

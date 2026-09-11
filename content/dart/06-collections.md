@@ -1,241 +1,268 @@
-# 06 — Collections (Lists, Sets, Maps)
+---
+title: "Dart — Collections, Iterables & Allocation Patterns"
+description: "Deep-dive into Dart collection internals, lazy Iterable chains, spread/collection-if semantics, unmodifiable views vs copies, and zero-allocation patterns. Code-first engineering reference."
+---
 
-Dart's collections: `List` (ordered, indexed), `Set` (unique, unordered), `Map` (key-value). All support generics, spreads, and collection-if/for.
+# Dart — Collections, Iterables & Allocation Patterns
 
-## Lists
+## Lazy Iterable Chains — Evaluation Semantics
 
 ::code-wrapper{language="dart"}
 ```dart
+// map/where/expand return LAZY Iterables — no computation until iterated.
+// Each `.toList()` materializes the chain (one allocation, one pass).
+
+// ❌ Anti-pattern: calling .toList() after every step (multiple allocations).
+var result = numbers
+    .map((n) => n * 2)      // lazy Iterable
+    .toList()                // ← allocates a List here (premature)
+    .where((n) => n > 5)    // lazy Iterable (on a List, re-iterates)
+    .toList()                // ← another allocation
+    .map((n) => n.toString()) // lazy
+    .toList();               // ← yet another
+
+// ✓ Correct: chain lazy operations, materialize ONCE at the end.
+var resultFixed = numbers
+    .map((n) => n * 2)       // lazy
+    .where((n) => n > 5)     // lazy
+    .map((n) => n.toString()) // lazy
+    .toList();               // single allocation, single pass
+
+// Lazy iterables re-evaluate on each iteration — no caching:
 var numbers = [1, 2, 3];
-List<String> fruits = ['apple', 'banana'];
-var empty = <int>[];              // typed empty list
-var fixed = List<int>.filled(5, 0);   // [0, 0, 0, 0, 0]
+var doubled = numbers.map((n) { print('mapping $n'); return n * 2; });
+doubled.toList();  // prints: mapping 1, mapping 2, mapping 3
+doubled.toList();  // prints again: mapping 1, mapping 2, mapping 3 (re-evaluated!)
+// If the mapping is expensive, cache with .toList() and reuse the list.
 ```
 ::
-### Access and modify
+
+## `sort` — In-Place, Returns `void`
 
 ::code-wrapper{language="dart"}
 ```dart
-var list = ['a', 'b', 'c'];
-list[0];          // 'a' (0-indexed)
-list.length;      // 3
-list.last;        // 'c'
-list.first;       // 'a'
-list.add('d');    // append
-list.insert(1, 'x');   // insert at index
-list.remove('b');      // remove first occurrence
-list.removeAt(0);      // remove by index
-list.contains('a');    // true
-list.indexOf('c');     // 2
-```
-::
-### List methods
+// ❌ Anti-pattern: assigning the result of sort() — it returns void.
+var sorted = [3, 1, 2].sort();  // sorted is void! sort() is in-place.
+print(sorted);  // null (or compile error in strict mode)
 
-::code-wrapper{language="dart"}
-```dart
-[1, 2, 3].map((e) => e * 2).toList();         // [2, 4, 6]
-[1, 2, 3, 4].where((e) => e.isEven).toList(); // [2, 4]
-[3, 1, 2].sort();                             // [1, 2, 3] (in-place)
-[1, 2, 3].reversed.toList();                  // [3, 2, 1]
-[1, 2, 3].fold(0, (a, b) => a + b);           // 6 (reduce with initial)
-[1, 2, 3].reduce((a, b) => a + b);            // 6 (no initial)
-[1, 2, 3].any((e) => e > 2);                  // true
-[1, 2, 3].every((e) => e > 0);                // true
-[1, 2, 3].join(', ');                         // '1, 2, 3'
-[1, 2, 3].sublist(1);                         // [2, 3]
-```
-::
-`map`/`where` return lazy `Iterable`s — call `.toList()` to materialize. `sort` is in-place (returns void). `fold` has an initial value; `reduce` doesn't (throws on empty).
+// ✓ Correct: sort a copy (don't mutate the original).
+var numbers = [3, 1, 2];
+var sorted = [...numbers]..sort();  // spread creates a copy, cascade sorts it
+print(sorted);   // [1, 2, 3]
+print(numbers);  // [3, 1, 2] — original unchanged
 
-### Const lists
-
-::code-wrapper{language="dart"}
-```dart
-const colors = ['red', 'green'];   // compile-time constant, immutable, canonicalized
-// colors.add('blue');              // ✗ const lists are immutable
-```
-::
-### Spread and collection-if/for
-
-::code-wrapper{language="dart"}
-```dart
-var a = [1, 2];
-var b = [0, ...a, 3];           // [0, 1, 2, 3]
-var c = [0, ...?nullable, 3];   // null-aware spread (skips if null)
-
-var withAd = [
-	'item',
-	if (showAd) 'advertisement',   // collection-if
-	for (var i = 0; i < 3; i++) 'item$i',   // collection-for
+// Custom comparator — for descending or multi-field sort:
+var users = [
+  (name: 'Alice', age: 30),
+  (name: 'Bob', age: 25),
+  (name: 'Alice', age: 25),
 ];
-```
-::
-Collection-if and collection-for build lists conditionally/programmatically — no `addAll` or `if`-then-`add` boilerplate.
 
-## Sets
+// Sort by name (asc), then by age (desc):
+users.sort((a, b) {
+  final nameCmp = a.name.compareTo(b.name);
+  if (nameCmp != 0) return nameCmp;
+  return b.age.compareTo(a.age);  // descending age
+});
+// [(name: Alice, age: 30), (name: Alice, age: 25), (name: Bob, age: 25)]
 
-::code-wrapper{language="dart"}
-```dart
-var colors = {'red', 'green', 'blue'};
-Set<int> numbers = {1, 2, 3};
-var empty = <int>{};            // typed empty set (NOT {} which is a Map)
-var dupes = {1, 1, 2, 2, 3};   // {1, 2, 3} (duplicates removed)
-```
-::
-### Set operations
-
-::code-wrapper{language="dart"}
-```dart
-var a = {1, 2, 3};
-var b = {3, 4, 5};
-a.union(b);            // {1, 2, 3, 4, 5}
-a.intersection(b);     // {3}
-a.difference(b);       // {1, 2}
-a.contains(2);         // true
-a.add(4);              // {1, 2, 3, 4}
-a.remove(1);           // {2, 3, 4}
-```
-::
-Sets are unordered (the default `LinkedHashSet` preserves insertion order, but you shouldn't rely on it). Use Sets for uniqueness and set operations (union, intersection).
-
-## Maps
-
-::code-wrapper{language="dart"}
-```dart
-var ages = {'Alice': 30, 'Bob': 25};
-Map<String, int> scores = {};
-var empty = <String, int>{};
-
-ages['Alice'];        // 30 (null if missing)
-ages['Charlie'];      // null (missing key)
-ages['Charlie'] = 35; // add/update
-ages.containsKey('Alice');   // true
-ages.containsValue(30);      // true
-ages.keys;           // Iterable<String> ('Alice', 'Bob', 'Charlie')
-ages.values;         // Iterable<int> (30, 25, 35)
-ages.length;         // 3
-ages.remove('Bob');
-ages.forEach((k, v) => print('$k: $v'));
-```
-::
-Accessing a missing key returns `null` (not an error) — the value type is `int?` when accessed via `[]`. The default `Map` is `LinkedHashMap` (insertion order preserved).
-
-### Map iteration
-
-::code-wrapper{language="dart"}
-```dart
-for (var entry in ages.entries) {
-	print('${entry.key}: ${entry.value}');
+// Comparable<T> — for types with a natural ordering:
+class Priority implements Comparable<Priority> {
+  final int level;
+  const Priority(this.level);
+  @override
+  int compareTo(Priority other) => level.compareTo(other.level);
 }
-
-for (var key in ages.keys) { ... }
-for (var value in ages.values) { ... }
-
-ages.forEach((key, value) { ... });
+var tasks = [Priority(3), Priority(1), Priority(2)];
+tasks.sort();  // uses compareTo — [1, 2, 3]
 ```
 ::
-## Type safety and generics
+
+## Spread & Collection-If — Conditional Construction
 
 ::code-wrapper{language="dart"}
 ```dart
-List<int> numbers = [1, 2, 3];
-// numbers.add('four');   // ✗ type error
+// Spread (...) flattens another iterable into a literal.
+// Null-aware spread (...?) skips if the iterable is null.
+var base = [1, 2, 3];
+var extended = [0, ...base, 4];  // [0, 1, 2, 3, 4]
 
-Map<String, int> scores = {'a': 1};
-// scores['b'] = 'two';   // ✗ type error
+List<int>? maybeNull;
+var safe = [0, ...?maybeNull, 4];  // [0, 4] — null spread is a no-op
+
+// Collection-if — conditional elements in a literal (Flutter widget trees):
+var widgets = <Widget>[
+  Text('Header'),
+  if (showAd) BannerAd(),           // included only if showAd is true
+  if (user != null) ...[
+    ProfilePic(user!),
+    UserName(user!),
+  ],                                 // spread a conditional group
+  if (items.isEmpty)
+    EmptyState()
+  else
+    ...items.map((i) => ItemWidget(i)),  // if-else in a collection literal
+];
+
+// Collection-for — programmatic elements:
+var indices = [for (var i = 0; i < 5; i++) 'item-$i'];
+// ['item-0', 'item-1', 'item-2', 'item-3', 'item-4']
+
+// Nested — build complex structures declaratively:
+var matrix = [
+  for (var r = 0; r < 3; r++)
+    [for (var c = 0; c < 3; c++) r * 3 + c]
+];
+// [[0,1,2], [3,4,5], [6,7,8]]
 ```
 ::
-Collections are typed — the element type is enforced. `List<dynamic>` or `Map<dynamic, dynamic>` (the default for `[]`/`{}` without type args) allows any type but loses type safety.
 
-## `Iterable` vs `List`
-
-`Iterable` is a lazy sequence — you can iterate it, but it doesn't have `[]` indexing or `length` (unless it's a `List`). `map`/`where`/`expand` return `Iterable`. Call `.toList()` to materialize:
+## Immutable Collections — Views vs Copies
 
 ::code-wrapper{language="dart"}
 ```dart
-var iter = [1, 2, 3].map((e) => e * 2);   // Iterable<int>
-iter.length;   // ✗ Iterable has no length (actually, it does — but it iterates)
-var list = iter.toList();   // [2, 4, 6]
-list.length;   // 3
+// ── const: compile-time, deeply immutable, canonicalized ──
+const colors = ['red', 'green'];  // same instance everywhere, zero allocation
+// colors.add('blue');  // ✗ UnsupportedError
+
+// ── List.unmodifiable: runtime, throws on mutation, but is a VIEW ──
+var source = [1, 2, 3];
+var view = List.unmodifiable(source);
+// view.add(4);  // ✗ UnsupportedError
+source.add(4);
+print(view);  // [1, 2, 3, 4] — view reflects source mutation!
+
+// ✓ For a true immutable copy: wrap a copy, not the source.
+var immutable = List.unmodifiable([...source]);  // copy then wrap
+source.add(5);
+print(immutable);  // [1, 2, 3, 4] — unaffected by source mutation after copy
+
+// ── Set.unmodifiable / Map.unmodifiable: same semantics ──
+var setView = Set.unmodifiable({1, 2, 3});
+var mapView = Map.unmodifiable({'a': 1, 'b': 2});
+
+// For persistent (structural sharing) immutable collections, use packages:
+// - package:built_collection — persistent immutable List/Map/Set
+// - package:fast_immutable_collections — high-performance persistent collections
 ```
 ::
-Lazy `Iterable`s are efficient (no intermediate list) but re-iterate each time. `.toList()` caches.
 
-## Immutable collections
-
-Dart's built-in collections are mutable. For immutability:
-- `const` collections (compile-time, deeply immutable).
-- `List.unmodifiable(list)` — view that throws on mutation.
-- `package:fast_immutable_collections` or `built_collection` — persistent immutable collections.
+## `reduce` vs `fold` — Empty Collection Behavior
 
 ::code-wrapper{language="dart"}
 ```dart
-final mutable = [1, 2, 3];
-final readonly = List.unmodifiable(mutable);
-// readonly.add(4);   // ✗ throws UnsupportedError
+// reduce: combines elements, NO initial value — throws on empty.
+// ❌ Anti-pattern: reduce on a possibly-empty list.
+int sum(List<int> nums) => nums.reduce((a, b) => a + b);  // throws StateError on []
+sum([]);  // Uncaught Error: Bad state: no element
+
+// ✓ Correct: fold with an initial value — safe on empty.
+int sumSafe(List<int> nums) => nums.fold(0, (a, b) => a + b);  // 0 on empty
+sumSafe([]);  // 0
+
+// fold with a different initial type (e.g., building a string):
+String csv = [1, 2, 3].fold('', (acc, n) => acc.isEmpty ? '$n' : '$acc,$n');
+// '1,2,3'
+
+// reduce's return type matches the element type:
+var max = [3, 1, 4, 1, 5].reduce((a, b) => a > b ? a : b);  // 5 (int)
+
+// For first/last/single on possibly-empty: use firstWhere with orElse:
+var first = [1, 2, 3].firstWhere((n) => n > 5, orElse: () => -1);  // -1
 ```
 ::
+
+## Equality — Collections Are Identity
+
+::code-wrapper{language="dart"}
+```dart
+// Built-in collections use IDENTITY for ==, not value equality.
+print([1, 2] == [1, 2]);  // false — different instances
+print({1, 2} == {1, 2});  // false
+print({'a': 1} == {'a': 1});  // false
+
+// ❌ Anti-pattern: using == to compare collection contents.
+bool sameContent(List<int> a, List<int> b) => a == b;  // always false for distinct lists
+
+// ✓ Correct: use listEquals / setEquals / mapEquals (Flutter) or DeepCollectionEquality.
+import 'package:flutter/foundation.dart';
+print(listEquals([1, 2], [1, 2]));  // true
+
+import 'package:collection/collection.dart';
+const deepEq = DeepCollectionEquality();
+print(deepEq.equals([1, [2, 3]], [1, [2, 3]]));  // true — nested deep equality
+print(deepEq.equals({'a': [1, 2]}, {'a': [1, 2]}));  // true
+
+// Records have structural equality built in:
+print((1, 2) == (1, 2));  // true — records compare by value, no helper needed
+print((x: 1, y: 2) == (x: 1, y: 2));  // true
+```
+::
+
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `map`/`where`/`fold`/`any`/`every` (functional methods) over manual loops — `[1,2,3].map((e) => e * 2).toList()` is clearer than a `for` loop building a list. Call `.toList()` to materialize lazy `Iterable`s.
-- **Idiom**: use collection-if and collection-for in literals — `[item, if (showAd) ad, for (var i in items) i]` builds lists conditionally/programmatically, no `addAll` boilerplate. Unique to Dart, very expressive.
-- **Idiom**: use `Set` for uniqueness and set operations — `set1.union(set2)`, `intersection`, `difference`. For "unique items," a `Set` is clearer than "check before add to a List."
-- **Idiom**: use `...?` (null-aware spread) for optional nested collections — `[...?optionalList]` skips if `optionalList` is null, no `if` check. Clean for conditional inclusion.
-- **Idiom**: use `List.unmodifiable()` for read-only views — it wraps a list and throws on mutation. Use for returning internal lists to prevent external modification. For deep immutability, use `const` or `built_collection`.
+- **Performance**: chain lazy `Iterable` operations (`map`/`where`/`expand`) and call `.toList()` once at the end — single allocation, single pass. Avoid `.toList()` after every step (multiple intermediate lists).
+- **Idiom**: `[...list]..sort()` for a sorted copy — spread creates a new list, cascade sorts it in-place, returns the list. Doesn't mutate the original. Prefer over `list.toList()..sort()` (clearer intent).
+- **Idiom**: use `fold` (not `reduce`) for possibly-empty collections — `fold(0, (a, b) => a + b)` returns `0` on empty; `reduce` throws `StateError`. `fold` also supports a different return type than the element type.
+- **Idiom**: use collection-if/for in widget trees — `[Text('header'), if (showAd) Ad(), for (var item in items) ItemWidget(item)]` builds lists declaratively. Eliminates `addAll` and `if-then-add` boilerplate.
+- **Idiom**: `...?` (null-aware spread) for optional nested collections — `[...?optionalList]` skips if `optionalList` is null. Cleaner than `if (list != null) [...list]`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`{}` is an empty `Map`, not a `Set`**: `var x = {}` infers `Map<dynamic, dynamic>`. Use `var x = <int>{}` or `<int>{}` for an empty Set.
-- **`map`/`where` return lazy `Iterable`**: not a `List`. No `[]` indexing (well, `elementAt` works but iterates). Call `.toList()` to cache and get `List` methods.
-- **`sort` is in-place, returns `void`**: `var sorted = [3,1,2].sort()` — `sorted` is `void` (not the sorted list). Use `[...list]..sort()` or `list.toList()..sort()` to get a sorted copy.
-- **`reduce` throws on empty**: `[].reduce(...)` throws `StateError`. Use `fold` (with an initial value) for possibly-empty lists, or check `isEmpty` first.
-- **Accessing a missing `Map` key returns `null`**: `map['missing']` is `null`, not an error. The value type is `int?` when accessed via `[]`. Use `containsKey` or `??` to handle.
-- **`List.filled(n, x)` creates a fixed-length list**: `List.filled(5, 0)` is fixed-length (can't add/remove, but can modify elements). Use `List.filled(5, 0, growable: true)` for a growable list, or `<int>[]`.
-- **`const` collections are deeply immutable and canonicalized**: `const [1,2,3]` is the same instance everywhere. Mutating throws. Use for fixed data.
-- **`List.unmodifiable` is a view**: it wraps the original; mutations to the original are visible through the view. It's not a copy. For a true immutable copy, use `List.unmodifiable([...original])`.
-- **Sets don't preserve order (conceptually)**: the default `LinkedHashSet` preserves insertion order, but relying on it is fragile. If order matters, use a `List`.
-- **`==` for collections is identity**: `[1,2] == [1,2]` is `false`. Use `listEquals` (Flutter) or `DeepCollectionEquality().equals` for value equality. `Set`/`Map` have the same issue.
+- **`{}` is an empty `Map`, not a `Set`**: `var x = {}` infers `Map<dynamic, dynamic>`. Use `var x = <int>{}` or `Set<int>()` for an empty Set.
+- **`map`/`where` return lazy `Iterable`**: not a `List`. No `[]` indexing (well, `elementAt` works but iterates from the start). Call `.toList()` to cache and get `List` methods.
+- **`sort()` is in-place, returns `void`**: `var sorted = list.sort()` assigns `void`. Use `[...list]..sort()` for a sorted copy.
+- **`reduce` throws on empty**: `[].reduce(...)` throws `StateError`. Use `fold` with an initial value for possibly-empty collections.
+- **`List.filled(n, x)` is fixed-length by default**: can't `add`/`remove`, but can modify elements (`list[0] = ...`). Use `List.filled(n, x, growable: true)` or `<int>[]` for a growable list.
+- **`List.unmodifiable` is a view**: mutations to the source are visible through the view. Use `List.unmodifiable([...source])` for an immutable copy.
+- **`const` collections are canonicalized**: `const [1,2,3]` is the same instance everywhere (`identical` is true). Mutating throws. Zero allocation at runtime.
+- **`==` for collections is identity**: `[1,2] == [1,2]` is `false`. Use `listEquals`, `DeepCollectionEquality`, or records (structural equality).
+- **Lazy `Iterable` re-evaluates on each iteration**: `var gen = fib(); gen.take(10).toList(); gen.take(10).toList();` runs the generator twice. Cache with `.toList()` for reuse.
+- **`Set` default is `LinkedHashSet`**: preserves insertion order, but don't rely on it semantically. If order matters, use a `List`. `HashSet` (hash-based) is faster but unordered.
 
 ## 🧠 Spot the Bug
 
-A developer sorts a list and assigns the result, but the sorted list is `void`:
+A developer filters and maps a list, but the side effect runs more times than expected:
 
 ::code-wrapper{language="dart"}
 ```dart
-var numbers = [3, 1, 2];
-var sorted = numbers.sort();
-print(sorted);   // ?
+var numbers = [1, 2, 3, 4, 5];
+var result = numbers
+    .map((n) { print('mapping $n'); return n * 2; })
+    .where((n) => n > 4);
+
+print(result.first);  // prints: mapping 1, mapping 2, mapping 3 → 6
+print(result.last);   // prints: mapping 1, mapping 2, mapping 3, mapping 4, mapping 5 → 10
 ```
 ::
 
-What's wrong?
+Why does `mapping` print for `1` and `2` even though they're filtered out?
 
 <details>
 <summary>Answer</summary>
 
-`sort()` sorts the list *in-place* and returns `void` (not the sorted list). So `sorted` is `void`, and `print(sorted)` prints `null` (or errors, depending on context). The original `numbers` is sorted to `[1, 2, 3]`, but `sorted` doesn't hold it.
+The `map` and `where` operations return **lazy `Iterable`s** — no computation happens until the iterable is actually traversed. When `.first` is called, the iterable is traversed from the beginning:
 
-The fix — sort a copy, or sort in-place then use the original:
+1. `.first` needs the first element matching `where((n) => n > 4)`.
+2. The chain is: `map` → `where`. To get the first `where` match, it pulls from `map`.
+3. `map(1)` → `print('mapping 1')` → `2`. `where(2 > 4)` → false. Continue.
+4. `map(2)` → `print('mapping 2')` → `4`. `where(4 > 4)` → false. Continue.
+5. `map(3)` → `print('mapping 3')` → `6`. `where(6 > 4)` → true. Return `6`.
+
+The map function runs for ALL elements up to the first match — even those filtered out by `where`. The `where` predicate receives the mapped result, not the original.
+
+When `.last` is called, the iterable is traversed **again from the beginning** (lazy, no caching) — all 5 elements are mapped and filtered to find the last match.
+
+The fix — materialize once if you need multiple accesses, and be aware that lazy chains process all upstream elements up to the point of the match:
 
 ```dart
-// Option 1: sort a copy
-var numbers = [3, 1, 2];
-var sorted = [...numbers]..sort();   // spread to copy, cascade sort
-print(sorted);   // [1, 2, 3]
-print(numbers);  // [3, 1, 2] (unchanged)
-
-// Option 2: sort in-place, use the original
-var numbers = [3, 1, 2];
-numbers.sort();
-print(numbers);  // [1, 2, 3]
+// Materialize once, reuse:
+var materialized = numbers
+    .map((n) { print('mapping $n'); return n * 2; })
+    .where((n) => n > 4)
+    .toList();  // runs once: mapping 1, 2, 3, 4, 5
+print(materialized.first);  // 6 (no re-evaluation)
+print(materialized.last);   // 10 (no re-evaluation)
 ```
-::
-`[...numbers]` creates a copy (spread), and `..sort()` (cascade) sorts it and returns the list. This gives a sorted copy without mutating the original.
-
-**The lesson**: Dart's `List.sort()` is in-place and returns `void` (like Java, unlike Python's `sorted()`). To get a sorted copy, spread to a new list and cascade-sort: `[...list]..sort()`. Don't assign the result of `sort()`.
 
 </details>
-
-## Summary
-
-You can use `List` (access, methods, `map`/`where`/`fold`/`sort`, spread, collection-if/for), `Set` (uniqueness, union/intersection/difference), `Map` (access, iteration, `entries`), generics for type safety, `Iterable` (lazy, `.toList()`), and immutable collections (`const`, `List.unmodifiable`) — with the `sort`-returns-void and `{}`-is-a-Map traps avoided. Next: classes and objects.

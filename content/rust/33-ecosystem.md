@@ -1,334 +1,208 @@
-# 33 — Ecosystem Tour
+# 33 — Ecosystem Tour: Architectural Decisions, Not a Shopping List
 
-A curated map of the Rust ecosystem. Pick the right tool for the job; don't reinvent.
+Picking a crate is an architecture decision with a blast radius: it fixes your async runtime for the life of the project, it sets your dependency-audit surface, it determines whether cross-compilation and Docker builds stay simple or become a recurring source of CI pain. This chapter is not "here are some crates" — it's the trade-offs that separate a defensible choice from a choice you'll be reverting in eighteen months.
 
-## Web Frameworks
+## Under-the-Hood Mechanics
 
-| Crate | Style | Notes |
+### How Cargo actually resolves your dependency graph
+
+::code-wrapper{language="toml"}
+```toml
+# Crate A wants tokio's "rt" feature; crate B (anywhere, even transitively)
+# wants "full". Cargo unifies: the COMPILED tokio has the union of both —
+# your own Cargo.toml can understate what's actually in the binary.
+[dependencies]
+tokio = { version = "1", features = ["rt"] }
+crate-b = "2" # pulls in tokio with features = ["full"] transitively
+```
+::
+
+::code-wrapper{language="bash"}
+```bash
+# Cargo can compile TWO incompatible minor versions of the same crate
+# into one binary if dependencies don't unify on a semver range —
+# invisible until compile time or binary size looks oddly large.
+cargo tree -d   # surfaces duplicate versions, e.g. regex 1.5 AND regex 1.10
+```
+::
+
+### Why mixing async runtimes doesn't fail at compile time
+
+::code-wrapper{language="rust"}
+```rust
+// Both implement the same trait surface — the type system can't tell
+// you're mixing runtimes, because AsyncRead/AsyncWrite look identical.
+async fn tokio_style(s: tokio::net::TcpStream) { /* driven by tokio's reactor */ }
+async fn async_std_style(s: async_std::net::TcpStream) { /* driven by async-std's reactor */ }
+
+// This compiles fine, then panics at runtime — "there is no reactor running" —
+// the FIRST time this exact code path executes, often in production:
+#[tokio::main]
+async fn main() {
+    let _ = async_std::net::TcpStream::connect("example.com:80").await;
+    // ^ needs async-std's reactor; only tokio's is running here.
+}
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+| Decision axis | Cheap-looking choice | Real cost |
 |---|---|---|
-| `axum` | Tokio-based, middleware via tower | Most popular, mature, by tokio team |
-| `actix-web` | Actor model, fast | Pre-dates axum, still popular |
-| `rocket` | Ergonomic, macros | Friendly API, slower release cadence |
-| `poem` | Modular | Good OpenAPI integration |
-| `salvo` | Middleware-centric | |
-| `warp` | Combinator-based | Filter-based, older style |
-| `tide` | async-std-based | Less active |
-
-### Use with `tower` middleware
-
-`tower` is the standard middleware/service abstraction. `axum` builds on `tower-http` (compression, tracing, auth, CORS).
-
-## HTTP Client
-
-- `reqwest`: dominant async HTTP client (built on `hyper`).
-- `ureq`: simple blocking client, minimal deps.
-- `hyper`: low-level HTTP/1/2 client/server.
-- `attohttpc`: blocking, minimal.
-
-## Serialization
-
-- `serde`: the universal serialize/deserialize framework. Almost every type derives `Serialize`/`Deserialize`.
-- `serde_json`: JSON.
-- `serde_yaml`: YAML.
-- `toml`/`toml_edit`: TOML config.
-- `rmp-serde`: MessagePack.
-- `bincode`: Rust-native binary (fast, not portable).
-- `postcard`: compact embedded-friendly binary.
-- `ciborium`: CBOR.
-
-## Database
-
-- `sqlx`: async, compile-time checked SQL via macros.
-- `diesel`: ORM, sync, mature.
-- `sea-orm`: async ORM on top of `sqlx`.
-- `tokio-postgres`: async PostgreSQL client.
-- `rusqlite`: sync SQLite.
-- `redis`: Redis client.
-- `mongodb`: official driver.
-
-## Async Runtime
-
-- `tokio`: default for most projects.
-- `async-std`: std-mirror API.
-- `smol`: minimal.
-- `embassy`: `no_std` for embedded.
-
-## CLI Parsing
-
-- `clap`: de facto standard. Derive API is ergonomic.
-- `argh`: Google's lightweight derive-based.
-- `gumdrop`: minimal.
-- `pico-args`: tiny, no derive.
-
-### Plus CLI helpers
-
-- `indicatif`: progress bars.
-- `dialoguer`: interactive prompts.
-- `console`/`owo-colors`: terminal colors.
-- `comfy-table`/`tabled`: tables.
-
-## Logging & Tracing
-
-- `log`: facade, simple `info!`/`warn!` macros.
-- `env_logger`: backend for `log` controlled by `RUST_LOG`.
-- `tracing`: structured, async-aware, spans. Modern choice.
-- `tracing-subscriber`: subscriber setup for `tracing`.
-- `slog`: structured logging, less common now.
-
-## Testing
-
-- Built-in (`cargo test`).
-- `proptest`: property-based.
-- `quickcheck`: property-based (older).
-- `rstest`: parametrized tests.
-- `mockall`: mock generation.
-- `mockito`: HTTP mock server.
-- `wiremock`: HTTP mock (async).
-- `insta`: snapshot testing.
-- `criterion`: benchmarking.
-- `cargo-nextest`: faster test runner.
-- `trybuild`: UI tests for compile errors.
-- `cargo-mutants`: mutation testing.
-
-## Fuzzing
-
-- `cargo-fuzz`: libFuzzer-based.
-- `afl.rs`: AFL-based.
-- `rutensprika`/`bolero`: alternatives.
-
-## Cryptography
-
-- `ring`: popular, audited.
-- `rustls`: TLS in Rust (uses `ring`).
-- `openssl`/`openssl-sys`: OpenSSL bindings.
-- `argon2`: password hashing.
-- `bcrypt`/`scrypt`: alternatives.
-- `sha2`/`sha3`/`blake3`: hash functions.
-- `chacha20poly1305`/`aes-gcm`: AEAD ciphers.
-- `ed25519-dalek`/`x25519-dalek`: elliptic curve crypto.
-
-## Networking
-
-- `tokio`: async runtime + TCP/UDP/Unix sockets.
-- `hyper`: HTTP/1, HTTP/2.
-- `quinn`: QUIC.
-- `tonic`: gRPC.
-- `tungstenite`/`tokio-tungstenite`: WebSocket.
-- `paho-mqtt`: MQTT.
-- `lapin`: AMQP (RabbitMQ).
-- `rdkafka`: Kafka.
-
-## File Formats
-
-- `serde_json`/`serde_yaml`/`toml`.
-- `csv`.
-- `quick-xml`/`roxmltree`/`serde-xml-rs`.
-- `serde_urlencoded`.
-- `bytes`/`byteserde` for binary protocols.
-
-## Compression
-
-- `flate2`: gzip/deflate.
-- `zstd`: Zstandard.
-- `bzip2`/`lz4`/`xz2`: other algorithms.
-- `snap`: Snappy.
-
-## Serialization for Network Protocols
-
-- `bytes` (tokio ecosystem): zero-copy byte buffers.
-- `prost`/`protobuf`: Protocol Buffers.
-- `capnp`/`capnpc`: Cap'n Proto.
-- `flatbuffers`: FlatBuffers.
-
-## GUI
-
-- `egui`/`eframe`: immediate-mode, easy, cross-platform.
-- `iced`: Elm-inspired, reactive.
-- `slint`: declarative UI DSL, commercial-friendly.
-- `tauri`: web frontend + Rust backend (Electron alternative).
-- `dioxus`: React-like.
-- `druid`/`xilem`: research projects.
-- `gtk-rs`: GTK bindings.
-- `makepad`: live-coded, GPU-rendered.
-
-## Game Development
-
-- `bevy`: ECS game engine, modern, popular.
-- `wgpu`: portable graphics API (Vulkan/Metal/DX12/WebGPU).
-- `macroquad`: simple 2D.
-- `amethyst`: discontinued, see `bevy`.
-- `ggez`: 2D, LÖVE-like.
-
-## Numerical & Data Science
-
-- `ndarray`: N-dimensional arrays.
-- `nalgebra`: linear algebra.
-- `plotters`: plotting.
-- `polars`: DataFrames (Pandas-like, fast).
-- `arrow`/`arrow2`: Apache Arrow.
-- `linfa`: ML toolkit.
-
-## Date & Time
-
-- `chrono`: full-featured, popular.
-- `time`: lighter, modern API.
-- `jiff`: newer, ergonomic (by BurntSushi).
-
-## Regex & Text
-
-- `regex`: fast, Unicode-aware.
-- `fancy-regex`: backtracking for lookahead/backreferences.
-- `aho-corasick`: multiple-pattern search.
-- `memchr`: byte search primitives.
-- `unicode-segmentation`: grapheme/word splitting.
-
-## Error Handling
-
-- `thiserror`: derive `Error` for libraries.
-- `anyhow`: ergonomic error type for apps.
-- `eyre`: `anyhow` fork with reports.
-- `color-eyre`: prettier error reports.
-
-## Async Utilities
-
-- `async-trait`: async in traits (still useful pre-1.75).
-- `futures`/`futures-util`: combinators.
-- `tokio-util`: codecs, tasks.
-- `async-stream`: `yield`-like streams.
-
-## Concurrency
-
-- `crossbeam`: channels, epoch-based GC, scoped threads.
-- `parking_lot`: faster `Mutex`/`RwLock` than std.
-- `rayon`: data parallelism.
-- `dashmap`: concurrent `HashMap`.
-- `arc-swap`: atomic `Arc` swap.
-- `loom`: concurrency model checker.
-
-## Collections
-
-- `indexmap`: ordered `HashMap`/`HashSet`.
-- `hashbrown`: low-level hash map.
-- `smallvec`/`tinyvec`: inline storage.
-- `arrayvec`: stack-only fixed capacity.
-- `bumpalo`: arena allocator.
-- `typed-arena`: typed arena.
-- `im`: persistent/immutable collections.
-
-## Serialization Helpers
-
-- `serde_with`: custom serde helpers.
-- `serde_repr`: serialize enums as integers.
-- `serde-aux`: extra helpers.
-
-## Configuration
-
-- `config`: multi-source config (env, file, CLI).
-- `figment`: layered config (used by Rocket).
-- `envy`: struct-of-env-vars via serde.
-- ` envy`/` envy`/`envy`.
-
-## HTTP Server Middleware
-
-- `tower`: middleware abstraction.
-- `tower-http`: tracing, compression, CORS, auth, fs, timeout.
-- `axum::middleware`.
-
-## WebAssembly
-
-- `wasm-bindgen`: JS interop.
-- `wasm-pack`: build & publish.
-- `web-sys`/`js-sys`: bindings to Web APIs.
-- `gloo`: idiomatic wrappers.
-- `yew`: React-like in WASM.
-- `seed`: alternative.
-- `leptos`: modern, signal-based.
-
-## Embedded
-
-- `embedded-hal`: hardware abstraction traits.
-- `cortex-m`/`cortex-m-rt`: ARM Cortex.
-- `embassy`: async embedded.
-- `defmt`: efficient logging.
-- `probe-rs`: debugging/probing.
-
-## Parsing & DSLs
-
-- `nom`: parser combinators.
-- `pest`: PEG-based, easy.
-- `lalrpop`: LR parser generator.
-- `chumsky`: zero-copy parser combinators.
-- `logos`: fast lexer.
-
-## Build & Release
-
-- `cargo-release`: versioning/publishing.
-- `cargo-deny`: license/advisory checks.
-- `cargo-audit`: security advisories.
-- `cargo-nextest`: faster tests.
-- `cargo-udeps`/`cargo-machete`: unused dep detection.
-- `cargo-expand`: macro expansion.
-- `cargo-bloat`: binary size analysis.
-- `cargo-flamegraph`: profiling.
-- `cargo-miri`: UB detection (nightly).
-- `cross`: cross-compilation.
-- `cargo-zigbuild`: Zig-backed cross-linker.
-- `maturin`: Python package building.
-- `napi-rs`: Node.js bindings.
-- `wasm-pack`: WASM packaging.
-
-## Editor Support
-
-- `rust-analyzer`: official IDE server (VS Code, Vim, Emacs, Zed).
-- `rustfmt`: formatter.
-- `clippy`: linter.
-
-## Quality Lints
-
-- `clippy::all`: standard.
-- `clippy::pedantic`: stricter.
-- `clippy::nursery`: experimental.
-- `clippy::cargo`: crate-level checks.
-
-## CI Tools
-
-- `cargo-deny`: license + advisories + bans.
-- `cargo-audit`: RustSec advisories.
-- `cargo-hack`: feature matrix testing.
-- `cargo-mutants`: mutation testing.
-- `rust-toolchain`/`dtolnay/rust-toolchain`: GitHub Actions setup.
-
-## Choosing Crates
-
-Heuristics:
-- Prefer std/`tokio` ecosystem.
-- Check `crates.io` for maintenance (last publish, downloads, open issues).
-- Prefer crates with `rustls` over `openssl` (no system dep).
-- Prefer `serde`-based serialization.
-- For new projects: `axum` + `tokio` + `serde` + `sqlx` + `clap` + `tracing` + `anyhow` (app) or `thiserror` (lib).
+| `openssl` vs `rustls` for TLS | `openssl` "just works" locally | System C dependency breaks reproducible cross-compilation and minimal Docker images; `rustls` is pure-Rust, statically linked, no version-matching headers needed |
+| `HashMap` (std) in a hot path | Zero extra dependency | SipHash is DoS-resistant but meaningfully slower than `FxHashMap`/`AHashMap` for non-adversarial internal keys — a reflexive choice, not a considered one |
+| `bincode` for persisted data | Fastest serialize/deserialize | Not cross-version-schema-stable — reordering or adding struct fields can silently break deserialization of previously-written data; wrong choice for anything outliving a single process's in-memory lifetime |
+| `serde` derive on every DTO | Ergonomic, universal | Proc-macro expansion cost is real and cumulative — dozens of `#[derive(Serialize, Deserialize)]` structs are a top contributor to `cargo build --timings` in large workspaces |
+| Popular `unsafe`-heavy crate (`ring`, low-level FFI) | High download count reads as "trusted" | Download count reflects adoption, not audit — `cargo vet`/`cargo crev` are the actual review-based trust signal |
+| Adding `async-std` transitively | "Just a dependency" | Global runtime conflict — the cost is paid at the point some unrelated future is awaited, often nowhere near the `Cargo.toml` change that caused it |
+
+::code-wrapper{language="bash"}
+```bash
+# The cost of a crate choice rarely shows in the `cargo add` diff —
+# it shows up later, at a different layer entirely:
+cargo add openssl      # works locally...
+docker build .          # ...fails in a minimal image: missing system headers
+```
+::
+
+## Curated Map (by domain)
+
+| Domain | Default choice | Alternative, and when to actually reach for it |
+|---|---|---|
+| Web framework | `axum` (tower-based, tokio team) | `actix-web` if you need its actor-model concurrency primitives specifically |
+| HTTP client | `reqwest` (async, hyper-based) | `ureq` for a CLI tool where pulling in an async runtime just for HTTP is disproportionate |
+| Serialization | `serde` + `serde_json` | `postcard` for embedded/no_std wire formats; `prost` for a gRPC/protobuf boundary |
+| Database | `sqlx` (compile-time checked SQL) | `diesel` if you want a sync ORM with a mature migration story |
+| Async runtime | `tokio` | `embassy` for `no_std` embedded targets — not a stylistic choice, a hard platform requirement |
+| CLI parsing | `clap` (derive API) | `pico-args` for a tiny, dependency-conscious CLI where clap's compile-time cost isn't worth it |
+| Logging | `tracing` + `tracing-subscriber` | `log` + `env_logger` for a small binary that doesn't need structured spans |
+| Error handling | `thiserror` (libraries), `anyhow` (applications) | Never both directions reversed — a library returning `anyhow::Error` forces every downstream caller into stringly-typed error handling |
+| Concurrency primitives | `parking_lot` (faster `Mutex`/`RwLock`) | std's `Mutex` when you don't want an extra dependency and contention is genuinely low |
+| Testing | built-in `cargo test` + `criterion` for benchmarks | `insta` for snapshot-heavy domains (compiler output, rendered templates) |
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: choosing a wire format for speed, using it for storage
+
+::code-wrapper{language="rust"}
+```rust
+// Naive: "bincode is fastest" reasoning applied to a persisted event log.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OrderPlaced {
+    order_id: u64,
+    amount_cents: u64,
+}
+
+fn persist(event: &OrderPlaced, store: &mut EventStore) {
+    let bytes = bincode::serialize(event).unwrap();
+    store.append(bytes); // written to disk, read back months later
+}
+```
+::
+
+`bincode` reflects field order/types at serialize time, with no field names or version tags — the day a field is added, every previously-persisted record fails to deserialize or silently deserializes into garbage. Invisible in dev, surfaces exactly when you need historical data most: a replay, an audit, a migration.
+
+::code-wrapper{language="rust"}
+```rust
+// Production-grade: schema-evolution-aware format for anything persisted.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OrderPlaced {
+    order_id: u64,
+    amount_cents: u64,
+    #[serde(default)] // absent in old records deserializes to None, not a crash
+    currency: Option<String>,
+}
+
+fn persist(event: &OrderPlaced, store: &mut EventStore) {
+    let bytes = serde_json::to_vec(event).unwrap(); // field names survive schema drift
+    store.append(bytes);
+}
+```
+::
+
+Reserve `bincode`/`postcard` for **ephemeral, single-version** data — IPC between two processes of the same build, a cache that's fine to invalidate on redeploy — never for anything that outlives the binary that wrote it.
+
+### Anti-pattern: transitively mixed async runtimes discovered in production
+
+::code-wrapper{language="rust"}
+```toml
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+some-metrics-crate = "2" # <- pulls in async-std transitively, unnoticed
+```
+::
+
+`cargo build` and `cargo test` both succeed if the test suite doesn't exercise `some-metrics-crate`'s async-std-driven path. The panic surfaces under real traffic, days later, with a stack trace pointing into a third-party crate — not this `Cargo.toml` diff. Fix: `cargo tree | grep async-std` before merging any new dependency, as a hard CI blocker.
+
+### Anti-pattern: trusting download count as a security signal
+
+::code-wrapper{language="rust"}
+```toml
+[dependencies]
+some-crypto-helper = "0.3" # 2M downloads/month — "clearly fine"
+```
+::
+
+Download counts measure adoption, not audit status — a popular crate can ship a vulnerable version or be taken over by a malicious maintainer, a real recurring supply-chain pattern. Automate the actual signal, continuously:
+
+::code-wrapper{language="yaml"}
+```yaml
+- run: cargo audit          # checks RustSec advisory database
+- run: cargo deny check     # license + advisory + duplicate-version bans
+```
+::
+
+## Architectural Application
+
+Crate selection decisions that belong in an architecture review, not a solo PR — enforced in CI, not tribal knowledge:
+
+::code-wrapper{language="toml"}
+```toml
+# cargo-deny.toml — async runtime and TLS stack as enforced, not aspirational, policy
+[bans]
+deny = [
+    { name = "async-std" },  # runtime choice is global — block a silent second reactor
+    { name = "openssl-sys" }, # rustls-only policy: keeps FROM scratch/distroless builds trivial
+]
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Serialization format per BOUNDARY — wire and storage are different decisions
+// even for the same struct, because only one of them needs schema evolution.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OrderPlaced { order_id: u64, amount_cents: u64 }
+
+fn to_wire(o: &OrderPlaced) -> Vec<u8> { serde_json::to_vec(o).unwrap() }   // network
+fn to_storage(o: &OrderPlaced) -> Vec<u8> { serde_json::to_vec(o).unwrap() } // disk — NOT bincode
+```
+::
+
+Run `cargo audit`/`cargo deny` continuously in CI, not as a quarterly manual review — a dependency safe at `cargo add` time can have an advisory published against it six months later with zero code changes on your side.
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `cargo tree -d` finds duplicate versions of the same dependency pulled in transitively — a common source of unexpectedly large binaries and "why are there two versions of `tokio`" build errors.
-- **Idiom**: pick `rustls` over `openssl`-backed crates when you have a choice — it removes a system-level C dependency, which simplifies cross-compilation and Docker image builds considerably.
-- **Debug**: `cargo install cargo-outdated` (or `cargo update --dry-run`) shows which dependencies have newer versions available without touching your `Cargo.lock` — safer to run regularly than blindly running `cargo update`.
-- **Performance**: `cargo install cargo-nextest` for local test runs — it's a drop-in replacement for `cargo test` in most workflows and parallelizes at the process level, which is usually the single biggest "make CI faster" win available for free.
-- **Idiom**: when starting a new async project, `tokio` + `serde` + `anyhow` (or `thiserror` for libraries) + `tracing` is close to a de facto standard stack — deviating from it is fine, but knowing the default helps you read the vast majority of example code and Stack Overflow answers.
-- **Debug**: `cargo-audit` and `cargo-deny` should run in CI, not just locally — a dependency that was safe when you `cargo add`ed it can later have a security advisory published against it, and nothing about your own code changes to reveal that.
+- **Debug**: `cargo tree -d` finds duplicate versions of the same dependency pulled in transitively — a frequent source of unexpectedly large binaries and "why are there two versions of `tokio`" confusion.
+- **Idiom**: default to `rustls` over `openssl`-backed crates whenever you have a choice — it removes a system-level C dependency, simplifying cross-compilation and Docker builds considerably.
+- **Debug**: `cargo install cargo-outdated` (or `cargo update --dry-run`) shows available newer versions without touching `Cargo.lock` — safer to run habitually than blindly running `cargo update`.
+- **Performance**: `cargo install cargo-nextest` for local and CI test runs — a near-drop-in replacement for `cargo test` that parallelizes at the process level, usually the single biggest free "make CI faster" win available.
+- **Idiom**: for a new async project, `tokio` + `serde` + `anyhow` (or `thiserror` for a library) + `tracing` is close to a de facto standard stack — deviating is fine, but knowing the default helps you read the majority of example code and community answers.
+- **Debug**: `cargo-audit` and `cargo-deny` belong in CI, not just local habit — a dependency safe when you `cargo add`ed it can later have an advisory published against it with zero changes on your side to reveal it.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`serde`'s derive macros meaningfully slow compile times at scale**: a workspace with dozens of `#[derive(Serialize, Deserialize)]` structs pays real, cumulative proc-macro expansion cost — this is invisible in a small crate but becomes one of the top contributors to `cargo build --timings` output in large codebases.
-- **Picking an async runtime is a global, contagious decision**: mixing `tokio`-based and `async-std`-based crates in the same binary often doesn't work at all (they have incompatible reactors for I/O), so a transitive dependency pulling in the "wrong" runtime can force a rewrite far from where the actual incompatibility originates.
-- **`unsafe`-heavy crates (`ring`, `bytes`, low-level FFI wrappers) are not automatically vetted just because they're popular**: high download counts on crates.io reflect adoption, not an audit — `cargo-crev` or `cargo vet` provide actual review-based trust signals that download counts don't.
-- **Feature unification across a workspace can silently enable features you didn't ask for**: if crate A depends on `tokio` with feature `rt` and crate B (in the same workspace/build) depends on `tokio` with feature `full`, both end up compiled with the union of features — a crate can end up with more functionality (and more compiled code, more potential attack surface) than its own `Cargo.toml` implies.
-- **`bincode` and other "fast" binary formats are typically not cross-version stable**: a struct serialized with `bincode` on one version of your program is not guaranteed to deserialize correctly after you reorder or add fields — unlike `serde_json`, these formats are optimized for speed within a single, static schema, not for long-term storage or wire compatibility.
-- **`HashMap` (std) is intentionally not the fastest hash map**: it uses a DoS-resistant (SipHash-based) default hasher, which is slower than non-cryptographic alternatives like `FxHashMap`/`AHashMap` — reaching for `HashMap` reflexively in a performance-sensitive inner loop without considering `rustc-hash` or `ahash` is a common missed optimization.
-- **Platform-independent trap — `openssl` system dependency breaks reproducible cross-compilation**: crates that link the system's `openssl` (rather than `rustls` or a vendored/statically-linked OpenSSL) build successfully on a developer's machine and then fail in a minimal Docker build image or a different CI runner that lacks the matching system OpenSSL headers/version.
+- **`serde` derive macros meaningfully slow compile times at scale**: dozens of `#[derive(Serialize, Deserialize)]` structs in a large workspace pay real, cumulative proc-macro expansion cost — invisible in a small crate, a top `cargo build --timings` contributor in a large one.
+- **Async runtime choice is global and contagious**: mixing `tokio`- and `async-std`-based crates in one binary typically compiles fine and panics at runtime the first time a runtime-specific future actually executes — the incompatible transitive dependency can be far from the code path that fails.
+- **Popularity is not an audit**: high download counts on crates.io reflect adoption, not review — `cargo vet`/`cargo crev` provide an actual trust signal that raw download counts don't.
+- **Feature unification silently expands what's compiled into your binary**: if crate A wants `tokio`'s `rt` feature and crate B (anywhere, including transitively) wants `full`, the binary compiles with the union — your own `Cargo.toml` can understate the actual compiled surface.
+- **`bincode` and similar "fast" binary formats are typically not cross-version stable**: a struct serialized on one version of your program isn't guaranteed to deserialize correctly after reordering or adding fields — unlike `serde_json`, these formats optimize for speed within one static schema, not long-term wire/storage compatibility.
+- **`HashMap` (std) is intentionally not the fastest hash map**: its DoS-resistant SipHash default hasher is slower than `FxHashMap`/`AHashMap` for non-adversarial keys — reaching for it reflexively in a hot path is a common missed optimization.
+- **Portability trap — `openssl`'s system dependency breaks reproducible cross-compilation**: builds successfully on a developer's machine, then fails in a minimal Docker image or a CI runner lacking matching system OpenSSL headers.
 
 ## 🧠 Spot the Bug
 
-A team adds a new dependency to speed up JSON parsing in a hot path. What's the likely problem with this `Cargo.toml` change, given the rest of the codebase already uses `tokio` for async I/O?
+A team adds a dependency to speed up JSON parsing in a hot path. What's the actual problem, given the rest of the codebase already uses `tokio`?
 
 ::code-wrapper{language="toml"}
 ```toml
@@ -343,16 +217,14 @@ async-std = { version = "1", features = ["attributes"] }
 <details>
 <summary>Answer</summary>
 
-The bug isn't in the JSON parsing at all — it's `async-std` sitting alongside `tokio` in the same dependency list.
+The bug isn't the JSON parsing — it's `async-std` sitting alongside `tokio` in the same dependency graph. Each ships its own reactor; a `tokio`-specific type (`tokio::net::TcpStream`, `tokio::time::sleep`) can only be driven by a running `tokio` executor, and vice versa for `async-std`. Awaiting the "wrong" runtime's future under the other's executor typically compiles cleanly (both present a `Future`-shaped surface the type system can't distinguish) and panics at runtime with something like "there is no reactor running." If `async-std` was pulled in transitively by whatever crate motivated this change, rather than deliberately, the conflict surfaces the first time that specific code path executes — potentially in production, far from this `Cargo.toml` diff.
 
-`tokio` and `async-std` each ship their own async runtime with its own reactor (the component that drives I/O readiness, timers, and task scheduling). Types like `tokio::net::TcpStream` or a `tokio::time::sleep` future are only drivable by a running `tokio` executor — spawning them or `.await`ing them under an `async-std` runtime (or vice versa) typically panics at runtime with something like "there is no reactor running" rather than failing at compile time, because both runtimes present a similar-looking `async fn`/`Future` surface that the type system can't distinguish by itself. If this `async-std` dependency was pulled in transitively by some other crate the team added for an unrelated reason (rather than intentionally), the runtime-mixing bug can appear far from the `Cargo.toml` change that introduced it, and manifest only when a specific I/O code path actually executes at runtime.
-
-**The lesson**: async runtimes are not interchangeable at the type level — accidentally depending on two of them (directly or transitively) compiles cleanly but panics at runtime the moment a runtime-specific future actually runs.
+**The lesson**: async runtimes aren't interchangeable at the type level — running `cargo tree | grep async-std` (or a `cargo deny` ban rule) before merging any new dependency catches this before it becomes a 2 a.m. page.
 
 </details>
 
 ## Summary
 
-Use the ecosystem; don't reinvent. The `tokio`-`serde`-`tower` stack underlies most server-side Rust. For new projects: pick `axum` (web), `sqlx` (DB), `clap` (CLI), `tracing` (logging), `anyhow`/`thiserror` (errors), `serde` (serialization). For tools: `rust-analyzer`, `clippy`, `cargo-deny`, `cargo-nextest`, `cargo-expand`. For fuzzing: `cargo-fuzz`. For benchmarks: `criterion`.
+Crate choice is architecture, not shopping — the cost of a wrong choice (TLS stack, serialization format, async runtime) surfaces at a different layer and a later time than the `cargo add` that introduced it. Match serialization format to its boundary: schema-evolution-aware formats (`serde_json`) for anything persisted, fast fixed-schema formats (`bincode`, `postcard`) only for ephemeral same-build data. Treat async runtime as a single, enforced, org-wide decision — mixing two compiles fine and fails at runtime. Run `cargo audit`/`cargo deny` continuously in CI; download counts are not an audit. Default stack for new server-side projects: `axum` + `tokio` + `serde` + `sqlx` + `clap` + `tracing` + `anyhow`/`thiserror`.
 
 Next: Common pitfalls and idiomatic fixes.

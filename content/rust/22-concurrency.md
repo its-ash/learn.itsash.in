@@ -1,112 +1,365 @@
-# 22 — Concurrency & Multithreading
+# 22 — Concurrency & Multithreading: The Real Cost Model
 
-Rust's promise: **fearless concurrency**. The type system prevents data races at compile time via `Send` and `Sync`.
+`Send`/`Sync` are compile-time-checked auto-traits that eliminate exactly one bug class — data races. Deadlocks, logical races, and priority inversion remain entirely your problem, as the examples below show.
 
-## `Send` and `Sync`
+## Under-the-Hood Mechanics
 
-- `Send`: a type can be transferred across threads (ownership moves safely).
-- `Sync`: `&T` can be shared across threads (multiple threads can hold `&T` simultaneously).
+### `Send`/`Sync` are compiler-derived facts about memory layout, not annotations you write
 
-They're **auto-traits**: the compiler implements them automatically when all fields are `Send`/`Sync`.
-
-Examples:
-- `i32`, `String`, `Vec<T>`: `Send + Sync`.
-- `Rc<T>`: not `Sync` (shared non-atomic refcount), not `Send` (cheap counter).
-- `Arc<T>`: `Send + Sync` if `T: Send + Sync`.
-- `Cell<T>`/`RefCell<T>`: `Send` (if `T: Send`) but not `Sync` (no synchronization).
-- `Mutex<T>`/`RwLock<T>`: `Send + Sync` if `T: Send`.
-- Raw pointers `*const T`/`*mut T`: not `Send`/`Sync` (the compiler is conservative; opt in with `unsafe impl`).
-
-## Spawning Threads
+`Send`/`Sync` are **auto-traits**: derived structurally, field by field — no code generated, no runtime check.
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::thread;
-use std::time::Duration;
+// The compiler derives this automatically — no annotation needed:
+struct Point { x: f64, y: f64 }   // Send + Sync (all fields are)
 
-let handle = thread::spawn(|| {
-    for i in 0..5 {
-        println!("thread: {i}");
-        thread::sleep(Duration::from_millis(10));
+// Rc breaks it structurally: its refcount is a plain (non-atomic) Cell<usize>
+use std::rc::Rc;
+struct Wrapper { inner: Rc<i32> }   // NOT Send, NOT Sync — inherited from Rc
+
+// unsafe impl overrides the compiler's correct derivation with an unverified claim:
+struct RawHandle(*mut u8); // raw pointers are !Send by default
+unsafe impl Send for RawHandle {} // YOU now guarantee no data race — compiler trusts you fully
+
+fn assert_send<T: Send>() {}
+fn check() {
+    assert_send::<Point>();     // compiles: auto-derived Send
+    // assert_send::<Wrapper>(); // ERROR: Rc<i32> is not Send
+    assert_send::<RawHandle>(); // compiles: only because of the unsafe impl above
+}
+```
+::
+
+### What a thread actually costs: stack, kernel object, and a context switch
+
+`thread::spawn` reserves a real OS stack (~1-8MB) and a kernel scheduling object per call — costs `size_of` can't see:
+
+::code-wrapper{language="rust"}
+```rust
+use std::mem::size_of;
+// A JoinHandle itself is small — the cost is the OS-side stack + kernel object,
+// which size_of can't see because it lives outside the Rust value entirely.
+println!("{}", size_of::<std::thread::JoinHandle<()>>()); // small, but misleading —
+// the real cost is the ~1-8MB stack reservation and kernel thread object per spawn().
+
+// The anti-pattern this makes possible:
+fn handle_naively(conns: Vec<Connection>) {
+    for c in conns {
+        std::thread::spawn(move || serve(c)); // 10,000 conns = 10,000 threads = ~10-80GB stack reserved
     }
-});
-
-for i in 0..5 {
-    println!("main: {i}");
-    thread::sleep(Duration::from_millis(10));
 }
 
-handle.join().unwrap();
+// vs. an async task, which costs hundreds of bytes and is scheduled in userspace:
+async fn handle_async(conns: Vec<Connection>) {
+    for c in conns {
+        tokio::spawn(serve_async(c)); // 10,000 tasks, no kernel context switch per task
+    }
+}
+# fn serve(_: Connection) {} async fn serve_async(_: Connection) {}
+# struct Connection;
 ```
 ::
 
-- `thread::spawn` returns a `JoinHandle<T>`.
-- `.join()` blocks until the thread exits, returning `Result<T, Box<dyn Any + Send>>` (panic propagates as `Err`).
-- Closures must be `'static + Send`.
+### `Mutex<T>` lowers to a futex (Linux) or equivalent OS primitive, plus a memory fence
 
-## Moving Data into Threads
+Uncontended: one atomic CAS, no syscall. Contended: falls through to `futex_wait`, a syscall + context switch — 100-1000x more expensive.
 
 ::code-wrapper{language="rust"}
 ```rust
-let data = vec![1, 2, 3];
-let handle = thread::spawn(move || {
-    println!("{:?}", data);   // data moved in
-});
-// data not accessible here
-handle.join().unwrap();
+use std::sync::Mutex;
+use std::time::Instant;
+
+let m = Mutex::new(0);
+let t0 = Instant::now();
+for _ in 0..1_000_000 {
+    *m.lock().unwrap() += 1; // uncontended: ~20-50ns each, no syscall
+}
+println!("{:?}", t0.elapsed()); // fast — single-thread, no contention
+
+// Under contention (another thread holding the lock), each lock() call instead
+// blocks in the kernel via futex_wait — a full syscall round-trip, not a spin.
 ```
 ::
 
-`move` is almost always required — captures must outlive the thread (`'static`).
+### Atomics map directly to CPU instructions — no lock object exists at all
 
-## Shared State with `Arc` + `Mutex`
+`fetch_add` compiles to one hardware instruction (`lock xadd` on x86-64) — no OS object, no syscall. Cost is cache-coherency traffic, not scheduling:
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+let counter = Arc::new(AtomicUsize::new(0));
+let mut handles = vec![];
+for _ in 0..8 {
+    let c = Arc::clone(&counter);
+    handles.push(thread::spawn(move || {
+        for _ in 0..100_000 { c.fetch_add(1, Ordering::Relaxed); } // no lock object anywhere
+    }));
+}
+for h in handles { h.join().unwrap(); }
+// Correct total, but 8 cores hammering one cache line ("ping-pong") caps scalability —
+// sharding into N atomics (Scenario-style) removes that ceiling.
+```
+::
+
+### Memory orderings are a happens-before contract with LLVM/the CPU, not a Rust-specific concept
+
+`Ordering::{Relaxed, Acquire, Release, AcqRel, SeqCst}` mirror the C++11 memory model. Get the pairing wrong and it can pass on x86, fail on ARM:
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+let data = Arc::new(AtomicI32::new(0));
+let ready = Arc::new(AtomicBool::new(false));
+
+// RIGHT: Release on the flag store, Acquire on the flag load — happens-before edge.
+let (d1, r1) = (Arc::clone(&data), Arc::clone(&ready));
+thread::spawn(move || {
+    d1.store(42, Ordering::Relaxed);
+    r1.store(true, Ordering::Release);   // publishes: data write visible after this
+});
+let (d2, r2) = (Arc::clone(&data), Arc::clone(&ready));
+thread::spawn(move || {
+    while !r2.load(Ordering::Acquire) {} // establishes happens-before once true
+    assert_eq!(d2.load(Ordering::Relaxed), 42); // guaranteed to see 42
+});
+
+// WRONG: both Relaxed — no happens-before edge. May pass on x86 (strong model),
+// reorders visibly on ARM/RISC-V ("works on my x86 laptop, breaks on Graviton CI").
+// r1.store(true, Ordering::Relaxed);
+// while !r2.load(Ordering::Relaxed) {} // data write may not be visible yet — UB-adjacent race
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+| Primitive | Uncontended cost | Contended cost | Memory overhead | When it's the wrong tool |
+|---|---|---|---|---|
+| `thread::spawn` | ~10-30µs to spawn | N/A | 1-8 MB stack per thread (reserved, mostly not committed) | Thousands of concurrent I/O-bound tasks — use async instead |
+| `Mutex<T>` (std) | ~20-50ns (atomic CAS, no syscall) | Syscall + context switch (~1-10µs+) | `size_of::<T>()` + a few bytes of lock state | Read-heavy workloads with rare writes — `RwLock` may help; extremely hot single-word state — an atomic is cheaper |
+| `RwLock<T>` | Similar to `Mutex` for the fast path, slightly higher fixed cost (reader count tracking) | Can be *worse* than `Mutex` under writer-heavy or mixed load (writer starvation bookkeeping) | Similar to `Mutex`, plus reader-count state | Write-heavy workloads, or when the critical section is tiny (`Mutex` is simpler and often just as fast) |
+| `AtomicUsize` etc. | ~1-5ns (single instruction) | Degrades with cache-line contention across cores, not with syscalls | Zero beyond the value itself | Multi-variable invariants — atomics only protect single operations |
+| `Arc<T>` clone | ~1-2ns (atomic increment) | Cache-line contention if cloned from many threads simultaneously | +16 bytes (two `AtomicUsize` counters: strong + weak) over `Box<T>` | Single-threaded sharing — use `Rc` (no atomic overhead) |
+| `mpsc::channel` send/recv | Allocation per message (unbounded) or none (bounded, pre-sized) | Internal lock/atomic contention under many producers | Grows unboundedly if unbounded and producer outpaces consumer | Extremely hot loops — batch messages instead of one-per-item |
+| `thread::scope` | Same as `thread::spawn` per thread | Same as normal threads | Avoids `Arc` entirely — zero extra allocation for borrowed data | N/A — strictly cheaper than `Arc` when scope-shaped access fits |
+
+::code-wrapper{language="rust"}
+```rust
+// Compile-time cost: Send/Sync bound checking + trait-object resolution
+// slows builds on large concurrent codebases. This type alone forces the
+// compiler to verify Send+Sync across every call site that stores one:
+use std::sync::{Arc, Mutex};
+type Handler = Arc<Mutex<dyn Fn(u32) -> u32 + Send + Sync>>;
+// Cheap to write, expensive to compile at scale — and expensive to untangle
+// later if `Arc<Mutex<_>>` becomes the default reach for every shared field.
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: inconsistent lock ordering causing a silent deadlock
 
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-let counter = Arc::new(Mutex::new(0));
-let mut handles = vec![];
+struct Account { balance: Mutex<i64> }
 
-for _ in 0..10 {
-    let counter = Arc::clone(&counter);
-    handles.push(thread::spawn(move || {
-        let mut n = counter.lock().unwrap();
-        *n += 1;
-    }));
+fn transfer(from: &Arc<Account>, to: &Arc<Account>, amount: i64) {
+    // BAD: lock order depends on argument order, not a fixed global order
+    let mut from_bal = from.balance.lock().unwrap();
+    let mut to_bal = to.balance.lock().unwrap();
+    *from_bal -= amount;
+    *to_bal += amount;
 }
 
-for h in handles { h.join().unwrap(); }
-println!("{:?}", counter);   // 10
+fn main() {
+    let a = Arc::new(Account { balance: Mutex::new(1000) });
+    let b = Arc::new(Account { balance: Mutex::new(1000) });
+
+    let (a1, b1) = (Arc::clone(&a), Arc::clone(&b));
+    let h1 = thread::spawn(move || transfer(&a1, &b1, 100));  // locks a then b
+
+    let (a2, b2) = (Arc::clone(&a), Arc::clone(&b));
+    let h2 = thread::spawn(move || transfer(&b2, &a2, 50));   // locks b then a — DEADLOCK RISK
+
+    h1.join().unwrap();
+    h2.join().unwrap();
+}
 ```
 ::
 
-`Arc` for shared ownership; `Mutex` for synchronized mutation. Lock guards auto-unlock on drop (RAII).
+Compiles clean, passes every unit test in isolation — deadlocks only under real concurrent load: thread 1 holds `a`, waits for `b`; thread 2 holds `b`, waits for `a`. Silent, permanent hang — no panic, no log. `Send`/`Sync` don't catch this; lock ordering is invisible to the type system.
 
-## `RwLock` for Read-Heavy Workloads
-
-### When to reach for `RwLock` vs `Mutex`
-
-`RwLock` allows **many simultaneous readers or one writer** — versus `Mutex`, which allows **one accessor** regardless of read/write. You reach for `RwLock` when the access pattern is **read-heavy** (many threads read, few write): readers don't block each other, so reads scale with thread count. Use a plain `Mutex` when writes are common or when the read critical section is tiny — `RwLock` has higher overhead than `Mutex` (tracking reader count, writer starvation prevention), so it can be *slower* than `Mutex` under mixed or write-heavy loads. Watch for **writer starvation**: if readers continuously hold the lock, a writer may wait a long time; some implementations prioritize writers, others don't.
+**The fix**: a total, fixed lock ordering regardless of call-site argument order.
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::sync::RwLock;
-let lock = RwLock::new(0);
-
-let r1 = lock.read().unwrap();
-let r2 = lock.read().unwrap();   // multiple readers OK
-// let w = lock.write().unwrap();   // would block above
-drop(r1); drop(r2);
-let mut w = lock.write().unwrap();
-*w += 1;
+fn transfer(from: &Arc<Account>, to: &Arc<Account>, amount: i64) {
+    // GOOD: always lock in a consistent order (e.g., by memory address or a stable account ID)
+    let (first, second) = if (Arc::as_ptr(from) as usize) < (Arc::as_ptr(to) as usize) {
+        (from, to)
+    } else {
+        (to, from)
+    };
+    let mut first_bal = first.balance.lock().unwrap();
+    let mut second_bal = second.balance.lock().unwrap();
+    if std::ptr::eq(first, from) {
+        *first_bal -= amount;
+        *second_bal += amount;
+    } else {
+        *second_bal -= amount;
+        *first_bal += amount;
+    }
+}
 ```
 ::
 
-## Channel — Message Passing
+### Anti-pattern: holding a `std::sync::MutexGuard` across logic that can panic, poisoning the lock for every future caller
 
-`std::sync::mpsc` (multi-producer, single-consumer):
+::code-wrapper{language="rust"}
+```rust
+use std::sync::{Arc, Mutex};
+
+struct Cache { data: Mutex<std::collections::HashMap<String, String>> }
+
+impl Cache {
+    fn get_or_compute(&self, key: &str) -> String {
+        let mut data = self.data.lock().unwrap();
+        if let Some(v) = data.get(key) {
+            return v.clone();
+        }
+        // BAD: this can panic (e.g., a malformed key indexing, or an unwrap on
+        // an external call) WHILE the lock is held
+        let computed = expensive_computation(key).expect("computation failed");
+        data.insert(key.to_string(), computed.clone());
+        computed
+    }
+}
+
+fn expensive_computation(key: &str) -> Option<String> {
+    if key.is_empty() { None } else { Some(key.to_uppercase()) }
+}
+```
+::
+
+One empty `key` and `.expect()` panics **while the `MutexGuard` is still alive** — that poisons the mutex for every future `.lock()`, on every thread, for every unrelated key:
+
+::code-wrapper{language="rust"}
+```rust
+let cache = Cache { data: Mutex::new(Default::default()) };
+// cache.get_or_compute("");  // panics while holding the lock -> mutex poisoned
+
+// Every future access now fails, service-wide, regardless of key:
+match cache.data.lock() {
+    Ok(_) => {}
+    Err(_poisoned) => { /* PoisonError — cascades from one bad input */ }
+}
+```
+::
+
+**The fix**: don't panic while holding a lock — handle the fallible operation explicitly, keep the critical section minimal.
+
+::code-wrapper{language="rust"}
+```rust
+impl Cache {
+    fn get_or_compute(&self, key: &str) -> Result<String, String> {
+        {
+            let data = self.data.lock().unwrap();
+            if let Some(v) = data.get(key) {
+                return Ok(v.clone());
+            }
+        } // lock released before the fallible work
+
+        let computed = expensive_computation(key)
+            .ok_or_else(|| format!("computation failed for key: {key}"))?;
+
+        let mut data = self.data.lock().unwrap();
+        data.insert(key.to_string(), computed.clone());
+        Ok(computed)
+    }
+}
+```
+::
+
+### Anti-pattern: `Arc<RefCell<T>>` across threads — compiles, corrupts data
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::Arc;
+use std::cell::RefCell;
+use std::thread;
+
+// BAD: this compiles because Arc<RefCell<T>> IS Send + Sync when T: Send —
+// RefCell itself doesn't block this, it just doesn't SYNCHRONIZE anything
+let shared = Arc::new(RefCell::new(0i32));
+
+let mut handles = vec![];
+for _ in 0..8 {
+    let shared = Arc::clone(&shared);
+    handles.push(thread::spawn(move || {
+        for _ in 0..1000 {
+            *shared.borrow_mut() += 1;   // UB / panics: no cross-thread synchronization
+        }
+    }));
+}
+for h in handles { h.join().unwrap(); }
+```
+::
+
+Dangerous precisely because it compiles: `RefCell<T>` is `Send` if `T: Send`, satisfying `thread::spawn`'s bounds — but its borrow flag (`Cell<BorrowFlag>`) is a plain, non-atomic integer:
+
+::code-wrapper{language="rust"}
+```rust
+// Two threads racing borrow_mut(): both can read "not borrowed" simultaneously,
+// both proceed -> two &mut i32 aliases exist at once -> real UB, not just a bug.
+// Observable symptoms, depending on timing:
+//   1. corrupted final count (silently wrong, no error at all)
+//   2. "already borrowed: BorrowMutError" panic (safer, but still broken under load)
+```
+::
+
+**The fix**: `Mutex`/`RwLock` provide the actual cross-thread synchronization `RefCell` does not.
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::{Arc, Mutex};
+let shared = Arc::new(Mutex::new(0i32));
+// ... same spawn loop, but:
+*shared.lock().unwrap() += 1;   // genuinely synchronized — no UB, no data race
+```
+::
+
+## Architectural Application
+
+**Threads vs. async: a workload-shape decision.** CPU-bound -> threads/`rayon`. I/O-bound + high concurrency -> async, because per-thread stack cost becomes the ceiling before CPU does.
+
+::code-wrapper{language="rust"}
+```rust
+// CPU-bound: rayon's work-stealing pool genuinely parallelizes across cores.
+use rayon::prelude::*;
+fn compress_all(chunks: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    chunks.into_par_iter().map(|c| compress(c)).collect()
+}
+
+// I/O-bound, high concurrency: async — one task per connection costs bytes, not MBs.
+async fn serve_all(conns: Vec<TcpStream>) {
+    for c in conns { tokio::spawn(handle(c)); } // 50,000 tasks: fine. 50,000 threads: not.
+}
+# fn compress(c: Vec<u8>) -> Vec<u8> { c }
+# use tokio::net::TcpStream;
+# async fn handle(_: TcpStream) {}
+```
+::
+
+**"Share memory by communicating" as default, not slogan.** Channels sidestep lock-ordering and poisoning entirely — no shared mutable state to lock:
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -114,272 +367,74 @@ use std::sync::mpsc;
 use std::thread;
 
 let (tx, rx) = mpsc::channel();
-
-let h = thread::spawn(move || {
-    let v = rx.recv().unwrap();
-    println!("got {v}");
-});
-
-tx.send(42).unwrap();
-h.join().unwrap();
+for id in 0..4 {
+    let tx = tx.clone();
+    thread::spawn(move || tx.send(compute(id)).unwrap()); // no lock, no ordering to get wrong
+}
+drop(tx);
+for result in rx { println!("{result}"); } // failure modes: full channel, dropped receiver — easy to reason about
+# fn compute(id: u32) -> u32 { id * 2 }
 ```
 ::
 
-### Multi-Producer
+**Sharding is the production answer to lock contention.** One global `Mutex<HashMap<K,V>>` serializes every writer behind one lock; sharding lets N threads proceed in parallel:
 
 ::code-wrapper{language="rust"}
 ```rust
-let (tx, rx) = mpsc::channel();
-let tx2 = tx.clone();   // multiple senders
-thread::spawn(move || tx.send(1).unwrap());
-thread::spawn(move || tx2.send(2).unwrap());
-```
-::
+use std::sync::Mutex;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
-### Sync vs Async Channels
+const SHARDS: usize = 16;
+struct ShardedMap<K, V> { shards: Vec<Mutex<HashMap<K, V>>> }
 
-- `channel()`: unbounded, `send` never blocks.
-- `sync_channel(n)`: bounded; `send` blocks when buffer full (backpressure).
-
-### Crossbeam Channels
-
-`crossbeam-channel` is more featureful: bounded/unbounded, select, after/timeout, easy multi-consumer. Often preferred over `std::mpsc`.
-
-::code-wrapper{language="rust"}
-```rust
-let (s, r) = crossbeam_channel::unbounded();
-s.send(5).unwrap();
-```
-::
-
-## `park` and `unpark`
-
-### Why this primitive exists
-
-`park`/`unpark` is the **low-level thread-blocking primitive** underpinning `Condvar` and channels. `park()` blocks the current thread until `unpark()` is called on its handle (or a spurious wakeup occurs). The key design point: `unpark()` is **idempotent and sticky** — calling it *before* `park()` records a "permit," so the next `park()` returns immediately instead of blocking forever. This avoids the lost-wakeup race that plagues naive `wait`/`notify` implementations. You usually **don't** use `park`/`unpark` directly — it's easy to get wrong, and channels/`Condvar`/`Barrier` are clearer. Reach for it only when building a custom synchronization primitive that needs finer control than those abstractions provide.
-
-Threads can be paused and woken:
-
-::code-wrapper{language="rust"}
-```rust
-let h = thread::spawn(|| {
-    thread::park();
-    println!("unparked");
-});
-h.thread().unpark();
-h.join().unwrap();
-```
-::
-
-Low-level synchronization — usually use channels, `Condvar`, or `Barrier`.
-
-## `Condvar`
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::{Arc, Mutex, Condvar};
-
-let pair = Arc::new((Mutex::new(false), Condvar::new()));
-let (lock, cvar) = Arc::clone(&pair);
-
-let h = thread::spawn(move || {
-    let (mut started, cvar) = (&lock.0.lock().unwrap(), &lock.1);
-    while !*started {
-        started = cvar.wait(started).unwrap();
+impl<K: Hash + Eq, V> ShardedMap<K, V> {
+    fn shard_for(&self, key: &K) -> &Mutex<HashMap<K, V>> {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut h);
+        &self.shards[(h.finish() as usize) % SHARDS] // N threads, different shards, real parallelism
     }
-});
+}
+// Same principle DashMap packages as a battle-tested crate.
+```
+::
 
-{
-    let (mut started, cvar) = (&lock.0.lock().unwrap(), &lock.1);
-    *started = true;
-    cvar.notify_one();
+**Atomics for metrics, locks for multi-field invariants** — that's the actual dividing line:
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+struct Metrics { requests: AtomicU64 } // single value, no cross-field invariant -> atomic
+impl Metrics {
+    fn record(&self) { self.requests.fetch_add(1, Ordering::Relaxed); } // no syscall risk
 }
 
-h.join().unwrap();
+struct AccountState { balance: i64, pending_holds: i64 } // must move together, consistently
+struct Account { state: Mutex<AccountState> } // multi-field unit -> Mutex, not two atomics
 ```
 ::
-
-The classic pattern: wait inside the lock; `wait` atomically releases + sleeps + reacquires.
-
-## `Barrier`
-
-### When to reach for it
-
-A `Barrier` blocks threads at a **checkpoint** until `n` have arrived, then releases them all simultaneously. You reach for it for **phased computation**: simulations where all threads must finish step `k` before any starts step `k+1`, or initialization where all workers wait for setup to complete before racing. It differs from `Condvar` (which signals a condition, not a count) and from `Mutex` (which serializes, not syncs phases). Use it when you need "everyone ready, then everyone go" semantics.
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::Barrier;
-let barrier = Arc::new(Barrier::new(3));
-// each thread calls barrier.wait(); all unblock once 3 reach it
-```
-::
-
-## `Once` and `OnceLock`
-
-### Why they exist
-
-`Once`/`OnceLock` provide **one-time initialization** that's safe across threads: the initializer runs exactly once, every other caller blocks until it's done, and subsequent accesses are fast (no locking on the read path). You reach for them for **thread-safe singletons** and lazy globals — a config loaded once on first use, a registry populated on demand. `Once` is the legacy primitive (runs a closure once, holds no value); `OnceLock` (1.70) is the modern form that *holds* the initialized value, so you read it back without a separate static. `LazyLock` (1.80) builds on `OnceLock` for the "initialize on first deref" ergonomics.
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::OnceLock;
-static INIT: OnceLock<Vec<u8>> = OnceLock::new();
-let data = INIT.get_or_init(|| load_config());
-```
-::
-::
-
-## Atomic Types
-
-`std::sync::atomic`: `AtomicBool`, `AtomicI32`, `AtomicUsize`, `AtomicPtr<T>`, etc.
-
-Atomics let you **read and modify shared state without a lock** — they map to the CPU's atomic instructions, so they're much cheaper than a `Mutex` for simple counters/flags. You reach for them when the shared state is *simple* (a counter, a flag, a once-init marker) and the lock overhead would dominate. For complex state or multi-step invariants, use a `Mutex` — atomics only protect *single* operations, not multi-variable invariants.
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::atomic::{AtomicUsize, Ordering};
-let n = AtomicUsize::new(0);
-n.fetch_add(1, Ordering::SeqCst);
-n.compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed);
-```
-::
-
-### Orderings
-
-Memory ordering is about **visibility**: when thread A writes and thread B reads, what guarantees does B have about seeing A's writes (and writes that happened-before A's)? The CPU and compiler reorder instructions for performance; orderings constrain that reordering so concurrent code behaves correctly. Conceptually, atomics form a **happens-before graph** — `Release` on the write side and `Acquire` on the read side establish an edge that guarantees the reader sees the writer's prior writes.
-
-- `Relaxed`: no ordering constraints, just atomicity. Safe for a counter where you don't care about ordering relative to other variables.
-- `Acquire`: later reads see the latest writes (pair with `Release`). Use on the *load* side of a synchronization point.
-- `Release`: prior writes are visible to `Acquire` readers. Use on the *store* side.
-- `AcqRel`: both — for read-modify-write operations (e.g., `fetch_add`) that act as both.
-- `SeqCst`: total order across threads (most expensive). Use when you need a single global order or are unsure.
-
-**Default to `SeqCst`** if unsure — it's always correct, only slower. Switch to `Relaxed`/`Acquire`/`Release` once you understand the memory model and have a specific reason (a hot lock-free counter can use `Relaxed` if it doesn't synchronize other data; a lock-free queue uses `Acquire`/`Release` for its head/tail indices).
-
-## Thread-Local Storage
-
-### When to reach for it
-
-Thread-local storage gives **each thread its own private copy** of a variable — no synchronization needed, because no other thread can see it. You reach for it to **avoid lock contention** for per-thread state: a per-thread buffer (no allocation per use), a per-thread RNG (no locking), a per-thread accumulator that's merged at the end. It's also useful when a library needs thread-affine state (e.g., a per-thread connection cache). The cost: each thread has its own slot, destructors run on thread exit, and you can't share the value across threads without copying.
-
-::code-wrapper{language="rust"}
-```rust
-use std::cell::RefCell;
-thread_local! {
-    static COUNTER: RefCell<u32> = RefCell::new(0);
-}
-
-COUNTER.with(|c| { *c.borrow_mut() += 1; });
-```
-::
-
-Per-thread state, no synchronization needed.
-
-## Async vs Threads
-
-- **Threads**: OS-level, ~1 MB stack, ~few µs context switch. Good for blocking I/O.
-- **Async**: lightweight tasks, ~few KB stack, runtime-driven. Good for many concurrent I/O-bound tasks.
-
-For CPU-bound work, threads or `rayon` (data parallelism) are appropriate. For many concurrent I/O operations, async (`tokio`/`async-std`) scales better.
-
-## `rayon` for Data Parallelism
-
-::code-wrapper{language="rust"}
-```rust
-use rayon::prelude::*;
-let v: Vec<i32> = (1..=100).collect();
-let sum: i32 = v.par_iter().map(|x| x * 2).sum();
-```
-::
-
-`par_iter()` runs the iteration across a thread pool. Drop-in replacement for sequential iterators in many cases.
-
-## Common Pitfalls
-
-- **Deadlock**: inconsistent lock ordering. Acquire locks in a fixed global order, or use a single lock.
-- **`Rc` across threads**: compile error. Use `Arc`.
-- **Holding a lock across `await`**: in async code, this can deadlock; use `tokio::sync::Mutex` instead of `std::sync::Mutex` for async contexts, or `spawn_blocking`.
-- **Lock poisoning**: if a thread panics while holding a lock, the lock becomes poisoned. Decide on a recovery policy.
-- **Spawning without `join`**: detached threads can outlive main, dropping work mid-flight. Detach deliberately, not by accident.
-- **`thread::spawn` requires `'static`**: closures can't borrow stack data unless `move`d.
-- **Shared mutable state**: prefer message passing (channels) when possible — it isolates state and avoids locking.
-- **`Send + Sync` are not enough for correctness**: they prevent data races, not logical races or deadlocks.
-- **Atomic orderings are subtle**: wrong ordering causes bugs that don't show on x86 (which is strongly ordered). Test on weak architectures (ARM).
-- **`Mutex::lock()` returns `Result`**: poison is the failure mode. Don't `unwrap` blindly in production code paths.
-
-## Concurrency Tricks & Patterns
-
-::code-wrapper{language="rust"}
-```rust
-// Trick: scoped threads to borrow from main thread
-use std::thread;
-let data = vec![1, 2, 3];
-thread::scope(|s| {
-    s.spawn(|| println!("{:?}", data)); // borrows data safely
-});
-
-// Trick: spawn_blocking for long-running blocking work in async
-#[tokio::main]
-async fn main() {
-    let result = tokio::task::spawn_blocking(|| {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        42
-    }).await.unwrap();
-}
-
-// Trick: use once_cell for lazy initialization
-use std::sync::OnceLock;
-fn get_config() -> &'static Config {
-    static CONFIG: OnceLock<Config> = OnceLock::new();
-    CONFIG.get_or_init(Config::load)
-}
-
-// Trick: use parking_lot for faster mutexes
-// parking_lot::Mutex is often faster than std::sync::Mutex
-let mutex = parking_lot::Mutex::new(0);
-*mutex.lock() += 1; // no .unwrap() needed
-
-// Trick: crossbeam for powerful channels
-let (tx, rx) = crossbeam_channel::unbounded();
-tx.send(1)?;
-let val = rx.recv()?; // simpler API than std::mpsc
-```
-::
-
-## Patterns
-
-- **Work queue**: `mpsc` channels + worker pool.
-- **Pub-Sub**: `async-channel`/`tokio::sync::broadcast` for multiple receivers.
-- **Producer-consumer**: bounded `sync_channel` for backpressure.
-- **Read-mostly cache**: `RwLock<HashMap<...>>` or `arc-swap` for atomic replacement.
-- **Sharded locks**: split data into N shards each with its own lock (reduces contention).
-- **Scoped threads**: use `thread::scope` to borrow from main thread safely (avoids `'static` requirement).
-- **Thread-local storage**: `thread_local!` for per-thread state without synchronization.
-- **Atomic spinning**: `std::sync::atomic::AtomicBool` with `.store()` for simple signaling (avoid in tight loops).
-
-## Thread Pool
-
-`std::thread` doesn't have a built-in pool. Use `rayon` (data parallel), `tokio` (async), or `threadpool`/`crossbeam_pool` (custom).
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `RUST_LOG=trace tokio_console` and the `console-subscriber` crate visualize live task/thread state for async code — far faster than sprinkling `println!` across spawned tasks.
-- **Idiom**: reach for `thread::scope` before `Arc` when threads only need to borrow data for the duration of the scope — it avoids the `'static` requirement entirely and is often simpler than wrapping everything in `Arc`.
-- **Performance**: batch small messages before sending over a channel in tight producer loops — each `send`/`recv` has synchronization overhead, so amortizing it across a `Vec<T>` payload instead of one `T` per message can meaningfully cut throughput cost.
-- **Debug**: `cargo build` + `cargo miri test` won't catch data races, but running under a real thread sanitizer (`RUSTFLAGS="-Z sanitizer=thread" cargo +nightly test` on nightly) can catch races that Rust's type system doesn't already prevent (e.g., ones hidden behind `unsafe`).
-- **Idiom**: when in doubt between `Mutex<T>` and channels, default to channels — "share memory by communicating" avoids lock ordering and poisoning entirely, at the cost of some message-passing overhead.
-- **Performance**: `AtomicUsize::fetch_add` with `Ordering::Relaxed` is enough for simple counters where you don't need happens-before relationships with other memory — reserve `SeqCst` for cases you've actually reasoned about, since it's the most expensive ordering on weakly-ordered architectures like ARM.
+- **Debug**: `RUST_LOG=trace` with the `console-subscriber` crate and `tokio-console` visualizes live task/thread state — far faster than reasoning about a hang by staring at lock acquisition order in source.
+- **Idiom**: reach for `thread::scope` before `Arc` when spawned threads only need to borrow data for the scope's duration — it eliminates the `'static` requirement and an `Arc` allocation entirely, and is strictly cheaper.
+- **Performance**: batch small messages before sending over a channel in tight producer loops — each `send`/`recv` carries synchronization overhead, so amortizing it across a `Vec<T>` payload instead of one `T` per message meaningfully cuts throughput cost under high message rates.
+- **Debug**: `cargo miri test` won't catch cross-thread data races reliably, but running under a real thread sanitizer (`RUSTFLAGS="-Z sanitizer=thread" cargo +nightly test`) can catch races hidden behind `unsafe impl Send/Sync` that Rust's type system doesn't otherwise prevent.
+- **Idiom**: when choosing between `Mutex<T>` and channels for a new subsystem, default to channels — "share memory by communicating" avoids lock ordering and poisoning entirely, at the cost of some message-passing overhead that's rarely the actual bottleneck.
+- **Performance**: `AtomicUsize::fetch_add` with `Ordering::Relaxed` is sufficient for simple counters that don't need happens-before relationships with other memory — reserve `SeqCst` for cases you've actually reasoned through, since it's the most expensive ordering, particularly on weakly-ordered architectures like ARM.
+- **Idiom**: shard a single global lock (`Vec<Mutex<HashMap<...>>>`, bucketed by key hash) the moment profiling shows contention on one `Mutex` under concurrent load — it's a small, well-understood change with large scalability payoff.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Deadlock is a silent hang, not a panic or error**: two threads acquiring the same two `Mutex`es in opposite order will freeze forever with no error message — nothing in the type system prevents inconsistent lock ordering, unlike data races which `Send`/`Sync` do prevent.
-- **`Rc<T>` across threads is a compile error, but `Arc<RefCell<T>>` is not — and is still wrong**: `RefCell` provides no synchronization, only runtime borrow checking; sharing `Arc<RefCell<T>>` across threads compiles (both `Arc` and the outer type can be `Send` if `T: Send`) but panics or, worse, causes actual data corruption because `RefCell`'s borrow flag itself isn't atomic.
-- **Holding a `std::sync::MutexGuard` across an `.await` point** in async code can deadlock the executor — the guard isn't `Send` in many cases (compile error) or, if it does compile, the lock stays held while the task is suspended, blocking every other task that needs it.
-- **Lock poisoning cascades**: a single `panic!` inside *any* thread while holding a `Mutex` poisons it for *all future lockers*, including unrelated code paths that never panicked themselves — `.lock().unwrap()` everywhere means one bug anywhere can cascade into unrelated failures elsewhere.
-- **`thread::spawn` silently detaches if you drop the `JoinHandle`**: forgetting to call `.join()` (or storing the handle) doesn't error — the spawned thread keeps running independently and may not finish before `main` exits, silently dropping its work.
-- **Atomic orderings can be "wrong but appear correct" on x86**: code using `Ordering::Relaxed` where `Acquire`/`Release` was actually required will often pass tests on x86/x86_64 (strongly ordered hardware) and only manifest as a real bug on ARM or other weakly-ordered platforms — a classic "works on my machine, breaks in production" trap tied to CPU architecture, not Rust itself.
-- **`mpsc::channel()` senders keep the channel alive even if the receiver is dropped**: `tx.send(v)` on a channel whose `rx` was dropped returns `Err` (doesn't panic) — a common oversight is `.unwrap()`ing that send, which then panics on an entirely expected "consumer went away" condition.
+- **Deadlock is a silent hang, not a panic or error**: two threads acquiring the same two `Mutex`es in opposite order will freeze forever with no error message — nothing in the type system prevents inconsistent lock ordering, unlike data races, which `Send`/`Sync` genuinely do prevent.
+- **`Rc<T>` across threads is a compile error, but `Arc<RefCell<T>>` is not — and is still wrong**: `RefCell` provides zero cross-thread synchronization, only single-threaded runtime borrow checking; sharing `Arc<RefCell<T>>` across threads compiles but corrupts data or panics with `BorrowMutError` under real concurrent access.
+- **Holding a `std::sync::MutexGuard` across an `.await` point** in async code can deadlock the executor or fail to compile (the guard often isn't `Send`) — the lock stays held while the task is suspended, blocking every other task that needs it.
+- **Lock poisoning cascades**: a single `panic!` inside *any* thread while holding a `Mutex` poisons it for *all future lockers*, including unrelated code paths that never panicked themselves — `.lock().unwrap()` everywhere means one bad input anywhere can cascade into unrelated failures across the whole service.
+- **`thread::spawn` silently detaches if you drop the `JoinHandle`**: forgetting to call `.join()` doesn't error — the spawned thread keeps running independently and may not finish before `main` exits, silently dropping its work with no warning.
+- **Atomic orderings can be "wrong but appear correct" on x86**: code using `Ordering::Relaxed` where `Acquire`/`Release` was actually required often passes tests on x86/x86_64 (strongly-ordered hardware) and only manifests as a real bug on ARM or other weakly-ordered platforms — a genuine "works on my machine, breaks in production" trap tied to CPU architecture, not to Rust.
+- **`mpsc::channel()` senders keep the channel alive even if the receiver is dropped**: `tx.send(v)` on a channel whose `rx` was dropped returns `Err` rather than panicking — `.unwrap()`ing that send then panics on an entirely expected "consumer went away" condition, which is a common oversight in shutdown-path code.
 
 ## 🧠 Spot the Bug
 
@@ -403,16 +458,32 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-It deadlocks — the program hangs forever with no output and no panic.
+It deadlocks — hangs forever, no output, no panic. `std::sync::Mutex` is **not reentrant**: it tracks only "locked or not," not which thread holds it, so a second `.lock()` from the same thread blocks waiting for a guard (`first`) that can never drop, because the thread is stuck inside the very statement that would need to finish first.
 
-`std::sync::Mutex` is **not reentrant**. Calling `.lock()` a second time from the *same thread* while the first `MutexGuard` (`first`) is still alive doesn't detect "oh, this thread already owns the lock" — the mutex has no concept of which thread holds it, only whether it's currently locked. The second `.lock()` call blocks, waiting for the lock to be released, but the only thing that could release it is `first` going out of scope, which can't happen because the thread is stuck blocking inside the very statement (`let second = ...`) that would need to complete first. This is the single most common self-inflicted deadlock in Rust: re-locking the same `Mutex` on one thread, often disguised through a function call rather than back-to-back lines as here.
+::code-wrapper{language="rust"}
+```rust
+use std::sync::Mutex;
 
-**The lesson**: `std::sync::Mutex` deadlocks on same-thread re-entrant locking — never call `.lock()` again while an earlier guard from the same mutex is still in scope on that thread.
+// BAD: same-thread re-lock, often hidden several calls deep
+let data = Mutex::new(10);
+let first = data.lock().unwrap();
+// let second = data.lock().unwrap(); // deadlocks — never reached
+
+// FIX: parking_lot-style ReentrantMutex, or restructure to avoid re-entry.
+// (std has no ReentrantMutex for Mutex<T>'s data; parking_lot::ReentrantMutex shown conceptually)
+fn no_reentry_needed(data: &Mutex<i32>) -> i32 {
+    let guard = data.lock().unwrap();
+    *guard // read once, don't lock again inside the same scope
+}
+```
+::
+
+**The lesson**: never call `.lock()` again while an earlier guard from the same mutex is still in scope on that thread.
 
 </details>
 
 ## Summary
 
-`Send`/`Sync` are the foundation. Use `Arc` for shared ownership, `Mutex`/`RwLock` for synchronization, channels for message passing. Atomics for low-level coordination. `Condvar`/`Barrier`/`OnceLock` for common patterns. `rayon` for data parallelism. Prefer async for I/O-bound concurrency.
+`Send`/`Sync` are compiler-derived, zero-runtime-cost facts about memory layout — they eliminate data races entirely at compile time, but deadlocks, lock poisoning cascades, and logical races remain fully your responsibility. Threads cost megabytes of stack and microseconds per context switch; atomics cost a single instruction plus cache-coherency traffic; `Mutex` is cheap uncontended and expensive (syscall + context switch) contended. Default to message passing over shared-state locking when the architecture allows it, shard hot locks under contention, and treat lock-ordering as an explicit, documented invariant — the type system will not catch a violation for you.
 
-Next: Async/await — the modern Rust concurrency story.
+Next: Async/Await — the executor model, `Future` state machines, and what "zero-cost" actually costs.

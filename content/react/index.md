@@ -1,24 +1,25 @@
 ---
-title: Learn React — From Zero to Pro
-description: A comprehensive, edge-case-covering React curriculum. 26 chapters covering JSX, hooks, state management, performance, concurrency, server components, TypeScript, testing, and security. Go from beginner to pro React developer.
+title: "Learn React — Engineering Reference"
+description: "A code-first, production-grade React curriculum for mid-to-senior engineers. 26 chapters covering JSX, hooks, state management, performance, concurrency, server components, TypeScript, testing, and security — through annotated code, anti-patterns, and edge cases."
 ---
 
-# ⚛️ Learn React — From Zero to Pro
+# ⚛️ Learn React — Engineering Reference
 
-A comprehensive, edge-case-covering React curriculum. Each document is self-contained and covers its concept deeply enough that a careful reader can go from beginner to pro React developer.
+A code-first, production-grade React curriculum for mid-to-senior developers. Each chapter is structured around **annotated code blocks** — complex implementations, anti-patterns with fixes, performance tricks, and edge-case failure modes — rather than prose-heavy tutorials. Every concept is shown as it's used in real production systems, with dense inline comments explaining the underlying React mechanics.
 
-## How to Use This Course
+## How to Use This Reference
 
-1. **Read sequentially** for a structured path (01 → 26).
-2. **Jump to a chapter** as a reference when you hit a concept in the wild.
+1. **Read sequentially** (01 → 26) for a structured path from JSX to production security.
+2. **Jump to a chapter** as a reference when you hit a specific React problem — each is self-contained.
 3. **Build the projects** in chapter 26 after every few chapters.
 4. **Read the React source and popular library internals** (TanStack Query, Zustand) alongside.
 
 ## Prerequisites
 
-- Working knowledge of modern JavaScript (ES2015+): arrow functions, destructuring, modules, promises/async-await.
-- Node.js and a package manager (`npm`, `pnpm`, or `yarn`) installed.
+- Modern JavaScript (ES2015+): arrow functions, destructuring, modules, promises/async-await.
+- Node.js and a package manager (`npm`, `pnpm`, or `yarn`).
 - A code editor (VS Code recommended).
+- Familiarity with at least one other UI framework or sufficient general web development experience — this reference moves fast on fundamentals.
 
 ## Curriculum
 
@@ -89,11 +90,11 @@ A comprehensive, edge-case-covering React curriculum. Each document is self-cont
 
 ### If you're coming from another framework (Vue, Angular, Svelte)
 
-Read 02–05 quickly — the concepts translate, only the syntax and mental model differ. Slow down for 06 (`useEffect`) and 09 (`useMemo`/`useCallback`) — dependency arrays and referential equality are React-specific traps. Read 18 to compare React's state-management story with what you already know.
+Read 02–05 quickly — concepts translate, only syntax and mental model differ. Slow down for 06 (`useEffect`) and 09 (`useMemo`/`useCallback`) — dependency arrays and referential equality are React-specific traps. Read 18 to compare React's state-management story with what you already know.
 
 ### If you're coming from jQuery or vanilla JS
 
-Ownership of the DOM shifts entirely to React — read 02, 03, and 13 carefully before anything else. Resist the urge to reach for `useRef`-driven manual DOM manipulation as a first instinct; read 04 and 14 until declarative state feels natural instead.
+Ownership of the DOM shifts entirely to React — read 02, 03, and 13 carefully before anything else. Resist the urge to reach for `useRef`-driven manual DOM manipulation as a first instinct; read 04 and 14 until declarative state feels natural.
 
 ### If you're a senior engineer learning React for production
 

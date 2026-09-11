@@ -1,394 +1,457 @@
+---
+title: Vue 3 Engineering Reference — Template Syntax & Directives
+description: Production-grade template compilation — vnode diffing with keyed lists, compiler-informed patch flags, modifier chains, v-model expansion, attribute fallthrough, and the v-if/v-for precedence trap.
+---
+
 # 02 — Template Syntax & Directives
 
-## Text Interpolation
+## Compiler Output — What Templates Become
 
-The most basic form of data binding is "mustache" interpolation — text inside `{{ }}` is evaluated as a JavaScript expression and re-rendered whenever its dependencies change:
+::code-wrapper{language="typescript" filename="compiler-output.ts"}
+```typescript
+// ── Template ──────────────────────────────────────────
+// <div :class="{ active: isActive }" @click="onClick">{{ msg }}</div>
+//
+// ── Compiled render function (simplified) ─────────────
+import { h, withDirectives, vModelText } from 'vue'
 
-::code-wrapper{language="vue" filename="Greeting.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
+function render(_ctx) {
+  // h(type, props, children) — returns a VNode object
+  // PatchFlag 2 = CLASS (compiler knows ONLY class may change → targeted patch)
+  // PatchFlag 8 = PROPS (only listed props may change)
+  // PatchFlag -1 = FULL_PATCH (no hint, diff everything)
+  // PatchFlag -2 = HOISTED (static subtree, skipped entirely)
+  return h('div', {
+    class: { active: _ctx.isActive },       // bound — tracked by flag
+    onClick: _ctx.onClick,                   // event handler — always reactive
+    // __v_internal__ flag: tells runtime "only diff class, skip everything else"
+  }, _ctx.msg, 2 /* CLASS */)
+}
 
-const user = ref({ name: 'Ada', role: 'admin' })
-</script>
-
-<template>
-  <p>Hello, {{ user.name }}!</p>
-  <p>{{ user.role === 'admin' ? 'Full access' : 'Limited access' }}</p>
-  <p>{{ user.name.toUpperCase() }}</p>
-</template>
+// ── The optimization: ──────────────────────────────────
+// The compiler analyzes the template at BUILD time and tags each vnode
+// with a PatchFlag. At runtime, the patcher only checks the flagged
+// properties — skipping full prop diffing on static subtrees.
+// This is why compiled templates outperform hand-written render functions.
 ```
 ::
 
-Interpolation accepts any single JavaScript **expression** — ternaries, method calls, arithmetic — but not statements (`if`, `for`) and not multiple statements separated by `;`. Each interpolated value is automatically HTML-escaped, which is what makes `{{ }}` safe against XSS by default (see chapter 22 for the unsafe alternative, `v-html`).
+## Production List Rendering — Keyed Virtual DOM Diffing
 
-## `v-bind` — Binding Attributes
-
-`v-bind` binds a JavaScript expression to an HTML attribute or a component prop. The shorthand `:` is used almost universally in real code:
-
-::code-wrapper{language="vue" filename="Avatar.vue"}
+::code-wrapper{language="vue" filename="DataTable.vue"}
 ```vue
-<script setup>
-import { ref, computed } from 'vue'
+<script setup lang="ts">
+import { ref, computed, type ShallowRef } from 'vue'
 
-const imageId = ref(42)
-const isOnline = ref(true)
-const size = ref(48)
+interface Row {
+  id: string
+  name: string
+  status: 'active' | 'inactive' | 'pending'
+  updatedAt: number
+}
 
-const imageUrl = computed(() => `https://api.example.com/avatars/${imageId.value}.png`)
-</script>
+// ── Simulated server data — mutable in place ────────────
+const rows = ref<Row[]>([])
 
-<template>
-  <!-- long form -->
-  <img v-bind:src="imageUrl" v-bind:alt="'User avatar'" />
+// ── Derived view: filtered + sorted, memoized via computed ──
+// computed() caches the result; only re-evaluates when `rows` changes.
+// Avoids re-filtering on every re-render (which happens on ANY reactive read).
+const visibleRows = computed(() =>
+  rows.value
+    .filter(r => r.status !== 'inactive')
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+)
 
-  <!-- shorthand — what you'll see in virtually all real code -->
-  <img :src="imageUrl" :alt="'User avatar'" />
-
-  <!-- class binding: object syntax toggles classes based on truthiness -->
-  <div :class="{ online: isOnline, offline: !isOnline }">Status</div>
-
-  <!-- class binding: array syntax combines multiple sources -->
-  <div :class="[isOnline ? 'online' : 'offline', 'badge']">Status</div>
-
-  <!-- style binding: object syntax with camelCase CSS properties -->
-  <div :style="{ width: size + 'px', height: size + 'px', borderRadius: '50%' }" />
-
-  <!-- binding an entire object of attributes at once -->
-  <img v-bind="{ src: imageUrl, alt: 'User avatar', loading: 'lazy' }" />
-</template>
-```
-::
-
-### Boolean attributes
-
-HTML boolean attributes (`disabled`, `checked`, `required`) are present-or-absent, not true-or-false strings. Vue handles this correctly when you bind them:
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <!-- isSubmitting: false → attribute omitted entirely; true → attribute present -->
-  <button :disabled="isSubmitting">Submit</button>
-</template>
-```
-::
-
-## Conditional Rendering — `v-if`, `v-else-if`, `v-else`, `v-show`
-
-::code-wrapper{language="vue" filename="OrderStatus.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const status = ref('pending')
-</script>
-
-<template>
-  <p v-if="status === 'pending'">Order is being processed…</p>
-  <p v-else-if="status === 'shipped'">Order is on its way!</p>
-  <p v-else-if="status === 'delivered'">Order delivered.</p>
-  <p v-else>Unknown status: {{ status }}</p>
-</template>
-```
-::
-
-`v-if` (and its siblings) physically add or remove elements from the DOM — the element and its component instance are destroyed and recreated on toggle, running full lifecycle hooks each time. `v-show` instead always renders the element and toggles CSS `display: none`, keeping the component instance alive:
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <!-- v-if: expensive to toggle often (destroys/recreates), cheap when rarely shown -->
-  <ExpensiveChart v-if="showChart" />
-
-  <!-- v-show: cheap to toggle often (just CSS), costs an initial render even when hidden -->
-  <div v-show="isTooltipVisible" class="tooltip">Helpful hint</div>
-</template>
-```
-::
-
-Rule of thumb: use `v-show` for things toggled frequently (tooltips, tabs flipped rapidly), `v-if` for things toggled rarely or that are expensive to keep mounted (a chart library instance, a video player).
-
-### `v-if` on `<template>` — grouping without a wrapper element
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <template v-if="user.isAdmin">
-    <h2>Admin Panel</h2>
-    <AdminControls />
-    <AuditLog />
-  </template>
-</template>
-```
-::
-
-`<template>` here is a purely logical wrapper — it never renders an actual DOM element, which avoids polluting your markup with a `<div>` that exists only to hold a `v-if`.
-
-## List Rendering — `v-for` and the Mandatory `:key`
-
-::code-wrapper{language="vue" filename="TodoList.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const todos = ref([
-  { id: 1, text: 'Learn Vue', done: true },
-  { id: 2, text: 'Build a project', done: false }
-])
-</script>
-
-<template>
-  <!-- array with index -->
-  <li v-for="(todo, index) in todos" :key="todo.id">
-    {{ index }}: {{ todo.text }}
-  </li>
-
-  <!-- plain object: value, key, index -->
-  <li v-for="(value, key, index) in { name: 'Ada', role: 'admin' }" :key="key">
-    {{ index }}. {{ key }}: {{ value }}
-  </li>
-
-  <!-- range: 1 through n (inclusive), not zero-indexed -->
-  <span v-for="n in 5" :key="n">{{ n }}</span>
-</template>
-```
-::
-
-`:key` is not optional in any real application. Vue uses `key` to match old vnodes to new ones during a re-render — without a stable, unique key, Vue falls back to patching elements **in-place by position**, which reuses DOM nodes for the wrong data.
-
-### The classic `:key="index"` bug
-
-::code-wrapper{language="vue" filename="TodoList.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const todos = ref([
-  { id: 1, text: 'Buy milk' },
-  { id: 2, text: 'Walk the dog' },
-  { id: 3, text: 'Write report' }
-])
-
-function removeFirst() {
-  todos.value.shift()
+// ── Update a single row WITHOUT replacing the array ────
+// Direct index mutation works in Vue 3 (Proxy catches it), but
+// replacing the array is clearer for diffing and time-travel debugging.
+function patchRow(id: string, patch: Partial<Row>) {
+  rows.value = rows.value.map(r =>
+    r.id === id ? { ...r, ...patch, updatedAt: Date.now() } : r
+  )
 }
 </script>
 
 <template>
-  <!-- WRONG: index as key -->
-  <div v-for="(todo, index) in todos" :key="index">
-    <input type="checkbox" />
-    {{ todo.text }}
-  </div>
+  <!-- :key MUST be a stable identity — never the array index.
+       With id keys, Vue's diff algorithm:
+       1. Builds a Map of old vnodes keyed by id
+       2. Iterates new list, patches matched vnodes in place
+       3. Moves unmatched vnodes to new positions (no re-creation)
+       4. Destroys vnodes that no longer exist (runs onUnmounted)
+       Without stable keys, Vue patches by INDEX — reusing DOM nodes
+       for the wrong data, corrupting per-row state (focus, transitions). -->
+  <tr v-for="row in visibleRows" :key="row.id">
+    <td>{{ row.name }}</td>
+    <td>{{ row.status }}</td>
+    <td>{{ new Date(row.updatedAt).toISOString() }}</td>
+  </tr>
+</template>
+```
+::
+
+### Anti-Pattern: Index as Key
+
+::code-wrapper{language="vue" filename="AntiPatternKey.vue"}
+```vue
+<script setup>
+import { ref } from 'vue'
+
+const items = ref([
+  { id: 1, text: 'Alpha', checked: false },
+  { id: 2, text: 'Beta', checked: true },
+  { id: 3, text: 'Gamma', checked: false },
+])
+
+function removeFirst() { items.value.shift() }
+</script>
+
+<template>
+  <!-- ❌ WRONG: index key — DOM nodes reused by position, not identity -->
+  <li v-for="(item, i) in items" :key="i">
+    <input type="checkbox" v-model="item.checked" />
+    {{ item.text }}
+  </li>
+  <button @click="removeFirst">Remove first</button>
+</template>
+
+<!-- After clicking "Remove first":
+     - items[0] is now "Beta" (was "Alpha")
+     - The <input> at DOM position 0 is REUSED (not destroyed)
+     - That input's checked state is "false" (Alpha's state, not Beta's)
+     - The checkbox appears unchecked even though item.checked is true
+     The DOM state (checked) is detached from the data state. -->
+```
+::
+
+::code-wrapper{language="vue" filename="CorrectKey.vue"}
+```vue
+<template>
+  <!-- ✅ CORRECT: stable id key — Vue tracks each row by identity -->
+  <li v-for="item in items" :key="item.id">
+    <input type="checkbox" v-model="item.checked" />
+    {{ item.text }}
+  </li>
   <button @click="removeFirst">Remove first</button>
 </template>
 ```
 ::
 
-Check any checkbox, then click "Remove first". The *checked state moves down to whichever item now occupies that index* — because when the array shrinks, Vue diffs by key, sees the same keys `0, 1` still exist (just pointing at different todos now), and reuses those DOM nodes (including their checked state) in place rather than removing the node for the deleted item. The fix is always a **stable identifier that travels with the data**, typically a database ID:
+## Conditional Rendering — v-if vs v-show Decision Matrix
 
-::code-wrapper{language="vue"}
+::code-wrapper{language="vue" filename="ConditionalStrategy.vue"}
 ```vue
+<script setup>
+import { ref, shallowRef, onActivated, onDeactivated } from 'vue'
+import HeavyChart from './HeavyChart.vue'
+import Tooltip from './Tooltip.vue'
+
+const showChart = ref(false)
+const tooltipVisible = ref(false)
+const tab = ref('overview')
+
+// ── v-if: destroys and recreates the component ──────
+// Runs onMounted/onUnmounted every toggle.
+// Cost: full teardown + recreation. Zero cost when hidden.
+// Use for: rarely toggled, expensive to keep mounted.
+
+// ── v-show: toggles display:none ─────────────────────
+// Component stays mounted, lifecycle hooks run ONCE.
+// Cost: initial render happens even when hidden.
+// Use for: frequently toggled, cheap to keep alive.
+
+// ── <KeepAlive>: caches component instances ─────────
+// v-if + KeepAlive = best of both: unmounts from DOM tree
+// but preserves instance state in memory, reuses on re-mount.
+</script>
+
 <template>
-  <!-- RIGHT: stable id as key -->
-  <div v-for="todo in todos" :key="todo.id">
-    <input type="checkbox" />
-    {{ todo.text }}
-  </div>
+  <!-- Heavy chart: v-if — don't pay render cost when hidden -->
+  <KeepAlive>
+    <HeavyChart v-if="showChart" />
+  </KeepAlive>
+
+  <!-- Tooltip: v-show — toggled dozens of times per session -->
+  <Tooltip v-show="tooltipVisible" />
+
+  <!-- Tab content: v-if inside KeepAlive — switchable, cached -->
+  <KeepAlive>
+    <component :is="tab" />
+  </KeepAlive>
 </template>
 ```
 ::
 
-Now Vue sees that the vnode keyed `1` (Buy milk) is gone entirely, and correctly removes exactly that DOM node — the checkbox on "Walk the dog" stays wherever its own state was.
+## Event Modifiers — Chained Handler Pipeline
 
-### `v-for` with `v-if` on the same element
-
-::code-wrapper{language="vue"}
+::code-wrapper{language="vue" filename="EventModifiers.vue"}
 ```vue
+<script setup>
+import { ref } from 'vue'
+
+const dragged = ref(0)
+
+function onDrop(e) {
+  // .prevent already called preventDefault() — safe to access dataTransfer
+  const data = e.dataTransfer?.getData('text/plain') ?? ''
+  console.log('dropped:', data)
+}
+
+function onKeyNav(e) {
+  // .enter filters to Enter key only — handler never fires for other keys
+  console.log('Enter pressed, value:', e.target.value)
+}
+</script>
+
 <template>
-  <!-- Vue 3.x: v-if has HIGHER precedence than v-for on the same element, -->
-  <!-- so `todo` here is undefined — this throws or silently fails -->
+  <!-- Modifier chain: left→right execution order
+       .stop   → event.stopPropagation()
+       .prevent → event.preventDefault()
+       .self   → only fire if event.target === currentTarget
+       .once   → remove listener after first call -->
+  <button @click.stop.prevent.once="onSave">Save (once, no bubble, no default)</button>
+
+  <!-- .self: ignores clicks from child elements (e.g., icon inside button) -->
+  <div @click.self="onBackdropClick" class="modal-backdrop">
+    <div class="modal">...</div>
+  </div>
+
+  <!-- .exact: ONLY fire when no modifier keys held -->
+  <button @click.exact="onSimpleClick">Plain click only</button>
+  <button @click.ctrl.exact="onCtrlClick">Ctrl+click only</button>
+
+  <!-- Key modifiers: .enter, .tab, .delete, .esc, .space, .up, .down, etc. -->
+  <input @keydown.enter="onKeyNav" @keydown.esc="onEscape" />
+
+  <!-- System modifiers: .ctrl, .alt, .shift, .meta (Cmd on Mac, Win on Windows) -->
+  <input @keydown.meta.enter="onCmdEnter" />
+
+  <!-- .passive: tells browser "I won't call preventDefault" → enables scroll optimization -->
+  <!-- Don't combine .passive with .prevent — browser warns, .prevent is ignored -->
+  <div @scroll.passive="onScroll">Scrollable</div>
+
+  <!-- Mouse button modifiers: .left, .middle, .right -->
+  <div @contextmenu.prevent="onRightClick" @mousedown.middle="onMiddleClick">Drag me</div>
+</template>
+```
+::
+
+## Class & Style Binding — Merging Strategies
+
+::code-wrapper{language="vue" filename="ClassBinding.vue"}
+```vue
+<script setup>
+import { ref, computed } from 'vue'
+
+const isActive = ref(true)
+const error = ref(null)
+const size = ref('md')
+
+// ── Computed class object — cleaner than complex template ternaries ──
+const classes = computed(() => ({
+  btn: true,
+  [`btn-${size.value}`]: true,      // dynamic class name via computed key
+  'btn-active': isActive.value,
+  'btn-error': !!error.value,
+  'btn-disabled': !isActive.value,
+}))
+</script>
+
+<template>
+  <!-- Static class + dynamic :class MERGE automatically (no clobbering) -->
+  <button class="rounded shadow" :class="classes">Click</button>
+
+  <!-- Array syntax: multiple sources, arrays, objects can be mixed -->
+  <div :class="[
+    'card',                          // static string
+    { 'card-elevated': isActive },   // conditional object
+    size === 'lg' ? 'card-lg' : '',  // ternary
+  ]">Content</div>
+
+  <!-- Style binding: camelCase keys, auto-vendored, auto-merged -->
+  <div :style="{
+    color: error ? 'red' : 'inherit',
+    // Vue auto-adds vendor prefixes via @vue/runtime-dom
+    // Multi-value: uses last supported value in the list
+    display: ['flex', '-webkit-flex'],
+  }">Styled</div>
+
+  <!-- Multiple style objects merged (later wins conflicts) -->
+  <div :style="[baseStyles, dynamicStyles]">Merged</div>
+</template>
+```
+::
+
+## v-model — Two-Way Binding Expansion
+
+::code-wrapper{language="vue" filename="VModelInternals.vue"}
+```vue
+<script setup>
+import { ref, vModelText, vModelCheckbox, vModelSelect } from 'vue'
+
+const text = ref('')
+const checked = ref(false)
+const multi = ref([])
+const selected = ref('a')
+</script>
+
+<template>
+  <!-- v-model on <input type="text"> expands to: -->
+  <!-- :value="text" @input="text = $event.target.value" -->
+  <!-- BUT Vue uses a directive (vModelText) not just attribute binding:
+       it handles composition events (IME), edge cases with type=number, etc. -->
+  <input v-model="text" />
+
+  <!-- .lazy: listen to 'change' (on blur) instead of 'input' (every keystroke) -->
+  <!-- .number: cast to Number (empty string → '' not 0; invalid → original string) -->
+  <!-- .trim: strip whitespace from both ends -->
+  <input v-model.lazy.number.trim="text" type="number" />
+
+  <!-- Checkbox: single → boolean; multiple → array of checked values -->
+  <input v-model="checked" type="checkbox" />
+  <input v-model="multi" type="checkbox" value="a" />
+  <input v-model="multi" type="checkbox" value="b" />
+
+  <!-- Select: binds to selected <option>'s value attribute -->
+  <!-- If no value attr, uses the option's text content -->
+  <select v-model="selected">
+    <option value="a">Option A</option>
+    <option value="b">Option B</option>
+  </select>
+</template>
+```
+::
+
+## v-for with v-if — The Vue 3 Precedence Trap
+
+::code-wrapper{language="vue" filename="VForVIfTrap.vue"}
+```vue
+<script setup>
+import { ref, computed } from 'vue'
+const todos = ref([
+  { id: 1, text: 'A', done: true },
+  { id: 2, text: 'B', done: false },
+])
+</script>
+
+<template>
+  <!-- ❌ WRONG in Vue 3: v-if has HIGHER precedence than v-for
+       → v-if evaluates FIRST, before the loop variable exists
+       → `todo` is undefined → ReferenceError or silent skip -->
   <li v-for="todo in todos" v-if="!todo.done" :key="todo.id">{{ todo.text }}</li>
 </template>
 ```
 ::
 
-Vue 3's compiler evaluates `v-if` before `v-for` is even in scope when both sit on the same element, unlike Vue 2 where `v-for` won. The fix — used universally — is to filter with a `computed` or move `v-if` to a wrapping `<template>`:
-
-::code-wrapper{language="vue"}
+::code-wrapper{language="vue" filename="VForVIfFixed.vue"}
 ```vue
 <script setup>
-import { ref, computed } from 'vue'
-
+import { computed } from 'vue'
 const todos = ref([
-  { id: 1, text: 'Buy milk', done: true },
-  { id: 2, text: 'Walk the dog', done: false }
+  { id: 1, text: 'A', done: true },
+  { id: 2, text: 'B', done: false },
 ])
 
-const remaining = computed(() => todos.value.filter(t => !t.done))
+// ✅ Option 1: filter via computed — re-evaluates only when todos changes
+const incomplete = computed(() => todos.value.filter(t => !t.done))
 </script>
 
 <template>
-  <li v-for="todo in remaining" :key="todo.id">{{ todo.text }}</li>
-</template>
-```
-::
+  <li v-for="todo in incomplete" :key="todo.id">{{ todo.text }}</li>
 
-## Event Handling — `v-on`
-
-::code-wrapper{language="vue" filename="SearchBox.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const query = ref('')
-const results = ref([])
-
-function search() {
-  console.log('searching for', query.value)
-}
-
-function clear(event) {
-  query.value = ''
-  event.target.blur()
-}
-</script>
-
-<template>
-  <!-- long form -->
-  <input v-on:input="search" />
-
-  <!-- shorthand — what you'll see everywhere -->
-  <input @input="search" />
-
-  <!-- inline expression, receives the native event as $event -->
-  <button @click="query = ''">Clear</button>
-
-  <!-- method reference — Vue automatically passes the native event -->
-  <button @click="clear">Clear</button>
-
-  <!-- passing your own args AND the native event -->
-  <button @click="removeResult(result.id, $event)">Remove</button>
-</template>
-```
-::
-
-### Event modifiers
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <form @submit.prevent="onSubmit">        <!-- calls preventDefault() -->
-  <div @click.stop="onClick">              <!-- calls stopPropagation() -->
-  <div @click.self="onBackdropClick">      <!-- only if event.target IS this element -->
-  <input @keyup.enter="onEnter">           <!-- key-specific listener -->
-  <input @keyup.esc="onEscape">
-  <a @click.once="onFirstClickOnly">       <!-- listener removed after first trigger -->
-  <div @scroll.passive="onScroll">         <!-- tells browser you won't preventDefault -->
-</template>
-```
-::
-
-`.prevent` and `.stop` replace manually writing `event.preventDefault()` / `event.stopPropagation()` inside the handler, and modifiers can be chained: `@click.stop.prevent="onClick"`.
-
-## `v-model` — the Basics
-
-`v-model` is syntactic sugar for binding a value and listening for its change event in one directive. On a plain `<input>`, `v-model="query"` expands to `:value="query"` + `@input="query = $event.target.value"`:
-
-::code-wrapper{language="vue" filename="ProfileForm.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const name = ref('')
-const bio = ref('')
-const country = ref('us')
-const subscribed = ref(false)
-const plan = ref('free')
-</script>
-
-<template>
-  <input v-model="name" type="text" placeholder="Name" />
-  <textarea v-model="bio" placeholder="Bio" />
-
-  <select v-model="country">
-    <option value="us">United States</option>
-    <option value="ca">Canada</option>
-    <option value="in">India</option>
-  </select>
-
-  <input v-model="subscribed" type="checkbox" /> Subscribe to newsletter
-
-  <label><input v-model="plan" type="radio" value="free" /> Free</label>
-  <label><input v-model="plan" type="radio" value="pro" /> Pro</label>
-</template>
-```
-::
-
-`v-model` adapts to the element type automatically: text inputs/textareas bind `value`, checkboxes bind `checked`, `<select>` binds `value` on the selected `<option>`. Modifiers (`.lazy`, `.number`, `.trim`) and using `v-model` on your own custom components are covered in depth in chapter 09.
-
-## Attribute vs Property Bindings, and `v-html`
-
-`{{ }}` and `v-bind` both escape their output as text. To render raw HTML (rare, and dangerous with untrusted content — see chapter 22), use `v-html`:
-
-::code-wrapper{language="vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-const trustedSummary = ref('<strong>Bold</strong> summary from our own CMS')
-</script>
-
-<template>
-  <!-- escaped: literally shows "<strong>Bold</strong> summary..." as text -->
-  <p>{{ trustedSummary }}</p>
-
-  <!-- renders as actual HTML: shows "Bold summary..." with bold applied -->
-  <p v-html="trustedSummary"></p>
+  <!-- ✅ Option 2: <template v-for> wraps, inner v-if filters per item -->
+  <template v-for="todo in todos" :key="todo.id">
+    <li v-if="!todo.done">{{ todo.text }}</li>
+  </template>
 </template>
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — `v-bind="object"` spreads an entire object of attributes at once — useful for forwarding a bag of props/attrs to a native element or child component without listing them individually.
-- **Debug** — Multi-line expressions and function calls with side effects don't belong in templates. If an interpolation or binding is hard to read at a glance, extract it into a `computed` — templates should stay declarative, not host business logic.
-- **Idiom** — `v-for` ranges (`v-for="n in 5"`) start at `1`, not `0` — useful for pagination UI (`Page {{ n }}`) without an off-by-one subtraction.
-- **Performance** — `v-once` renders an element/component exactly once and skips it on all future re-renders — useful for content that is genuinely static after first render (see chapter 19 for more on this and `v-memo`).
-- **Idiom** — Class object syntax (`:class="{ active: isActive }"`) reads more clearly than string concatenation or ternaries once you have more than one conditional class, and combines cleanly with a static class attribute: `class="badge" :class="{ active: isActive }"` merges both.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **`v-if` + `v-for` precedence trap** — On the same element, Vue 3's compiler resolves `v-if` before `v-for`, so the loop variable isn't in scope yet and the condition silently evaluates against the outer scope (or throws, depending on what's referenced). Always move the filter into a `computed` or wrap with `<template v-for>` + inner `v-if`.
-- **`:key="index"` breaks stateful list items** — Using the array index as `:key` causes Vue to reuse DOM nodes by position rather than identity when the list is reordered, filtered, or spliced — form input values, checked states, and CSS transition states can visibly "jump" to the wrong row. Always key by a stable, unique identifier from the data itself.
-- **Boolean attribute binding vs string `"false"`** — `<button :disabled="isDisabled">` correctly removes the attribute when `isDisabled` is `false`. But `<button disabled="false">` (a literal string, not a binding) still renders the `disabled` attribute — HTML treats *any* value, including the string `"false"`, as present. This trips up developers coming from languages where string `"false"` is falsy.
-- **`v-html` bypasses Vue's built-in XSS protection** — Interpolation and `v-bind` escape content automatically; `v-html` explicitly opts out for that one binding. Passing user-generated content (comments, bios, markdown-rendered HTML) through `v-html` without sanitizing it first is a direct XSS vector — see chapter 22.
-- **`v-for` on an object iterates in insertion order, not the order you'd expect from other languages** — Modern JS engines guarantee `for...in`/`Object.keys()` order as: integer-like keys ascending first, then string keys in insertion order. `v-for="(v, k) in obj"` follows the same rule, which can surprise you if you expect alphabetical order or the exact order you wrote the object literal.
-
-## 🧠 Spot the Bug
-
-A shopping cart lets users remove items. After removing the second item, the *wrong* item's "on sale" badge appears on the remaining rows.
-
-::code-wrapper{language="vue"}
+::code-wrapper{language="vue" filename="TipsTricks.vue"}
 ```vue
 <script setup>
 import { ref } from 'vue'
-
-const cart = ref([
-  { id: 101, name: 'Keyboard', onSale: false },
-  { id: 102, name: 'Mouse', onSale: true },
-  { id: 103, name: 'Monitor', onSale: false }
-])
-
-function remove(index) {
-  cart.value.splice(index, 1)
-}
 </script>
 
 <template>
-  <div v-for="(item, index) in cart" :key="index">
+  <!-- ── 1. v-bind spread — forward a bag of attrs to a native element ── -->
+  <input v-bind="{ type: 'email', placeholder: 'Email', required: true, autocomplete: 'email' }" />
+
+  <!-- ── 2. v-once — render once, skip forever (static content optimization) ── -->
+  <header v-once>{{ heavyMarkdownRenderedOnce }}</header>
+
+  <!-- ── 3. v-memo — skip re-render unless deps change (for expensive list items) ── -->
+  <div v-memo="[item.id, item.status]" v-for="item in hugeList" :key="item.id">
+    {{ item.name }}
+  </div>
+
+  <!-- ── 4. v-for range starts at 1, not 0 ── -->
+  <option v-for="n in 12" :key="n" :value="n">{{ n }}</option>
+
+  <!-- ── 5. Dynamic event name — useful for programmatically bound events ── -->
+  <button @[eventName]="handler">Dynamic event</button>
+
+  <!-- ── 6. Dynamic argument — any expression that evaluates to a string ── -->
+  <a :[attrName]="url">Dynamic attribute</a>
+</template>
+```
+::
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Boolean attribute string "false" is still truthy in HTML ──
+// :disabled="false" → attribute removed ✅
+// disabled="false"   → attribute present (string "false" is truthy in HTML) ❌
+// HTML spec: presence of boolean attr = true, regardless of value.
+
+// ── 2. v-html bypasses Vue's XSS escaping ──
+// {{ userComment }} → escaped (safe)
+// <p v-html="userComment" /> → raw HTML injected (XSS if unsanitized)
+// Always sanitize with DOMPurify before v-html on user content.
+
+// ── 3. Object key iteration order is NOT alphabetical ──
+// v-for="(v, k) in obj" follows JS engine for-in order:
+//   1. Integer-index keys (ascending numeric)
+//   2. String keys (insertion order)
+//   3. Symbol keys (insertion order)
+// { b: 1, a: 2, 2: 3, 1: 4 } → iterates: 1, 2, b, a (NOT a, b, 1, 2)
+
+// ── 4. v-model on component requires modelValue prop + update:modelValue emit ──
+// Vue 3 renamed value→modelValue and input→update:modelValue (breaking change from Vue 2)
+// Multiple v-models: v-model:firstName + v-model:lastName → two model props
+
+// ── 5. Template expressions are sandboxed — limited global access ──
+// {{ window.location }} → undefined (window not in sandbox whitelist)
+// Only: Math, Date, parseInt, JSON, undefined, etc.
+// Access component methods via: {{ myMethod() }}
+```
+::
+
+## 🧠 Spot the Bug
+
+After removing the second cart item, the "On Sale" badge appears on the wrong product.
+
+::code-wrapper{language="vue" filename="CartBug.vue"}
+```vue
+<script setup>
+import { ref } from 'vue'
+const cart = ref([
+  { id: 101, name: 'Keyboard', onSale: false },
+  { id: 102, name: 'Mouse', onSale: true },
+  { id: 103, name: 'Monitor', onSale: false },
+])
+function remove(i) { cart.value.splice(i, 1) }
+</script>
+
+<template>
+  <div v-for="(item, i) in cart" :key="i">
     {{ item.name }}
     <span v-if="item.onSale">On Sale!</span>
-    <button @click="remove(index)">Remove</button>
+    <button @click="remove(i)">Remove</button>
   </div>
 </template>
 ```
@@ -397,11 +460,13 @@ function remove(index) {
 <details>
 <summary>Answer</summary>
 
-`:key="index"` keys each row by its position, not by the product it represents. When "Mouse" (index 1) is removed, "Monitor" shifts from index 2 to index 1. Vue sees that the vnode keyed `1` still exists (it just now renders "Monitor" instead of "Mouse") and patches the existing DOM node's text and `onSale` binding in place — but any internal state that Vue didn't think to re-derive (in more complex cases: focus, transition state, or memoized child component state) stays attached to the DOM position, not the product. Here the visible symptom is the sale badge appearing to "belong" to the wrong row transiently during the patch in more complex real components.
+`:key="i"` keys by position. When "Mouse" (index 1) is removed, "Monitor" shifts to index 1. Vue sees the vnode keyed `1` still exists, patches it in place with "Monitor" data — but the `v-if="item.onSale"` re-evaluates against the NEW data (Monitor, `onSale: false`), so the badge disappears. Meanwhile the vnode at index 0 ("Keyboard") was unkeyed-correct but if there were transient render states (CSS transitions, focus), they'd be attached to the wrong product.
 
-The fix is to key by the item's own identity:
+The root cause: index keys make Vue treat positions as identity, not the actual data items.
 
-::code-wrapper{language="vue"}
+**Fix** — key by stable id:
+
+::code-wrapper{language="vue" filename="CartFixed.vue"}
 ```vue
 <template>
   <div v-for="item in cart" :key="item.id">
@@ -413,15 +478,6 @@ The fix is to key by the item's own identity:
 ```
 ::
 
-**The lesson**: `:key` must identify *what the data represents*, never *where it currently sits in the array* — index keys only work safely for lists that are never reordered, filtered, or spliced.
+**The lesson**: `:key` must identify *what the data represents*, never *where it currently sits in the array*. Index keys are only safe for lists that are never reordered, filtered, or spliced.
 
 </details>
-
-## Key Takeaways
-
-- `{{ }}` interpolation and `v-bind`/`:` escape output by default; `v-html` opts out and must never be used on untrusted content.
-- `v-if` physically adds/removes elements (and runs lifecycle hooks); `v-show` toggles CSS `display` and keeps the instance mounted — pick based on toggle frequency and mount cost.
-- `v-for` requires a stable, unique `:key` derived from the data's own identity, never the loop index, or list mutations will corrupt per-row state.
-- `v-if` and `v-for` on the same element resolve `v-if` first in Vue 3 — filter with a `computed` instead of combining them directly.
-- `v-on`/`@` modifiers (`.prevent`, `.stop`, `.once`, `.self`) replace manual `event` method calls inside handlers.
-- `v-model` is sugar over a value binding plus a change listener, and adapts automatically to the target element type.

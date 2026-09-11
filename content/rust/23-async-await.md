@@ -1,468 +1,468 @@
-# 23 — Async / Await
+# 23 — Async/Await: The Executor Model and the Real Cost of "Zero-Cost"
 
-Async lets you write concurrent code that looks sequential. Rust's async is **zero-cost** — futures are state machines compiled by the compiler.
+Async Rust is marketed as zero-cost. It's more precise to say: **the abstraction is zero-cost, the runtime is not, and the two get conflated constantly.** `async fn` genuinely compiles to a hand-optimizable state machine with no forced heap allocation or dynamic dispatch at the language level — but the moment you add `tokio::spawn`, a thread pool, work-stealing, and I/O-driven wakeups, you've adopted a full concurrent runtime with real scheduling costs, real memory overhead, and real failure modes that don't exist in synchronous code. A senior engineer needs both halves of this picture.
 
-## Async Functions
+## Under-the-Hood Mechanics
 
-::code-wrapper{language="rust"}
-```rust
-async fn fetch(url: &str) -> String {
-    // ... await something ...
-    String::from("data")
-}
-```
-::
+### `async fn` desugars to an anonymous struct implementing `Future`
 
-Calling `fetch(...)` returns a **future**, not a value. The body doesn't run until the future is polled.
-
-## `await`
+An `async fn` is **not** magic — the compiler transforms it into a state machine: a struct whose fields are exactly the local variables that are live across an `.await` point, plus a discriminant tracking which `.await` the function is currently suspended at. Calling the function doesn't run any of the body; it just constructs this struct. Each call to `.poll()` resumes execution from the last suspension point until it either returns `Poll::Ready(value)` or hits another `.await` and returns `Poll::Pending`.
 
 ::code-wrapper{language="rust"}
 ```rust
-let s = fetch("https://x").await;
-```
-::
-
-`.await` yields control to the executor if the future is pending. The current task is suspended and later resumed.
-
-## Async Is Lazy
-
-::code-wrapper{language="rust"}
-```rust
-let f = async { println!("hi"); };
-// nothing happens yet
-f.await;   // body runs now
-```
-::
-
-You must `.await` (or `spawn`) a future for it to make progress.
-
-## Runtimes
-
-Rust ships **no built-in async runtime** — you choose one:
-- `tokio`: most popular, multi-threaded scheduler, mature ecosystem.
-- `async-std`: mirrors std API, single-threaded by default.
-- `smol`: small, simple.
-- `embassy`: embedded (`no_std`).
-
-::code-wrapper{language="rust"}
-```rust
-#[tokio::main]
-async fn main() {
-    println!("hello from tokio");
-}
-```
-::
-
-`tokio::main` builds a runtime and runs your async `main`.
-
-## Spawning Tasks
-
-::code-wrapper{language="rust"}
-```rust
-#[tokio::main]
-async fn main() {
-    let h = tokio::spawn(async {
-        5
-    });
-    let n: i32 = h.await.unwrap();
-    println!("{n}");
-}
-```
-::
-
-- `tokio::spawn` returns a `JoinHandle<T>`.
-- Spawned tasks must be `Send + 'static`.
-- `.await` on the handle gives `Result<T, JoinError>` (panic propagates).
-
-## Futures
-
-::code-wrapper{language="rust"}
-```rust
-trait Future {
-    type Output;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output>;
+// This async fn:
+async fn fetch_and_process(id: u32) -> String {
+    let raw = fetch(id).await;      // suspension point 1
+    let parsed = parse(&raw).await; // suspension point 2
+    parsed
 }
 
-enum Poll<T> { Ready(T), Pending }
-```
-::
-
-You rarely implement `Future` manually. Async functions desugar to anonymous `Future`-implementing state machines.
-
-## `Pin`
-
-### How pinning works conceptually
-
-`Pin<P>` is a pointer wrapper that **guarantees the pointee won't be moved in memory** after it's pinned. This matters because async blocks desugar to **state machines that can be self-referential** — an `async fn` stores its local variables in a struct, and a future paused at an `.await` may hold a reference to *another* field of the same struct. If that struct were moved, the internal reference would dangle. `Pin` exists to make "this won't be moved" a compile-time guarantee the `Future` API can rely on.
-
-The `Unpin` marker is the escape hatch: most types (heap boxes, plain integers, structs of `Unpin` fields) are `Unpin`, meaning pinning them is a no-op — they're safe to move even while pinned, because they don't self-reference. Only *self-referential* futures need the pin guarantee; that's why `Future::poll` takes `Pin<&mut Self>` — to protect self-referential futures. You mostly encounter `Pin` in trait signatures and `Box::pin`; the `Unpin` bound is what makes everyday pinned values movable. You rarely write `Pin` by hand — `Box::pin` and `pin-utils` handle the common cases.
-
-::code-wrapper{language="rust"}
-```rust
-let mut fut = async { 5 };
-let pinned: Pin<&mut _> = Pin::new(&mut fut);
-```
-::
-
-You mostly encounter `Pin` in trait signatures and APIs (e.g., `Future::poll`). The `pin-utils` or `Box::pin` handle the common cases.
-
-## `Box<dyn Future>` and `Pin<Box<dyn Future>>`
-
-### When you need boxing
-
-You box a future when you need **type erasure**: storing futures of *different* concrete types in one collection (`Vec<Pin<Box<dyn Future<Output = ()>>>`), or returning *different* future types from different branches of a function (`if cond { async { 1 } } else { other_async() }` — each branch has a different anonymous type, so you can't return `impl Future` without boxing). `Box::pin` heap-allocates the future and type-erases it to `dyn Future`, at the cost of one allocation + vtable dispatch. Use `impl Future` (below) when you *can* — it's zero-cost; reach for `Box::pin` only when the type erasure is genuinely needed.
-
-Because futures have unique unnameable types, storing them in collections or returning them generically requires boxing:
-
-::code-wrapper{language="rust"}
-```rust
-fn make_fut() -> Pin<Box<dyn Future<Output = i32> + Send>> {
-    Box::pin(async { 5 })
+// desugars conceptually to something like:
+enum FetchAndProcessState {
+    Start { id: u32 },
+    WaitingOnFetch { fetch_fut: FetchFuture },
+    WaitingOnParse { raw: String, parse_fut: ParseFuture }, // `raw` must be KEPT ALIVE here
+    Done,
 }
+// The struct's size is the size of its LARGEST live state, not the sum of all of them —
+// but any data alive across multiple await points does count toward every state that needs it.
 ```
 ::
 
-`Pin<Box<dyn Future>>` is the trait-object form of a future.
-
-## `impl Future`
-
-### When to use `impl Future` vs `Pin<Box<dyn Future>>`
-
-`impl Future` returns a **concrete (but hidden) future type** with **static dispatch** — the compiler monomorphizes and can inline, so it's zero-cost. Reach for it when your function returns **a single future type** (one `async` block, one call chain). The limitation: every `return` must yield the *same* concrete future type, so you can't return different branch futures without boxing. `Pin<Box<dyn Future>>` is the fallback when you need type erasure (heterogeneous collections, multi-branch returns); it trades one allocation + vtable dispatch for that flexibility.
+A buffer held live across an `.await` inflates the *entire* future's size, even in states where it's unused:
 
 ::code-wrapper{language="rust"}
 ```rust
-fn make_fut() -> impl Future<Output = i32> {
-    async { 5 }
-}
-```
-::
-
-Returns a concrete future type, hidden. Single type per return site.
-
-## Common Async Crates
-
-- `tokio` — runtime, I/O, networking, synchronization.
-- `futures` — combinators, streams, sinks.
-- `async-trait` — async functions in traits (until native support stabilizes; partial in 1.75+).
-- `reqwest` — HTTP client.
-- `hyper` — HTTP server/client.
-- `sqlx` — async DB.
-- `axum` — web framework (tokio-based).
-
-## Async IO
-
-::code-wrapper{language="rust"}
-```rust
-use tokio::fs;
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let s = fs::read_to_string("file.txt").await?;
-    println!("{s}");
-    Ok(())
-}
-```
-::
-
-Async `read`/`write` yield when the syscall would block. The runtime parks the task and wakes it when the OS signals readiness.
-
-## `tokio::select!`
-
-### How it works and when to reach for it
-
-`select!` **polls all branches concurrently** and completes when the *first* one is ready — the others are **dropped** (canceled). Conceptually, it's a race: every branch's future is polled; the winner produces the result; the losers are abandoned. This is why `select!` has **cancellation semantics** — unselected futures don't continue running, they're dropped (their state, including any held resources, is released). You reach for `select!` for **racing**: a timeout vs. the operation, two I/O sources where you take the first, or "wait for any of these." The `biased` option makes branches polled in declaration order (first-listed wins ties); without it, branches are randomized to avoid starvation. Branching with `&mut` futures instead of consuming them lets you keep using the unselected ones across loop iterations.
-
-Race multiple futures, take the first to complete:
-
-::code-wrapper{language="rust"}
-```rust
-tokio::select! {
-    v = first_future() => println!("first: {v}"),
-    _ = tokio::time::sleep(Duration::from_secs(1)) => println!("timeout"),
-}
-```
-::
-
-Unselected branches are dropped. Use `biased` for ordering, or branch with `&mut` futures to reuse them.
-
-## Streams (Async Iterators)
-
-### What a stream is and when to use one
-
-A `Stream` is the **async analog of `Iterator`**: it yields a sequence of values over time, but each `next()` is `async` — it awaits the next value rather than returning immediately. You reach for a stream when values arrive **asynchronously over time** (a websocket receiving messages, lines from an async file read, a queue being drained) and `for` won't work because each step needs `.await`. Conceptually, streams are **pull-based** (you ask for the next item) — contrast with channels, which are **push-based** (the sender pushes; you receive). Use a stream when you're iterating async-produced values; use a channel when you're decoupling a producer from a consumer across tasks.
-
-::code-wrapper{language="rust"}
-```rust
-use futures::stream::{self, StreamExt};
-
-let mut s = stream::iter(vec![1, 2, 3]).map(|x| x * 2);
-while let Some(v) = s.next().await {
-    println!("{v}");
-}
-```
-::
-
-`StreamExt::next().await` is the async equivalent of `Iterator::next()`. `try_stream`/`tokio_stream` for building streams.
-
-## Channels
-
-### Which async channel to use
-
-`tokio::sync` offers four channel types with distinct semantics — pick based on how many **receivers** you need and whether you need **history** or just the **latest** value:
-
-- **`mpsc`** — multi-producer, **single**-consumer. The workhorse: many tasks send, one task drains. Bounded (backpressure) or unbounded.
-- **`broadcast`** — multi-producer, **multi**-consumer. Every receiver sees every message (cloned to each). Use for fan-out (event broadcast to many subscribers).
-- **`oneshot`** — single-value, one-shot. Send exactly once, receive exactly once. Use for "a one-time response" (request/response where the request is a future).
-- **`watch`** — single-value **latest-only**. Receivers always see the most recent value, not the history. Use for "a config value that changes over time" where consumers just need the current state.
-
-`tokio::sync::mpsc`, `tokio::sync::broadcast`, `tokio::sync::oneshot`, `tokio::sync::watch`:
-
-::code-wrapper{language="rust"}
-```rust
-let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-tokio::spawn(async move {
-    tx.send(5).await.unwrap();
-});
-let v = rx.recv().await;
-```
-::
-
-Async channels `.await` on send/recv instead of blocking.
-
-## `spawn_blocking`
-
-For CPU-bound work or blocking syscalls inside async code:
-
-::code-wrapper{language="rust"}
-```rust
-let v = tokio::task::spawn_blocking(|| {
-    cpu_heavy_computation()
-}).await.unwrap();
-```
-::
-
-Offloads work to a separate thread pool so the async executor isn't blocked.
-
-## Holding Locks Across `.await` — Pitfall
-
-::code-wrapper{language="rust"}
-```rust
-// BAD: holding std Mutex across await can deadlock / block executor
-let guard = std_mutex.lock().unwrap();
-some_async().await;     // ⚠️ guard held
-// GOOD:
-let val = {
-    let g = std_mutex.lock().unwrap();
-    g.clone()
-};
-some_async(val).await;
-
-// OR use tokio's async Mutex:
-let guard = tokio_mutex.lock().await;
-some_async().await;
-```
-::
-
-`std::sync::Mutex` is fine *within* an async function if released before `.await`. For locks held across `.await`, use `tokio::sync::Mutex`.
-
-## Canceling Futures
-
-### How cooperative cancellation works
-
-Cancellation in async Rust is **cooperative**: dropping a `Future` cancels it — the future's `Drop` runs, releasing resources, and it never resumes. This is why `select!` cancels unselected branches (it drops them). The subtlety: **dropping a future mid-`.await` can leak resources** if the future holds a lock, an open file, etc. — the `Drop` cleans up, but the work in progress is abandoned. `CancellationToken` exists for **explicit, graceful cancellation**: instead of dropping, you signal cancellation, and the future can `.await` the token, finish its current work cleanly (flush, release locks, log), then exit. Reach for `CancellationToken` when the future needs to clean up *before* stopping; reach for drop-cancellation when abrupt termination is fine.
-
-Dropping a future cancels it. The `select!` drop semantics mean unselected branches are canceled. Use `CancellationToken` for cooperative cancellation.
-
-## Backpressure
-
-### What it is and why it matters
-
-Backpressure is the mechanism by which a **slow consumer slows down a fast producer** — without it, a fast producer floods a slow consumer, causing unbounded memory growth (the queue fills) and eventual OOM. A **bounded channel** (`mpsc::channel(n)`) is the canonical tool: when the buffer is full, `send().await` *suspends the sender* until space frees, naturally throttling production to match consumption. Unbounded channels have no backpressure — the producer never blocks, so memory grows with the queue. Reach for bounded channels whenever a producer *could* outrun a consumer; reach for unbounded only when the producer is provably slower than the consumer or you have a different flow-control mechanism.
-
-Use bounded channels (`mpsc::channel(n)`). `.send().await` blocks when full, naturally propagating backpressure to producers.
-
-## Async Traits (1.75+)
-
-### Why this was historically hard
-
-Before 1.75, `async fn` in traits wasn't supported natively because **the return type of an async fn is an anonymous future** — you can't name it in a trait signature (`fn call() -> ???`), and the future may borrow from `self`, complicating lifetime bounds. The `async-trait` crate worked around this by **boxing** every async method's future (`Pin<Box<dyn Future>>`), which costs an allocation + vtable per call. Native support (1.75+) lets you write `async fn` in traits without boxing, but with limitations: `dyn` dispatch still needs `async-trait` (the native form is monomorphized, not object-safe), and some patterns (recursion) require care. Reach for native async traits in generic code (zero-cost); reach for `async-trait` when you need `dyn Trait` (object-safety) or older-toolchain compatibility.
-
-::code-wrapper{language="rust"}
-```rust
-trait Service {
-    async fn call(&self, req: Request) -> Response;
-}
-```
-::
-
-Native async traits stabilized in 1.75 with limitations (no `dyn` dispatch without `#[async_trait]` crate, no recursion in some cases). For full features including `dyn`, use the `async-trait` crate.
-
-## Common Patterns
-
-### Concurrency with `join!`
-
-::code-wrapper{language="rust"}
-```rust
-let (a, b, c) = tokio::join!(fa(), fb(), fc());
-```
-::
-
-Runs all three concurrently, waits for all, returns a tuple.
-
-### Concurrency with `try_join!`
-
-::code-wrapper{language="rust"}
-```rust
-let (a, b) = tokio::try_join!(fa(), fb())?;
-```
-::
-
-Like `join!` but short-circuits on `Err`.
-
-### `FuturesUnordered`
-
-::code-wrapper{language="rust"}
-```rust
-use futures::stream::FuturesUnordered;
-let mut futs = FuturesUnordered::new();
-futs.push(fa());
-futs.push(fb());
-while let Some(r) = futs.next().await { /* ... */ }
-```
-::
-
-Spawn N futures, await results as they complete (unordered).
-
-## Common Pitfalls
-
-- **`.await` in a `for` loop over a sync iterator**: fine; just don't accidentally serialize tasks you wanted to run concurrently — use `join!` or `spawn`.
-- **Forgetting to `await`**: the future is created but never runs — silent bug.
-- **`async fn` in a trait** still has rough edges; check current support.
-- **Runtime-locked I/O**: mixing `tokio::fs` and `async-std::fs` is fine functionally but wasteful; pick one runtime's I/O.
-- **`Send` futures**: futures that hold non-`Send` types across `.await` are `!Send` and can't be `tokio::spawn`ed.
-- **Long-running blocking code in async**: blocks the executor. Use `spawn_blocking`.
-- **Memory leaks with `select!` loops**: each iteration may allocate. Use `pin_mut!` or pinned variables.
-- **`tokio::main` flavor**: `#[tokio::main(flavor = "current_thread")]` is single-threaded (less overhead). Default is multi-threaded.
-- **`Drop` cancels futures**: a future dropped mid-`await` is silently canceled; resources are cleaned up via `Drop`.
-
-## Async/Await Tricks & Patterns
-
-::code-wrapper{language="rust"}
-```rust
-// Trick: use select! for racing futures
-tokio::select! {
-    Some(msg) = rx.recv() => println!("got message: {msg}"),
-    _ = tokio::time::sleep(Duration::from_secs(5)) => println!("timeout"),
+async fn small() -> u32 {
+    let x = 1;
+    yield_now().await;
+    x
 }
 
-// Trick: biased select for ordering
-tokio::select! {
-    biased;
-    x = first_future() => { },
-    y = second_future() => { },
+async fn bloated() -> u32 {
+    let buf = [0u8; 4096];   // 4KB local...
+    yield_now().await;      // ...still alive here, so the whole future is >= 4KB
+    buf[0] as u32
 }
 
-// Trick: use Box::pin for trait objects
-let fut: Box<dyn std::future::Future<Output = i32>> = Box::pin(async { 42 });
-
-// Trick: pinning with pin_mut! for efficiency
-use std::pin::pin;
-let mut fut = async { 42 };
-let mut fut = pin!(fut);
-
-// Trick: use join! for running multiple futures concurrently
-let (a, b, c) = tokio::join!(future_a(), future_b(), future_c());
-
-// Trick: try_join! for early exit on error
-let (a, b) = tokio::try_join!(res_future_a(), res_future_b())?;
-
-// Trick: stream-based iteration with tokio_stream
-use tokio_stream::StreamExt;
-let mut interval = tokio::time::interval(Duration::from_millis(100));
-while let Some(_) = interval.tick().await { }
-
-// Trick: timeout with select!
-tokio::select! {
-    result = long_running_task() => result,
-    _ = tokio::time::sleep(Duration::from_secs(30)) => Err("timeout"),
+async fn fixed() -> u32 {
+    let first_byte = { let buf = [0u8; 4096]; buf[0] }; // buf dropped before the await
+    yield_now().await;
+    first_byte as u32
 }
 
-// Trick: spawn_blocking for sync code in async context
-let result = tokio::task::spawn_blocking(|| {
-    blocking_operation()
-}).await?;
-
-// Trick: use FuturesUnordered for dynamic task spawning
-use futures::stream::FuturesUnordered;
-let mut futs = FuturesUnordered::new();
-futs.push(tokio::spawn(async { 1 }));
-futs.push(tokio::spawn(async { 2 }));
-while let Some(Ok(val)) = futs.next().await { println!("{val}"); }
+// std::mem::size_of_val(&bloated()) is ~4KB+
+// std::mem::size_of_val(&fixed())   is a few bytes
+async fn yield_now() {}
 ```
 ::
 
-## When to Use Async
+### The executor model: polling, wakers, and who actually drives progress
 
-- Many concurrent I/O-bound tasks (HTTP servers, proxies, scrapers).
-- Latency-sensitive workloads with lots of waiting.
-- Avoid for CPU-bound work — use threads or `rayon`.
-- Avoid in `no_std`/embedded unless using a `no_std`-friendly runtime (`embassy`).
-
-## 💡 Tips & Tricks
-
-- **Debug**: the `console-subscriber` crate plus `tokio-console` gives a live, top-like view of every spawned task's state (running, idle, blocked) — far faster than reasoning about hangs by staring at `select!` blocks.
-- **Idiom**: default to `#[tokio::main(flavor = "current_thread")]` for single-purpose CLI tools and small services that don't need multi-core parallelism — it has noticeably lower overhead than the default multi-threaded runtime and simplifies reasoning about `!Send` types.
-- **Performance**: avoid `tokio::spawn` for very short-lived work (a few microseconds of computation) — the scheduling overhead can exceed the work itself; prefer `join!`/`FuturesUnordered` to run several futures concurrently within the current task instead of spawning a task per unit of work.
-- **Debug**: a task that "hangs forever" with no panic is almost always either an unbounded channel filling up unboundedly on the *other* end, or a lock held across an `.await` that another task needs — check both before assuming it's a runtime bug.
-- **Idiom**: prefer `tokio::sync::Mutex` only when you truly must hold a lock across an `.await` point; if you can restructure to compute the value inside a small `{ }` block with a `std::sync::Mutex` and drop the guard before awaiting, the synchronous mutex is cheaper and avoids the "async mutex held across await" footguns entirely.
-- **Debug**: `RUST_LOG=trace` with `tracing`/`tracing-subscriber` and span-based instrumentation (`#[tracing::instrument]` on async functions) preserves causality across `.await` points in a way plain `println!` timestamps cannot, since interleaved task output is otherwise very hard to attribute to the right logical flow.
-
-## Async Edge Cases & Gotchas
+A future only makes progress when polled; when it returns `Poll::Pending` it must register a `Waker` with whatever it's waiting on, or the executor never learns to poll it again:
 
 ::code-wrapper{language="rust"}
 ```rust
-// Gotcha: async functions are lazy — they don't run until awaited
-let fut = async_fn(); // nothing happens yet
-fut.await; // now it runs
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-// Gotcha: forgetting to await returns a future, not the value
-let result = async_fn(); // result is a Future, not the output
-let value = async_fn().await; // value is the actual output
-
-// Gotcha: holding std::sync::Mutex across await can deadlock
-let guard = mutex.lock().unwrap();
-async_op().await; // DANGER: holding the guard
-// Solution: drop the guard before await
-let val = { let g = mutex.lock().unwrap(); g.clone() };
-async_op().await;
-
-// Gotcha: !Send futures can't be spawned
-let non_send = std::rc::Rc::new(5);
-tokio::spawn(async { println!("{}", non_send); }); // ERROR
-
-// Gotcha: tasks are dropped on cancellation
-let fut = long_task();
-tokio::select! {
-    result = fut => println!("{result}"),
-    _ = timeout() => {} // fut is dropped here without completing
+struct BrokenFuture;
+impl Future for BrokenFuture {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
+        // BUG: returns Pending but never registers cx.waker() anywhere —
+        // this task will NEVER be polled again. It just hangs forever.
+        Poll::Pending
+    }
 }
 
-// Trick: use pin! for re-borrowing futures across select!
-let mut fut = some_future();
-loop {
-    tokio::select! {
-        result = &mut fut => {
-            println!("{result}");
-            break;
-        },
-        _ = tokio::time::sleep(Duration::from_secs(1)) => {
-            println!("still waiting...");
+// The correct version: register the waker so something can re-poll us later.
+struct WorksFuture { registered: bool }
+impl Future for WorksFuture {
+    type Output = ();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
+        if !self.registered {
+            self.registered = true;
+            let waker = cx.waker().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                waker.wake(); // re-queues this task with the executor
+            });
+            return Poll::Pending;
         }
+        Poll::Ready(())
     }
 }
 ```
 ::
+
+### `Pin` exists because state machines can be self-referential
+
+A self-borrowing state machine can't be safely moved after it's polled — `Pin` is the compiler's way of forbidding that move:
+
+::code-wrapper{language="rust"}
+```rust
+use std::pin::Pin;
+use std::marker::PhantomPinned;
+
+// Conceptually, what a self-referential async state machine looks like:
+struct SelfReferential {
+    data: String,
+    // In real generated code this is a raw pointer into `data`, not a real
+    // reference — Rust's borrow checker can't express "a field borrows a
+    // sibling field" directly, so the compiler uses raw pointers internally.
+    pointer_into_data: *const u8,
+    _pin: PhantomPinned, // opts the type OUT of Unpin
+}
+
+// Most everyday types are Unpin (pinning is a no-op for them):
+fn takes_pinned_but_movable(x: Pin<&mut u32>) {
+    let _r: &mut u32 = Pin::into_inner(x); // fine: u32 is Unpin
+}
+
+// A !Unpin type cannot be moved out of a Pin safely:
+fn takes_self_referential(x: Pin<&mut SelfReferential>) {
+    // x.get_mut() would refuse to compile without `unsafe` —
+    // that's the whole point: the address is now fixed for its lifetime.
+}
+```
+::
+
+### `Send` bounds on spawned futures are structurally derived, field by field
+
+`tokio::spawn` requires `F: Future + Send + 'static`; a future's `Send`-ness is inferred from every local held live across an `.await`, exactly like auto-trait derivation on ordinary structs:
+
+::code-wrapper{language="rust"}
+```rust
+use std::rc::Rc;
+
+async fn send_ok() -> u32 {
+    let x = 5; // plain data, Send
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    x
+}
+
+async fn not_send() -> u32 {
+    let x = Rc::new(5); // Rc: non-atomic refcount, !Send
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    *x // x is alive across the .await -> whole future is !Send
+}
+
+async fn send_ok_again() -> u32 {
+    let x = Rc::new(5);
+    let v = *x; // Rc dropped here, before the await
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    v // future is Send again
+}
+
+#[tokio::main]
+async fn main() {
+    tokio::spawn(send_ok());       // compiles
+    tokio::spawn(send_ok_again()); // compiles
+    // tokio::spawn(not_send());   // ERROR: future is not `Send`
+}
+```
+::
+
+### Boxing a future: one heap allocation plus vtable indirection per poll
+
+::code-wrapper{language="rust"}
+```rust
+use std::future::Future;
+use std::pin::Pin;
+
+// impl Future: concrete type, stack-allocatable, inlinable — but every
+// branch must return the SAME concrete future type.
+fn make_static(flag: bool) -> impl Future<Output = u32> {
+    async move { if flag { 1 } else { 2 } } // single concrete type, ok
+}
+
+// Heterogeneous return types force boxing + dynamic dispatch:
+fn make_boxed(flag: bool) -> Pin<Box<dyn Future<Output = u32>>> {
+    if flag {
+        Box::pin(async { 1 })       // one heap allocation
+    } else {
+        Box::pin(async { fetch_it().await }) // a different concrete type — needs erasure
+    }
+}
+
+async fn fetch_it() -> u32 { 2 }
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+| Construct | Allocation | Dispatch | Compile-time cost | When it's worth it |
+|---|---|---|---|---|
+| `async fn` / `impl Future` | Zero (unless the body itself allocates) | Static, inlinable | Higher — the compiler must generate and optimize the state machine type | Default choice for any single-future-type return |
+| `Box::pin(async { ... })` | One heap allocation | Dynamic (vtable call per poll) | Lower per-call-site (erases a complex type) | Heterogeneous collections of futures, multi-branch return types |
+| `tokio::spawn` | Allocates a task (heap-boxed internally by the runtime) | Scheduled independently by the executor | N/A | Genuine concurrent progress needed — the task runs even if you don't `.await` the handle |
+| `join!`/`try_join!` | Zero extra allocation — polls all futures from one stack frame | Static | Low | Running a small, fixed number of futures concurrently within one task |
+| `FuturesUnordered` | One allocation per pushed future (each is often boxed) plus the container itself | Dynamic per future | Low | A dynamic, changing set of concurrently-running futures |
+| `select!` | Zero extra allocation for the macro itself | Static (branches known at compile time) | Moderate (macro expansion) | Racing a fixed set of futures, taking the first to complete |
+| `async-trait` crate | One `Box::pin` allocation per trait method call | Dynamic | Low | `dyn Trait` async APIs, pre-1.75 codebases |
+| Native async trait methods (1.75+) | Zero for generic/static dispatch | Static | Higher | Generic async trait bounds where `dyn` isn't needed |
+
+Thread-per-connection vs. async task-per-connection, in numbers:
+
+::code-wrapper{language="rust"}
+```rust
+// One OS thread per connection: ~1-8MB stack reserved per thread (platform default).
+fn handle_conn_threaded(conn: std::net::TcpStream) {
+    std::thread::spawn(move || { /* blocking I/O here */ });
+}
+// 10,000 connections * 2MB stacks = ~20GB address space reserved.
+
+// One async task per connection: state machine is hundreds of bytes to a
+// few KB (bounded by the largest set of locals live across one .await).
+async fn handle_conn_async(conn: tokio::net::TcpStream) {
+    // tokio::spawn(async move { /* .await-based I/O here */ });
+}
+// 10,000 tasks * ~1KB = ~10MB. This 100-1000x density gap is why async
+// exists at all for high-concurrency I/O-bound servers.
+```
+::
+
+The cost paid for that density: a CPU-bound future that never yields starves every other task on its executor thread — cooperative scheduling has no preemption:
+
+::code-wrapper{language="rust"}
+```rust
+async fn hogs_the_thread() {
+    let mut x = 0u64;
+    for i in 0..10_000_000_000u64 { x = x.wrapping_add(i); } // never .await's — never yields
+    println!("{x}");
+}
+// Every other task scheduled on this same worker thread makes zero progress
+// until hogs_the_thread() returns. No panic, no error — just silent starvation.
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: sequential `.await` mistaken for concurrency
+
+::code-wrapper{language="rust"}
+```rust
+async fn fetch(id: u32) -> u32 {
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    id * 2
+}
+
+// BAD: a mid-level dev assumes "async" implies "concurrent"
+#[tokio::main]
+async fn main() {
+    let start = std::time::Instant::now();
+    let a = fetch(1).await;   // fully completes before the next line even starts
+    let b = fetch(2).await;
+    let c = fetch(3).await;
+    println!("{a} {b} {c} in {:?}", start.elapsed());  // ~3 seconds, not ~1
+}
+```
+::
+
+The real-world shape of this bug — independent lookups sequenced by accident:
+
+::code-wrapper{language="rust"}
+```rust
+// BAD: three independent fetches, tripled latency, nothing errors or panics
+async fn load_profile(user_id: u32) -> (User, Permissions, Prefs) {
+    let user = fetch_user(user_id).await;
+    let perms = fetch_permissions(user_id).await;
+    let prefs = fetch_preferences(user_id).await;
+    (user, perms, prefs)
+}
+# async fn fetch_user(_: u32) -> User { User }
+# async fn fetch_permissions(_: u32) -> Permissions { Permissions }
+# async fn fetch_preferences(_: u32) -> Prefs { Prefs }
+# struct User; struct Permissions; struct Prefs;
+```
+::
+
+**The fix**: `join!` for fixed sets, `spawn` when tasks should outlive this function's scope.
+
+::code-wrapper{language="rust"}
+```rust
+#[tokio::main]
+async fn main() {
+    let start = std::time::Instant::now();
+    let (a, b, c) = tokio::join!(fetch(1), fetch(2), fetch(3));  // all three run concurrently
+    println!("{a} {b} {c} in {:?}", start.elapsed());  // ~1 second
+}
+```
+::
+
+### Anti-pattern: blocking the executor thread with synchronous work
+
+::code-wrapper{language="rust"}
+```rust
+async fn handle_request(payload: Vec<u8>) -> Vec<u8> {
+    // BAD: a CPU-heavy synchronous hash/compress/parse call runs directly
+    // on the async executor's worker thread — no .await, no yield point.
+    expensive_cpu_bound_hash(&payload)   // blocks this thread for, say, 200ms
+}
+
+fn expensive_cpu_bound_hash(data: &[u8]) -> Vec<u8> {
+    std::thread::sleep(std::time::Duration::from_millis(200)); // stand-in for real CPU work
+    data.to_vec()
+}
+```
+::
+
+One un-yielding task occupies a worker thread for its whole duration — every other task scheduled on that same thread stalls, producing a confusing latency spike across unrelated requests. **The fix**: move blocking work to `spawn_blocking`'s dedicated pool.
+
+::code-wrapper{language="rust"}
+```rust
+async fn handle_request(payload: Vec<u8>) -> Vec<u8> {
+    tokio::task::spawn_blocking(move || expensive_cpu_bound_hash(&payload))
+        .await
+        .expect("blocking task panicked")
+}
+```
+::
+
+### Anti-pattern: holding a `std::sync::MutexGuard` across an `.await`, deadlocking or blocking the executor
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::Mutex;
+
+struct SharedState { count: Mutex<u64> }
+
+impl SharedState {
+    // BAD: the guard is alive across the .await below
+    async fn increment_and_notify(&self, notifier: &tokio::sync::Notify) {
+        let mut count = self.count.lock().unwrap();
+        *count += 1;
+        notifier.notified().await;   // guard is STILL HELD while this task is suspended
+    }
+}
+```
+::
+
+If spawned across threads this fails to compile at all (`MutexGuard` is `!Send`); if not, the lock stays held for the entire suspension — every other task needing it queues up behind a lock doing no work.
+
+**The fix**: scope the lock to end before the `.await`.
+
+::code-wrapper{language="rust"}
+```rust
+impl SharedState {
+    async fn increment_and_notify(&self, notifier: &tokio::sync::Notify) {
+        {
+            let mut count = self.count.lock().unwrap();
+            *count += 1;
+        } // lock released here, before the await
+        notifier.notified().await;
+    }
+}
+```
+::
+
+## Architectural Application
+
+**A library's sync-vs-async API choice ripples into every consumer:**
+
+::code-wrapper{language="rust"}
+```rust
+// A driver that only exposes async forces every consumer onto a runtime,
+// even a simple CLI tool that just wants one query.
+pub async fn query_async(sql: &str) -> Vec<Row> { /* ... */ vec![] }
+
+// Serving both audiences: sync core, thin async wrapper on top.
+pub fn query_sync(sql: &str) -> Vec<Row> { /* actual blocking implementation */ vec![] }
+pub async fn query(sql: &str) -> Vec<Row> {
+    let sql = sql.to_owned();
+    tokio::task::spawn_blocking(move || query_sync(&sql)).await.unwrap()
+}
+# struct Row;
+```
+::
+
+**`select!` drops unselected branches — that's how it implements timeouts and cancellation, not just racing:**
+
+::code-wrapper{language="rust"}
+```rust
+use tokio::time::{timeout, Duration};
+
+async fn with_timeout() -> Result<String, &'static str> {
+    match timeout(Duration::from_secs(2), slow_fetch()).await {
+        Ok(val) => Ok(val),
+        Err(_) => Err("timed out"), // slow_fetch's future is dropped here
+    }
+}
+
+// Any resource a future holds must clean up via Drop when cancelled mid-flight:
+struct ReservedSlot;
+impl Drop for ReservedSlot {
+    fn drop(&mut self) { /* release the slot even if we never finished */ }
+}
+
+async fn slow_fetch() -> String {
+    let _slot = ReservedSlot; // RAII guard: released automatically on cancel
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    "data".into()
+}
+```
+::
+
+**Bounded channels turn a slow consumer into backpressure instead of an OOM:**
+
+::code-wrapper{language="rust"}
+```rust
+use tokio::sync::mpsc;
+
+// BAD: unbounded — a slow consumer lets the producer pile up unbounded memory
+async fn unbounded_pipeline() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    tokio::spawn(async move { loop { tx.send(vec![0; 1024]).unwrap(); } }); // never throttled
+}
+
+// GOOD: bounded — send().await suspends the producer once the channel is full
+async fn bounded_pipeline() {
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(100); // capacity is a deliberate SLA
+    tokio::spawn(async move {
+        loop {
+            if tx.send(vec![0; 1024]).await.is_err() { break; } // naturally throttled
+        }
+    });
+}
+```
+::
+
+**Runtime flavor is a real choice, not a default to accept blindly:**
+
+::code-wrapper{language="rust"}
+```rust
+// Small CLI tool / sidecar: single-threaded, lower overhead, no Send needed
+// across spawned futures since there's no cross-thread work-stealing.
+#[tokio::main(flavor = "current_thread")]
+async fn main() { /* ... */ }
+
+// Service that must parallelize CPU alongside I/O concurrency:
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
+async fn main() { /* ... */ }
+```
+::
+
+## 💡 Tips & Tricks
+
+- **Debug**: the `console-subscriber` crate plus `tokio-console` gives a live, top-like view of every spawned task's state (running, idle, blocked) — far faster than reasoning about hangs by staring at `select!` blocks.
+- **Idiom**: default to `#[tokio::main(flavor = "current_thread")]` for single-purpose CLI tools and small services that don't need multi-core parallelism — it has noticeably lower overhead and simplifies reasoning about `!Send` types since there's no cross-thread scheduling.
+- **Performance**: avoid `tokio::spawn` for very short-lived work (a few microseconds of computation) — the scheduling overhead can exceed the work itself; prefer `join!`/`FuturesUnordered` to run several futures concurrently within the current task instead of spawning a task per unit of work.
+- **Debug**: a task that "hangs forever" with no panic is almost always either an unbounded channel filling up unboundedly on the *other* end, or a lock held across an `.await` point that another task needs — check both before assuming it's a runtime bug.
+- **Idiom**: prefer `tokio::sync::Mutex` only when you truly must hold a lock across an `.await` point; if you can restructure to compute the value inside a small `{ }` block with a `std::sync::Mutex` and drop the guard before awaiting, the synchronous mutex is cheaper and avoids the "async mutex held across await" footguns entirely.
+- **Debug**: `RUST_LOG=trace` with `tracing`/`tracing-subscriber` and span-based instrumentation (`#[tracing::instrument]` on async functions) preserves causality across `.await` points in a way plain `println!` timestamps cannot, since interleaved task output is otherwise very hard to attribute to the right logical flow.
+- **Performance**: measure the size of your hot-path futures with `std::mem::size_of_val` on a constructed-but-not-awaited future — a surprisingly large future (megabytes, not kilobytes) usually means a large local buffer is being held live across an `.await` unnecessarily; scope it to end before the await point.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Async functions are lazy — they don't run until polled**: `let fut = async_fn();` executes zero lines of the function body; only `.await`ing (or spawning) it starts execution, which surprises anyone expecting call-like eagerness.
+- **Forgetting `.await` compiles and produces a `Future`, not the value**: `let result = async_fn();` silently gives you an unused/unresolved future instead of the output — often caught by the `unused_must_use` lint on `#[must_use]` futures, but not always, especially when the future is passed elsewhere before being dropped unused.
+- **`!Send` futures can't be `tokio::spawn`ed, and the error message points at the wrong line**: holding an `Rc`, a `RefCell` borrow, or a `MutexGuard` across an `.await` makes the whole state machine `!Send`, but the compiler error often highlights the `tokio::spawn` call site, not the actual offending local variable deep inside the function body.
+- **`select!` drops unselected branches — including their side effects mid-flight**: a database write future that's "in progress" when a `select!` timeout branch wins is dropped, not cancelled cleanly by default — if that future doesn't implement careful `Drop`-based rollback, a partial write can be left in an inconsistent state.
+- **Holding a `std::sync::MutexGuard` across `.await`** can deadlock the executor or fail to compile depending on whether the surrounding future is spawned across threads — the failure mode differs by context, making this bug inconsistent to reproduce.
+- **`tokio::spawn` detaches a task that keeps running even if you drop its `JoinHandle`**: unlike `select!`'s explicit cancellation-on-drop, a spawned task is independent of its handle — dropping the handle does not stop the task, which surprises people expecting symmetric behavior with `thread::spawn`.
+- **Mixing `tokio::fs`/`tokio::net` with a different runtime's I/O primitives silently produces separate reactor registrations**: they usually don't error outright, but the I/O simply never completes, since the wrong reactor never learns to poll the underlying OS resource — a subtle trap when combining crates that assume different runtimes.
 
 ## 🧠 Spot the Bug
 
@@ -509,6 +509,6 @@ This version takes roughly 1 second total, since all three `sleep`s run concurre
 
 ## Summary
 
-Async is lazy (futures are polled); runtimes drive them. `tokio` is the dominant runtime. `await` yields control; `spawn` schedules tasks. `select!` races; `join!`/`try_join!` runs concurrently. Use async-aware channels and locks. Beware holding `std::sync::Mutex` across `.await`. Use `spawn_blocking` for CPU work or blocking calls.
+`async fn` compiles to a compiler-generated, zero-allocation state machine whose size is driven by the largest set of locals held live across any single `.await` point; the abstraction is genuinely zero-cost, but the executor (scheduling, wakers, thread pools) is a real runtime with real overhead. `Pin` exists solely to make self-referential state machines sound to move around before they're polled. `Send` bounds on spawned futures are a structural, compiler-derived fact — exactly like `Send`/`Sync` on ordinary types — propagated from whatever's held live across an `.await`. Architect around cooperative scheduling explicitly: never block an executor thread with synchronous work (use `spawn_blocking`), never hold a synchronous lock across an `.await`, and use bounded channels to propagate backpressure rather than letting an unbounded queue turn a slow consumer into an OOM.
 
-Next: Macros — code that writes code.
+Next: Macros — code that writes code, and what that costs the compiler.

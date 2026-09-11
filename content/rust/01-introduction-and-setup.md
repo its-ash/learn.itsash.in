@@ -1,190 +1,292 @@
 # 01 — Introduction & Setup
 
-## Why Rust?
+Rust's story is a compile-time proof system instead of a runtime one. This chapter is about what that trade buys, what it costs, and how the toolchain expresses it.
 
-Rust is a systems programming language that guarantees **memory safety** and **thread safety** without a garbage collector. It achieves this through a unique ownership model enforced at compile time. Key selling points:
+## Under-the-Hood Mechanics
 
-- **Performance**: comparable to C/C++; no runtime, no GC.
-- **Memory safety**: no null pointers, no dangling pointers, no buffer overflows.
-- **Fearless concurrency**: the compiler prevents data races.
-- **Zero-cost abstractions**: iterators, traits, generics compile down to the same machine code you'd write by hand.
-- **Strong type system**: algebraic data types (enums), pattern matching, traits.
-- **Great tooling**: `cargo` (build/package), `rustfmt` (formatting), `clippy` (lints), `rustdoc` (docs), `rust-analyzer` (IDE).
+Rust compiles through `rustc`, a front end over **LLVM** — no runtime, no GC:
 
-## The Compile-Time vs Runtime Tradeoff
-
-Rust moves correctness checks to compile time. A program that compiles is far more likely to "just work" than in most languages. The cost: longer compile times and a steeper learning curve (especially ownership/lifetimes).
-
-## Installing Rust (rustup)
-
-`rustup` is the official toolchain manager.
-
-::code-wrapper{language="bash"}
-```bash
-# macOS / Linux
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Windows: download rustup-init.exe from https://rustup.rs
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{v:?}");
+    // No GC thread, no managed heap metadata.
+    // `v` drops deterministically at end of scope — compiled into the binary as a `drop` call.
+}
 ```
 ::
 
-Verify:
+Ownership is a compile-time-only analysis — erased before codegen:
 
 ::code-wrapper{language="bash"}
 ```bash
-rustc --version
-cargo --version
-rustup --version
+# Pipeline you should carry in your head:
+# source -> AST -> HIR -> type inference/trait resolution -> MIR (borrow-check here)
+#        -> monomorphization -> LLVM IR -> optimization -> machine code -> link
+rustc --emit=mir src/main.rs -o /tmp/main.mir   # inspect the stage where borrow-checking lives
+rustc --emit=llvm-ir src/main.rs -o /tmp/main.ll # by here, all ownership info is gone
 ```
 ::
 
-### Toolchain Components
+Monomorphization, not type erasure — each instantiation gets its own compiled copy:
 
-- `stable` — default, released every 6 weeks.
-- `beta` — next stable candidate.
-- `nightly` — unstable features (e.g., some macros, inline assembly).
+::code-wrapper{language="rust"}
+```rust
+fn identity<T>(x: T) -> T { x }
+
+fn main() {
+    identity(1_i32);      // compiles identity::<i32>
+    identity("hi");        // compiles a SEPARATE identity::<&str>
+    // Zero runtime dispatch cost — but two distinct function bodies in the binary.
+}
+```
+::
+
+ABI instability — why you rebuild the whole graph every time:
+
+::code-wrapper{language="rust"}
+```rust
+#[repr(Rust)]       // default: field order NOT guaranteed, may change between compiler versions
+struct A { x: u8, y: u64 }
+
+#[repr(C)]          // guaranteed: field order matches source, stable across versions/languages
+struct B { x: u8, y: u64 }
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+"Zero-cost" means *no worse than hand-written at runtime* — not *free everywhere in the pipeline*:
 
 ::code-wrapper{language="bash"}
 ```bash
-rustup install stable
-rustup install nightly
-rustup default stable
-rustup component add rustfmt clippy rust-src rust-analyzer
-rustup target add wasm32-unknown-unknown   # cross-compile to WebAssembly
+# Compile time is not zero-cost: monomorphization re-emits + re-optimizes per instantiation.
+cargo build --timings          # attributes wall-clock build time per crate/codegen-unit
+
+# Binary size is not free either: each instantiation is its own machine code.
+cargo install cargo-bloat
+cargo bloat --release --crates # which crates/instantiations dominate binary size
+cargo bloat --release -n 20    # the 20 largest symbols
 ```
 ::
 
-### Editions
+Where the cost moves, compared to the alternatives:
 
-Editions (2015, 2018, 2021, 2024) are opt-in language evolutions. Set in `Cargo.toml`:
+::code-wrapper{language="rust"}
+```rust
+// GC'd language (Java/Go/Python): pays at RUNTIME — pause times, mark-and-sweep overhead.
+// Manual (C/C++): pays in CORRECTNESS — use-after-free, double-free, races, silent until crash.
+// Rust: pays at COMPILE TIME — the borrow checker's proof step, once, before deploy.
+fn main() {
+    let s = String::from("owned");
+    drop(s);
+    // println!("{s}"); // compile error here, not a runtime crash in production
+}
+```
+::
 
-::code-wrapper{language="toml"}
+`rustup`'s multi-toolchain model has a real disk/CI cost:
+
+::code-wrapper{language="bash"}
+```bash
+rustup toolchain list                 # each of stable/beta/nightly is multi-hundred-MB
+rustup target add wasm32-unknown-unknown  # cross-compile targets are opt-in, per-toolchain, additive
+# A CI matrix testing stable + beta + MSRV triples your toolchain download/cache cost.
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+**Anti-pattern: treating `cargo build` (debug) output as a proxy for production behavior.**
+
+::code-wrapper{language="bash"}
+```bash
+cargo build
+./target/debug/my_service &
+# "looks fine, ship it" — debug profile: opt-level=0, overflow-checks=true, no LTO.
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let x: u8 = 250;
+    let y = x + 10; // debug: panics "attempt to add with overflow"
+                     // release: silently wraps to 4 — same source, different production behavior
+    println!("{y}");
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    debug_assert!(1 + 1 == 2); // compiled OUT ENTIRELY in release — no safety net there
+}
+```
+::
+
+The fix is a CI/profile discipline, not a code change:
+
+::code-wrapper{language="toml" filename="Cargo.toml"}
 ```toml
-[package]
-edition = "2021"
-```
-::
-
-Code from older editions keeps compiling; editions are about how the *parser* sees your code, not the runtime behavior. Key 2021 changes: `IntoIterator` for arrays, disjoint closure captures, `panic` macros consistency. Edition 2024 adds `unsafe` attributes on extern blocks, `gen` keyword reservation, etc.
-
-## The Cargo Build Pipeline
-
-Cargo is the build system and package manager that ships with Rust. These commands cover the full development loop — here's *when* you reach for each:
-
-- **Scaffold**: `cargo new` (binary) or `cargo new --lib` (library) creates the canonical project skeleton.
-- **Fast feedback**: `cargo check` type-checks *without* generating code — an order of magnitude faster than `build`, so this is what you run in a tight edit-compile loop.
-- **Build/run**: `cargo build`/`cargo run` produce a binary; `--release` enables optimization (used for benchmarks and production).
-- **Test/bench**: `cargo test` runs unit + integration + doc tests; `cargo bench` needs nightly or a crate like `criterion` for stable benchmarks.
-- **Inspect deps**: `cargo tree` prints the full dependency graph — reach for it when a build is slow, when two crate versions are linked, or when a transitive dep pulls in something unexpected.
-- **Docs**: `cargo doc --open` generates HTML docs for your crate and (by default) all dependencies.
-- **Hygiene**: `cargo fmt` enforces style; `cargo clippy` catches common bugs and idioms; `cargo update` refreshes `Cargo.lock` within the bounds of your `Cargo.toml`.
-
-::code-wrapper{language="text"}
-```text
-cargo new my_project      # scaffolds a binary crate
-cargo new my_lib --lib    # scaffolds a library crate
-cargo build               # debug build -> target/debug
-cargo build --release     # optimized build -> target/release (O3-ish)
-cargo run                 # build + run binary
-cargo check               # type-check without codegen (fast feedback)
-cargo test                # run tests
-cargo doc --open          # generate & open docs
-cargo fmt                 # format code
-cargo clippy              # run lints
-cargo update             # update deps in Cargo.lock
-cargo tree               # print dependency tree
-cargo bench              # run benchmarks (requires nightly or criterion)
-```
-::
-
-### Profile customization
-
-Each `[profile.*]` section tunes the compiler for a goal: fast builds during development, fast binaries for release, small binaries for embedded, etc. These settings trade **compile time** for **runtime performance/size**, so the defaults differ per profile. Reach for these when the defaults don't fit your deployment target (e.g., tiny embedded binary, latency-sensitive server, CI build that must be fast).
-
-- **`lto = "fat"`** — Link-Time Optimization runs the optimizer *across crate boundaries* (the default `lto = false` can't inline calls into dependencies). Fat LTO maximizes runtime speed at a steep compile-time cost; `"thin"` is a middle ground.
-- **`codegen-units = 1`** — Tells rustc to compile your crate as a single unit. The default (16 for release) parallelizes codegen for faster builds but limits the optimizer's view; 1 lets LLVM see the whole crate for better inlining. Slower build, faster binary.
-- **`strip = true`** — Removes debug symbols from the binary (they don't help at runtime). Smaller binary, marginally faster to load.
-- **`panic = "abort"`** — Switches from stack-unwinding panics to immediate abort. Smaller binary (no unwind tables), but **`Drop` destructors don't run on panic** — RAII guards relying on `Drop` for cleanup will be skipped, which can leak resources. Use only when you're sure no cleanup depends on unwinding.
-
-::code-wrapper{language="toml"}
-```toml
-# Cargo.toml
 [profile.release]
 opt-level = 3
-lto = "fat"          # link-time optimization across crates
-codegen-units = 1    # better optimization, slower compile
-strip = true         # strip debug symbols
-panic = "abort"      # smaller binary, no unwinding
+lto = "thin"          # start with "thin"; measure before "fat"
+codegen-units = 1      # only after confirming the build-time cost is acceptable
+strip = true
+# panic = "abort" only after auditing every Drop your code relies on during unwind
 ```
 ::
 
-## Project Layout Conventions
+**Anti-pattern: `panic = "abort"` chosen for binary size without auditing `Drop` reliance.**
 
-::code-wrapper{language="text"}
-```text
-my_project/
-├── Cargo.toml
-├── Cargo.lock          # binary: commit it; library: usually commit too
-├── src/
-│   ├── main.rs         # binary crate root
-│   ├── lib.rs          # library crate root
-│   └── bin/
-│       └── extra.rs    # additional binary target
-├── tests/              # integration tests
-│   └── integration_test.rs
-├── benches/
-│   └── my_bench.rs
-└── examples/
-    └── example.rs
+::code-wrapper{language="rust"}
+```rust
+use std::sync::Mutex;
+
+static LOCK: Mutex<i32> = Mutex::new(0);
+
+fn risky() {
+    let _guard = LOCK.lock().unwrap();
+    panic!("boom");
+    // panic = "unwind" (default): guard's Drop runs, lock releases, other threads survive.
+    // panic = "abort":            process terminates immediately, guard's Drop NEVER runs,
+    //                             every other thread waiting on LOCK hangs forever pre-exit.
+}
+```
+::
+
+## Architectural Application
+
+Pin the toolchain — reproducibility is an architectural property, not a dev nicety:
+
+::code-wrapper{language="toml" filename="rust-toolchain.toml"}
+```toml
+[toolchain]
+channel = "1.82.0"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["wasm32-unknown-unknown"]
+```
+::
+
+::code-wrapper{language="toml" filename="Cargo.toml"}
+```toml
+[package]
+rust-version = "1.75"   # MSRV — raising it is a semver-relevant decision for a published lib
+```
+::
+
+`panic = "unwind"` vs `"abort"` is a failure-isolation decision, not a size micro-optimization:
+
+::code-wrapper{language="rust"}
+```rust
+// tokio model: one bad request panics its task, the server survives — REQUIRES unwind.
+tokio::spawn(async {
+    panic!("this task dies, others keep running");
+});
+
+// embedded/CLI model: any panic should kill the whole process, no ambiguity — abort is fine.
+```
+::
+
+Editions change parsing/desugaring only — never ABI or runtime — so mixed-edition workspaces link fine:
+
+::code-wrapper{language="toml" filename="crate-a/Cargo.toml"}
+```toml
+[package]
+edition = "2015"   # an old vendored crate you haven't migrated
+```
+::
+
+::code-wrapper{language="toml" filename="crate-b/Cargo.toml"}
+```toml
+[package]
+edition = "2024"   # your new code — links and runs together with crate-a, no issue
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: run `cargo check` in a tight edit-compile loop and reserve `cargo build`/`cargo run` for when you actually need a binary — `check` skips code generation and is dramatically faster feedback for catching type errors.
-- **Debug**: `rust-analyzer.check.command = "clippy"` in VS Code settings runs Clippy (not just `cargo check`) on every save, surfacing style and correctness lints directly in the editor instead of waiting for a manual `cargo clippy` run.
-- **Idiom**: install `rustup component add rust-src` early — without it, "go to definition" on standard library items in rust-analyzer silently fails or shows a stub instead of real source.
-- **Debug**: if incremental compilation ever produces a confusing, seemingly-impossible error (usually after a rustc/toolchain upgrade), `cargo clean` before assuming the error is real — stale incremental caches are a known source of ghost errors.
-- **Idiom**: pin an MSRV with `rust-version` in `Cargo.toml` from day one, even for personal projects — retrofitting MSRV support after using a newer feature by accident is far more painful than checking as you go.
-- **Performance**: `cargo build --timings` (stable) generates an HTML report showing exactly which crates and codegen units dominate your build time — the fastest way to find out whether "my build is slow" is a proc-macro problem, an LTO problem, or just a big dependency tree.
+- **Debug**: `cargo build --timings` — HTML report of wall-clock build time per crate/codegen-unit.
+- **Performance**: `cargo bloat --release --crates` / `-n 20` — find binary-size offenders before assuming "Rust binaries are just big."
+- **Idiom**: commit `rust-toolchain.toml` — `rustup` auto-installs/switches the pinned toolchain on any `cargo` invocation.
+- **Portability**: `rustup target list --installed` vs `rustup target add <triple>` — a missing cross-compile target fails CI with a linker error, not a code bug.
+- **Debug**: `rustc --print target-list` / `rustc --print cfg` — see exactly which `cfg` flags are active for your current target.
+- **Idiom**: treat an MSRV bump as a semver-relevant breaking change; consider `cargo-msrv` in CI.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Cargo.lock**: commit it for binaries to ensure reproducible builds. For libraries it's debated; the official guidance is to commit it too, but it's not required.
-- **`cargo check` is your friend**: during development it's 10x faster than `build`.
-- **`rust-analyzer`** needs `rust-src` to show stdlib source — install it via `rustup component add rust-src`.
-- **macOS linkers**: if you hit linker errors, install Xcode Command Line Tools: `xcode-select --install`.
-- **MSRV** (Minimum Supported Rust Version): set with `rust-version` in `Cargo.toml`; CI should pin to that version.
-- **Incremental compilation**: on by default in dev; can occasionally produce stale errors — `cargo clean` fixes it.
-- **`~/.cargo/bin`** must be on your `PATH` (rustup installer adds it to your shell profile).
-
-## 🧠 Spot the Bug
-
-A teammate says "I fixed the bug, `cargo build` compiles clean now" — but the bug is still happening in production. What did they most likely check, and what should they have checked instead?
+::code-wrapper{language="rust"}
+```rust
+fn might_panic() {
+    let result = std::panic::catch_unwind(|| {
+        panic!("caught");
+    });
+    // With panic = "abort" anywhere in this binary's profile, catch_unwind's
+    // safety net is silently gone — no compile-time warning tells you this.
+    println!("{}", result.is_err());
+}
+```
+::
 
 ::code-wrapper{language="bash"}
 ```bash
-cargo build
-./target/debug/my_app
+# Incremental compilation cache can produce impossible-looking errors after a toolchain bump.
+cargo clean   # first move before an hour of debugging a phantom error
 ```
 ::
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    // usize/isize width is platform-dependent: 64-bit on servers, 32-bit on wasm32.
+    let packed: usize = (1u64 << 40) as usize; // silently truncates/misbehaves on wasm32
+    println!("{packed}");
+}
+```
+::
+
+- **Idiom**: editions create **no** ABI/runtime differences between crates — a 2015-edition crate and a 2024-edition crate link and run together with zero issue.
+- **Performance**: `lto = "fat"` with a large dependency graph can push release builds from minutes to tens of minutes — often discovered first in CI, not locally.
+- **Portability**: always regenerate and commit `Cargo.lock` after any manifest change — don't rely on `cargo build` to "just handle it" identically everywhere.
+
+## 🧠 Spot the Bug
+
+::code-wrapper{language="yaml" filename=".github/workflows/ci.yml"}
+```yaml
+- run: cargo test
+- run: cargo build --release
+- run: scp target/release/my_service prod:/opt/app/
+```
+::
+
+A team ships this. `cargo test` passes. Three weeks later, a customer reports corrupted numeric totals under high load. Nothing in the code changed. What's the gap?
 
 <details>
 <summary>Answer</summary>
 
-`cargo build` (without `--release`) produces a **debug** binary in `target/debug/` — unoptimized, with debug assertions and overflow checks enabled, and none of the release profile's optimizations applied. Production deployments almost always ship the `--release` build (`target/release/`), which behaves differently in ways that matter: integer overflow panics in debug but silently wraps in release; `debug_assert!` checks run in debug but are compiled out entirely in release; and general performance characteristics (and even some timing-sensitive bugs) differ because of the optimizer's transformations. A bug that only reproduces "in production" while a local debug build looks fine is a classic symptom of exactly this mismatch — the teammate tested and "fixed" the debug binary, but never confirmed the fix against `cargo build --release`, which is what's actually running where the bug was reported.
+::code-wrapper{language="rust"}
+```rust
+// This is what "cargo test" actually exercised (dev/test profile: overflow-checks = true):
+fn accumulate(total: u32, delta: u32) -> u32 {
+    total + delta   // would PANIC loudly in test profile if a test ever hit the overflow
+}
 
-**The lesson**: `cargo build` alone produces the debug profile, not what typically ships to production — always verify a fix against `cargo build --release` (or your project's actual release profile) before considering a production bug resolved.
+// This is what shipped (release profile: overflow-checks = false) — NEVER executed by tests:
+// same source, silent wraparound instead of a panic.
+```
+::
+
+`cargo test` verifies debug-profile behavior only; `cargo build --release` compiles a *separate* artifact with different arithmetic semantics that the test suite never ran.
+
+**The lesson**: any correctness property sensitive to build profile (overflow, `debug_assert!`) needs an explicit release-mode test, or explicit `checked_*`/`wrapping_*` arithmetic that makes behavior profile-independent.
 
 </details>
 
-## Recommended Environment (VS Code)
-
-Install the **rust-analyzer** extension (NOT the legacy "Rust" extension). Enable:
-- `rust-analyzer.check.command = "clippy"`
-- `rust-analyzer.inlayHints` for type/chaining hints
-- Format on save with `rustfmt`
-
 ## Summary
 
-You now have the toolchain and understand the build lifecycle. Next: writing your first program and reading `Cargo.toml` semantics.
+Rust moves safety verification from runtime to compile time via a borrow-checked, monomorphizing, GC-less compiler — predictable performance and no data races, at the cost of compile time, binary-size sensitivity to generics, and a toolchain/profile model (`rustup`, editions, MSRV, build profiles) you actively manage rather than ignore.
+
+Next: Hello World & Cargo — the build pipeline mechanics that turn source into the two very different artifacts (`debug`/`release`) this chapter just told you not to confuse.

@@ -1,398 +1,419 @@
 # 19 — Smart Pointers & Memory Management
 
-Smart pointers own data and provide extra behavior beyond references. They're the bridge between Rust's ownership model and dynamic data structures.
+Every smart pointer in `std` is solving the same underlying problem from a different angle: Rust's compile-time ownership model (chapter 07) assumes a single owner and a statically-provable borrow graph, but real systems need heap indirection, shared ownership, and mutation-behind-a-shared-reference. `Box`, `Rc`/`Arc`, and `Cell`/`RefCell`/`Mutex` are three different, deliberate relaxations of that model — each with a precise mechanical cost, and each capable of failing in a specific, predictable way when misapplied.
 
-## `Box<T>` — Heap Allocation
+## Under-the-Hood Mechanics
+
+### `Box<T>`: a single pointer, nothing else
 
 ::code-wrapper{language="rust"}
 ```rust
-let b = Box::new(5);
-let s = Box::new(String::from("hi"));
+println!("{}", std::mem::size_of::<Box<i32>>());                 // 8  — thin pointer
+println!("{}", std::mem::size_of::<Box<[i32]>>());                // 16 — fat pointer: {ptr, len}
+println!("{}", std::mem::size_of::<Box<dyn std::fmt::Debug>>());  // 16 — fat pointer: {ptr, vtable}
 ```
 ::
 
-- Allocates on the heap; owned.
-- Single owner; dropped when out of scope.
-- Sized: `Box<T>` has the size of a pointer.
-
-### When You Need `Box`
-
-- Recursive types (linked structures need indirection to have a finite size).
-- Large data you don't want to copy on the stack.
-- Trait objects (`Box<dyn Trait>`) — unsized types need a wide pointer.
-- Sending owned data to a thread (`Box::new` makes it `'static`).
+::code-wrapper{language="rust"}
+```rust
+// Moving a Box moves only the pointer — the heap data never moves:
+struct Huge([u8; 1_000_000]);
+fn take(_b: Box<Huge>) {}   // cheap: one pointer copied, regardless of Huge's size
+let b = Box::new(Huge([0; 1_000_000]));
+take(b);
+```
+::
 
 ::code-wrapper{language="rust"}
 ```rust
-enum List {
-    Cons(i32, Box<List>),   // recursive — needs Box
-    Nil,
+// Recursive types NEED Box — size must be knowable at compile time:
+enum List { Cons(i32, Box<List>), Nil }   // Box breaks the infinite-size cycle
+// enum ListBroken { Cons(i32, ListBroken), Nil }  // ERROR: infinite size
+let list = List::Cons(1, Box::new(List::Cons(2, Box::new(List::Nil))));
+```
+::
+
+### `Rc<T>`/`Arc<T>`: a pointer to a shared control block
+
+`Rc::new(v)` doesn't just box `v` — it allocates a control block containing the value **plus** two counters:
+
+::code-wrapper{language="rust"}
+```rust
+// Conceptual layout of what Rc<T>/Arc<T> point to (simplified)
+struct RcBox<T> {
+    strong: Cell<usize>,   // Rc: plain Cell.  Arc: AtomicUsize instead.
+    weak: Cell<usize>,
+    value: T,
 }
 ```
 ::
-
-### `Box::leak` — Permanent Reference
-
-::code-wrapper{language="rust"}
-```rust
-let leaked: &'static mut [u8] = Box::leak(vec![1, 2, 3].into_boxed_slice());
-```
-::
-
-Leaks forever; useful for one-time configs but a real memory leak.
-
-## `Rc<T>` — Reference Counted (single-threaded)
 
 ::code-wrapper{language="rust"}
 ```rust
 use std::rc::Rc;
-let a = Rc::new(String::from("hi"));
-let b = Rc::clone(&a);    // increments refcount, doesn't copy
-let c = a.clone();         // same
-// a, b, c all share the same String
+let a = Rc::new(vec![1, 2, 3]);        // strong: 1, weak: 0
+let b = Rc::clone(&a);                  // strong: 2 — counter increment, NOT a deep copy of the Vec
+println!("{}", Rc::strong_count(&a));   // 2
+drop(b);                                 // strong: 1
+println!("{}", Rc::strong_count(&a));   // 1
 ```
 ::
-
-- Multiple owners in a **single thread**.
-- Atomic increment/decrement of a refcount.
-- Not `Send`/`Sync` (uses non-atomic counters; cheaper than `Arc`).
-- When the count hits 0, the value is dropped.
-- Use `Rc::clone(&rc)` (idiomatic) — don't use `rc.clone()` (looks like a deep clone).
-
-### `Rc` Doesn't Allow Mutation
-
-`Rc<T>` gives shared read access. To mutate shared state, wrap in `RefCell`:
 
 ::code-wrapper{language="rust"}
 ```rust
-let shared = Rc::new(RefCell::new(vec![1, 2, 3]));
-shared.borrow_mut().push(4);
+// Arc: structurally identical, but counters are AtomicUsize — real cost difference
+use std::sync::Arc;
+let a = Arc::new(vec![1, 2, 3]);
+let b = Arc::clone(&a);   // atomic increment — costs more than Rc's plain Cell increment
 ```
 ::
-
-### Weak References
-
-### How `Weak` works and when to use it
-
-A `Weak<T>` is a **non-owning pointer** to the same allocation an `Rc`/`Arc` points to: it doesn't increment the strong count, so the allocation is freed when the last *strong* ref drops, even if weaks remain. `upgrade()` then returns `None` — the weak is just a stale slot. You reach for `Weak` to **break reference cycles** (the classic parent↔child link: the parent owns the child via `Rc`, the child refers back via `Weak`, so dropping the parent frees both). Without `Weak`, back-pointers as `Rc` would create a cycle whose refcounts never reach zero — a permanent memory leak that the borrow checker *cannot* prevent (it's a runtime refcount issue, not a borrow issue).
 
 ::code-wrapper{language="rust"}
 ```rust
 use std::rc::{Rc, Weak};
-let strong = Rc::new(5);
-let weak: Weak<i32> = Rc::downgrade(&strong);
-if let Some(v) = weak.upgrade() { /* ... */ }   // Some only while a strong ref exists
+let a = Rc::new(5);
+let w: Weak<i32> = Rc::downgrade(&a);
+drop(a);                              // strong -> 0, value dropped, control block survives (weak: 1)
+assert!(w.upgrade().is_none());       // safely observes "gone" — no use-after-free
 ```
 ::
 
-`Weak` doesn't count toward ownership; avoids cycles. Crucial for parent/child links (e.g., GUI trees, linked structures).
-
-## `Arc<T>` — Atomic Reference Counted (thread-safe)
+### `Cell<T>` vs `RefCell<T>`: two different interior-mutability mechanisms, two different costs
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::sync::Arc;
-let a = Arc::new(vec![1, 2, 3]);
-let b = Arc::clone(&a);
-std::thread::spawn(move || println!("{:?}", b));
+use std::cell::{Cell, RefCell};
+println!("{}", std::mem::size_of::<Cell<i32>>());     // 4  — no overhead, T: Copy required for .get()
+println!("{}", std::mem::size_of::<RefCell<i32>>());   // 8  — i32 + borrow-state flag (padded)
 ```
 ::
 
-- Thread-safe version of `Rc` (atomic ops, slower).
-- `Send` and `Sync` if `T: Send + Sync`.
-- Idiomatic for sharing across threads.
-
-### When `Rc` vs `Arc`
-
-- Single-threaded: `Rc` (faster, simpler).
-- Multi-threaded: `Arc`.
-- Never use `Rc` across threads — the compiler forbids it via `Send`.
-
-## Cycles and Memory Leaks
-
 ::code-wrapper{language="rust"}
 ```rust
-let a = Rc::new(RefCell::new(None));
-let b = Rc::new(RefCell::new(None));
-*a.borrow_mut() = Some(Rc::clone(&b));
-*b.borrow_mut() = Some(Rc::clone(&a));    // CYCLE: refcount never hits 0
-```
-::
-
-`Rc`/`Arc` cycles leak. Use `Weak` for back-references. Rust can't prevent this; design matters.
-
-## Interior Mutability Pattern
-
-### Why interior mutability exists
-
-The borrow rules are a **compile-time** check — the compiler must statically prove no aliasing+mutation. But some patterns are safe at runtime that the compiler can't prove: mutation behind a shared `&self` (caching, memoization, internal state updates), or mutation shared through `Rc`. Interior mutability moves the borrow check to **runtime** via types like `RefCell` (single-thread) or `Mutex`/`RwLock` (multi-thread): `borrow()`/`borrow_mut()` enforce the same one-mutable-or-many-immutable rule, but as a runtime check (panicking on violation). You reach for it when mutation must happen through an immutable reference — the canonical case is `Rc<RefCell<T>>` for shared, mutable, single-threaded state (graphs, GUI state, observers). The cost: runtime checking instead of compile-time, plus a panic risk if the rule is violated.
-
-`Rc`/`Arc` give shared ownership but no mutation. Wrap the inner in `RefCell`/`Mutex`:
-
-::code-wrapper{language="rust"}
-```rust
-// single-threaded
-let shared = Rc::new(RefCell::new(0));
-*shared.borrow_mut() += 1;
-
-// multi-threaded
-let shared = Arc::new(Mutex::new(0));
-*shared.lock().unwrap() += 1;
-```
-::
-
-## `Cell<T>` — Copy-Type Interior Mutability
-
-::code-wrapper{language="rust"}
-```rust
-use std::cell::Cell;
+// Cell: no reference ever escapes — only owned copies in/out, hence T: Copy
 let c = Cell::new(5);
 c.set(10);
-let v = c.get();          // requires T: Copy
+let v = c.get();   // v is a COPY, not a reference — zero-cost, safe
+
+// RefCell: hands out real references, checked at runtime on every call
+let r = RefCell::new(vec![1, 2]);
+{
+    let mut guard = r.borrow_mut();   // runtime check + counter increment
+    guard.push(3);
+}   // counter decremented on drop
 ```
 ::
-
-- Zero-cost interior mutability for `Copy` types.
-- No borrow checking (just stores the value).
-- Cannot get a `&T` out (only `get`/`set`).
-- Use for simple flags, counters, small `Copy` types.
-
-## `RefCell<T>` — Borrow-Checked Interior Mutability
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::cell::RefCell;
-let c = RefCell::new(vec![1, 2, 3]);
-c.borrow_mut().push(4);
-let r = c.borrow();      // immutable borrow
-println!("{:?}", r);
+// RefCell panics where Cell simply couldn't have compiled the equivalent misuse:
+let r = RefCell::new(0);
+let _b1 = r.borrow();
+let _b2 = r.borrow_mut();   // panics at runtime: already borrowed
 ```
 ::
 
-- Moves borrow checking to **runtime**: `borrow()` and `borrow_mut()` track active borrows.
-- Multiple `borrow()` OK; one `borrow_mut()` exclusive.
-- **Panics** on borrow violation: "already borrowed" / "already mutably borrowed".
-
-### `try_borrow` / `try_borrow_mut`
-
-Non-panicking variants returning `Result`. Reach for these when a borrow conflict is a **recoverable case, not a bug** — e.g., you're probing whether a value is currently borrowed and want to take a fallback path if it is, rather than crashing. The panicking `borrow()`/`borrow_mut()` are for when a conflict indicates a logic bug you'd want to surface immediately; the `try_` variants are for graceful, non-fatal handling.
-
-## `Mutex<T>` and `RwLock<T>`
+### `Mutex<T>`/`RwLock<T>`: the same interior-mutability idea, backed by OS primitives
 
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::Mutex;
-let m = Mutex::new(0);
-let guard = m.lock().unwrap();
-*guard += 1;
-// guard drops here, unlocking
-
-use std::sync::RwLock;
-let rw = RwLock::new(0);
+let data = Mutex::new(vec![1, 2, 3]);
 {
-    let r1 = rw.read().unwrap();
-    let r2 = rw.read().unwrap();   // multiple readers OK
+    let mut guard = data.lock().unwrap();   // blocks the THREAD if contended
+    guard.push(4);
+}   // lock released HERE, via Drop — RAII, same mechanism as closing a file
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG: guard held across unrelated work — lock stays held far past the real critical section
+fn slow(data: &Mutex<Vec<i32>>) {
+    let mut guard = data.lock().unwrap();
+    guard.push(1);
+    std::thread::sleep(std::time::Duration::from_millis(100)); // still holding the lock!
 }
-{
-    let mut w = rw.write().unwrap();  // exclusive writer
-    *w += 1;
+
+// RIGHT: guard scoped tightly, released before unrelated work
+fn fast(data: &Mutex<Vec<i32>>) {
+    { data.lock().unwrap().push(1); }   // guard dropped immediately
+    std::thread::sleep(std::time::Duration::from_millis(100)); // no lock held
 }
 ```
 ::
 
-- `Mutex`: one accessor at a time.
-- `RwLock`: many readers or one writer.
-- Locks return `Result` because a poisoned lock (holder panicked) returns `Err`.
-- `Lock` guards auto-unlock on drop (RAII).
-
-### Poison
-
-If a thread panics while holding a lock, the lock becomes "poisoned"; subsequent `.lock()` returns `Err`. This signals possibly-corrupted state. Recover with `into_inner()` if you're sure, or use `lock().unwrap()` to propagate the panic.
-
-## `Once`, `OnceLock`, `LazyLock` — Initialization
-
-### Why these exist
-
-These types provide **thread-safe, one-time initialization** of a value: the first access runs the initializer, subsequent accesses return the already-computed value, and the whole thing is safe to share across threads. You reach for them for **global singletons** and **lazy globals** — a config loaded once at first use, a database pool opened on demand, a lookup table built lazily. They exist because (a) `static` values must be const-evaluable (no runtime init), so you can't just `static CONFIG = load_config();`, and (b) you want the init to happen exactly once even under concurrent access. `OnceLock` (1.70) and `LazyLock` (1.80) replace the older `lazy_static`/`once_cell` crates with std-only types.
+## Cost, Performance, and Trade-Offs
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::sync::OnceLock;
-static CONFIG: OnceLock<Config> = OnceLock::new();
-let c = CONFIG.get_or_init(|| Config::load());
-
-// 1.80+: LazyLock
-use std::sync::LazyLock;
-static DB: LazyLock<Db> = LazyLock::new(|| Db::open());
-let _ = &*DB;     // initialized on first access
+// Boxing purely to shrink stack size, with no real need, adds cost for no benefit:
+struct Small { a: i32, b: i32 }
+fn needless_box(s: Small) -> Box<Small> { Box::new(s) }   // allocation + indirection, no payoff
+fn by_value(s: Small) -> Small { s }                       // free — no heap involved
 ```
 ::
 
-Pre-`LazyLock` you'd use the `once_cell` or `lazy_static` crates. Modern std has you covered.
+::code-wrapper{language="rust"}
+```rust
+// Cost-visible comparison: Rc (non-atomic) vs Arc (atomic) clone, same logical operation
+use std::rc::Rc;
+use std::sync::Arc;
 
-## `Cow<T>` — Clone-on-Write
+let rc = Rc::new(0);
+let _ = Rc::clone(&rc);     // plain increment — cheap, single-threaded only
 
-### When `Cow` pays off
-
-`Cow` ("Clone on Write") is a value that's **either borrowed or owned**, decided at runtime. You reach for it when a function **usually returns borrowed data but sometimes needs to allocate** — e.g., a normalizer that returns the input `&str` unchanged when it's already normalized (no allocation), but produces an owned `String` when it has to transform it. Without `Cow`, you'd be forced to always allocate (returning `String`) or always borrow (returning `&str`, which can't hold a transformed value). `Cow` lets you defer the clone until mutation: `to_mut()` clones the borrowed value into an owned one only when you actually need to modify it. The tradeoff: the `Cow` enum carries a discriminator, so there's a tiny size/branch cost, but it's usually worth it for the allocation savings.
+let arc = Arc::new(0);
+let _ = Arc::clone(&arc);   // atomic increment — costs more on ARM than x86, required cross-thread
+```
+::
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::borrow::Cow;
-fn greet(name: Cow<str>) {
-    println!("{name}");
+// RefCell: the CPU cost of the check is tiny; the real cost is a runtime panic
+// that a test suite covering only the "normal order" code path will never catch:
+use std::cell::RefCell;
+fn risky(cell: &RefCell<Vec<i32>>) {
+    let _r = cell.borrow();
+    // ... 50 lines later, on a rarely-hit branch:
+    // cell.borrow_mut();  // panics ONLY when this exact path executes
 }
-greet("literal".into());           // borrowed
-greet(String::from("owned").into()); // owned
 ```
 ::
 
-`Cow<'a, B>` is either borrowed or owned — lets you write APIs that accept either, deferring the clone until mutation.
-
 ::code-wrapper{language="rust"}
 ```rust
-let mut c: Cow<str> = Cow::Borrowed("hi");
-c.to_mut().push('!');     // clones once, now owned
+// Lock granularity: coarse lock serializes unrelated fields
+use std::sync::Mutex;
+struct CoarseState { counter: u64, config: String }
+let state = Mutex::new(CoarseState { counter: 0, config: String::new() });
+// updating `counter` blocks a concurrent read of `config` — nothing about them conflicts
+
+// finer-grained: separate locks per field, more concurrency, more lock overhead
+struct FineState { counter: Mutex<u64>, config: Mutex<String> }
 ```
 ::
 
-## `Pin<T>` — Pinned Pointers
+## Production Failure Modes & Anti-Patterns
 
-`Pin` guarantees a value won't be moved in memory after pinning. Essential for self-referential data (e.g., async futures holding references across `.await` points):
-
-::code-wrapper{language="rust"}
-```rust
-let mut fut = async { 5 };
-let pinned = Pin::new(&mut fut);
-```
-::
-
-You usually don't write `Pin` by hand — async/await generates it. The Pin chapter (Async) covers the details.
-
-## `NonNull<T>`, `*mut T`, `*const T` (Unsafe)
-
-Raw pointers, no automatic lifetime tracking; only usable in `unsafe` blocks. `NonNull<T>` is non-null `*mut T` and is covariant. Used in collections/FFI. See Unsafe chapter.
-
-## Smart Pointer Cheat Sheet
-
-| Type | Ownership | Mutability | Thread-safe | Use |
-|---|---|---|---|---|
-| `Box<T>` | Single | direct (`mut`) | if `T: Send` | Heap, recursion |
-| `Rc<T>` | Shared | via `RefCell` | NO | Graphs, trees |
-| `Arc<T>` | Shared | via `Mutex`/`RwLock` | YES | Cross-thread share |
-| `Cell<T>` | Single | `set/get` | NO | `Copy` flags |
-| `RefCell<T>` | Single | runtime borrow | NO | Single-thread mut share |
-| `Mutex<T>` | Single | lock | YES | Cross-thread mut share |
-| `RwLock<T>` | Single | read/write lock | YES | Read-heavy share |
-| `Cow<'a, B>` | Either | `to_mut` | if `B: Send` | Borrowed-or-owned |
-| `Pin<P>` | (wrapper) | via `DerefMut` | if `P: Send` | Self-referential |
-
-## Deref and DerefMut
-
-Smart pointers implement `Deref`/`DerefMut` to enable `&`-coercions and method forwarding:
+### An `Rc<RefCell<Node>>` graph with owning back-references, leaking forever
 
 ::code-wrapper{language="rust"}
 ```rust
-let b = Box::new(String::from("hi"));
-b.push('!');              // Box<String> derefs to String, which derefs to str
-let s: &str = &b;          // &Box<String> -> &String -> &str
-```
-::
+// WRONG: parent and child hold STRONG references to each other —
+// a cycle whose refcounts never reach zero, in perfectly safe Rust
+use std::cell::RefCell;
+use std::rc::Rc;
 
-## Drop Order for Smart Pointers
-
-- `Box`/`Rc`/`Arc` drop their contents when refcount hits 0.
-- `MutexGuard`/`RwLockReadGuard` release the lock on drop — keep guards short-scoped.
-
-## Common Pitfalls
-
-- **`Rc` across threads**: `Rc: !Send`, compile error.
-- **`Arc<Mutex<T>>` vs `Mutex<Arc<T>>`**: the former mutates shared data; the latter replaces the entire shared pointer atomically.
-- **Lock granularity**: too coarse = contention; too fine = deadlocks.
-- **Deadlock**: lock ordering must be consistent across threads. Acquire locks in a fixed order.
-- **`Rc::clone` vs `Clone::clone`**: same; `Rc::clone(&rc)` makes it obvious it's cheap.
-- **`Weak::upgrade` returns `Option`**: handle the case where the value was dropped.
-- **`RefCell::borrow_mut` panic**: can happen in complex call graphs; structure borrows to release before re-borrowing.
-- **`Mutex::lock().unwrap()`**: panics on poison. Consider graceful recovery.
-- **`Arc` contention in hot loops**: every `Arc::clone` does an atomic increment; avoid in inner loops.
-- **`Box` vs `Vec` for variable-size data**: `Box<[T]>` is fixed-size after construction; `Vec<T>` can grow.
-
-## Smart Pointer Tricks
-
-::code-wrapper{language="rust"}
-```rust
-// Trick: use Option<Box<T>> to avoid leaks in recursive structures
 struct Node {
-    data: i32,
-    next: Option<Box<Node>>,
+    value: i32,
+    parent: RefCell<Option<Rc<Node>>>,   // BUG: strong reference back up the tree
+    children: RefCell<Vec<Rc<Node>>>,
 }
 
-// Trick: convert Box<T> to Box<dyn Trait>
-let b: Box<i32> = Box::new(5);
-let t: Box<dyn std::fmt::Debug> = b; // only if T: Trait
-
-// Trick: use Arc::clone explicitly to show intention
-let data = Arc::new(vec![1, 2, 3]);
-let data_clone = Arc::clone(&data); // clearer than data.clone()
-
-// Trick: use Weak to break cycles
-struct Parent {
-    child: Option<Box<Child>>,
+fn build_leak() {
+    let parent = Rc::new(Node { value: 0, parent: RefCell::new(None), children: RefCell::new(vec![]) });
+    let child = Rc::new(Node { value: 1, parent: RefCell::new(Some(Rc::clone(&parent))), children: RefCell::new(vec![]) });
+    parent.children.borrow_mut().push(Rc::clone(&child));
+    // parent.strong_count == 2 (local `parent` + child's back-reference)
+    // child.strong_count  == 2 (local `child` + parent's forward-reference)
+    // When `build_leak` returns, both locals drop, but each Rc still has
+    // strong_count == 1 from the OTHER side — neither ever reaches 0. Permanent leak.
 }
-struct Child {
-    parent: Option<std::rc::Weak<Parent>>, // breaks cycle
-}
-
-// Trick: RefCell for shared mutable state in single thread
-let shared = std::rc::Rc::new(std::cell::RefCell::new(0));
-*shared.borrow_mut() += 1;
-
-// Trick: Arc<RwLock<T>> for read-heavy workloads
-let data = std::sync::Arc::new(std::sync::RwLock::new(vec![1, 2, 3]));
-{
-    let readers = vec![
-        std::thread::spawn({ let d = Arc::clone(&data); move || { let r = d.read().unwrap(); r[0] } }),
-        std::thread::spawn({ let d = Arc::clone(&data); move || { let r = d.read().unwrap(); r[1] } }),
-    ];
-}
-
-// Trick: use mem::take to avoid cloning
-let mut data = vec![1, 2, 3];
-let moved = std::mem::take(&mut data); // data is now empty vec, moved has the old data
-
-// Trick: Cow to defer allocation
-use std::borrow::Cow;
-let s: Cow<str> = Cow::Borrowed("hello");
-let s2: Cow<str> = Cow::Owned(String::from("world"));
-// Both can be used the same way, but allocated differently
 ```
 ::
 
-## Memory Layout of Smart Pointers
+This compiles, runs, and produces no error, warning, or panic — a **safe-Rust memory leak**. Reference counting is a runtime property the borrow checker has no say over. A server building and discarding many such graphs sees slow, silent memory growth that eventually OOMs, with no stack trace pointing at the cause.
 
-- `Box<T>`: a single pointer.
-- `Rc<T>`/`Arc<T>`: pointer to a heap-allocated `{ strong_count, weak_count, value }` block.
-- `Cell<T>`/`RefCell<T>`: in-place storage; `RefCell` adds a borrow-state field.
-- `Mutex<T>`/`RwLock<T>`: in-place storage + OS synchronization primitives.
+::code-wrapper{language="rust"}
+```rust
+// RIGHT: back-references use Weak, which doesn't hold the allocation alive
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
+struct Node {
+    value: i32,
+    parent: RefCell<Option<Weak<Node>>>,   // non-owning — breaks the cycle
+    children: RefCell<Vec<Rc<Node>>>,       // owning, forward direction only
+}
+```
+::
+
+### `RefCell` panicking in production because of a guard's implicit lifetime extension
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG: `children` (a Ref guard) is still alive when borrow_mut() runs,
+// because it's used again later in the function — the compiler enforces static
+// borrow rules on the RefCell handle, but has no visibility into the guard's runtime state
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Node { value: i32, children: RefCell<Vec<Rc<Node>>> }
+
+fn process(root: &Rc<Node>, leaf: &Rc<Node>) {
+    let children = root.children.borrow();
+    root.children.borrow_mut().push(Rc::clone(leaf));   // panics: already borrowed
+    println!("{}", children.len());                      // `children` used here — its scope extends this far
+}
+```
+::
+
+This compiles cleanly — the borrow checker only enforces rules on the `RefCell` handle, not on the guards it hands out, whose lifetime runs to their last use (here, the trailing `println!`). `borrow_mut()` conflicts with the still-alive `children` guard and panics with `BorrowMutError` only at runtime, only on this exact call order.
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT: scope the immutable borrow explicitly so it's dropped before the mutable one
+fn process(root: &Rc<Node>, leaf: &Rc<Node>) {
+    let count = { root.children.borrow().len() };   // Ref dropped at end of this block
+    root.children.borrow_mut().push(Rc::clone(leaf));
+    println!("{count}");
+}
+```
+::
+
+### `Mutex` poisoning silently degrading an entire worker pool
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG: one panicking worker poisons the shared Mutex, and every OTHER
+// worker's subsequent .lock().unwrap() now panics too — one bug cascades
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn run_pool(shared: Arc<Mutex<Vec<i32>>>) {
+    let mut handles = vec![];
+    for i in 0..8 {
+        let s = Arc::clone(&shared);
+        handles.push(thread::spawn(move || {
+            let mut guard = s.lock().unwrap();   // panics for ALL workers after ANY one poisons it
+            guard.push(i / (i - 3));              // deliberately buggy: panics when i == 3
+        }));
+    }
+    for h in handles { let _ = h.join(); }
+}
+```
+::
+
+One worker's arithmetic panic (unrelated to locking) poisons the `Mutex` while it holds the lock. Every subsequent `.lock()` from every other thread returns `Err`, and the naive `.unwrap()` propagates that as a *second* panic each time — one bug cascades into apparent total pool failure.
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT: decide explicitly how to handle poison — here, recover and log rather than cascade
+fn run_pool(shared: Arc<Mutex<Vec<i32>>>) {
+    let mut handles = vec![];
+    for i in 0..8 {
+        let s = Arc::clone(&shared);
+        handles.push(thread::spawn(move || -> Result<(), String> {
+            let mut guard = s.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if i == 3 { return Err("skipping known-bad index".into()); }
+            guard.push(i);
+            Ok(())
+        }));
+    }
+    for h in handles {
+        if let Ok(Err(e)) = h.join() { eprintln!("worker failed: {e}"); }
+    }
+}
+```
+::
+
+### `Box::leak` used casually in a per-request path
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG: individually correct, cumulatively fatal — every call permanently
+// leaks memory that is never reclaimed for the life of the process
+fn get_static_config(raw: String) -> &'static str {
+    Box::leak(raw.into_boxed_str())   // legitimate ONCE, at startup — not per-request
+}
+```
+::
+
+Every individual call compiles, runs, and returns a perfectly valid `&'static str` — no error anywhere. The failure appears only in aggregate: called once per request, this leaks the entire request body forever, every single request — a slow march to OOM invisible in code review because each call site "looks fine" alone.
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT: reserve Box::leak for genuine one-time, process-lifetime initialization
+static CONFIG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn get_config(loader: impl FnOnce() -> String) -> &'static str {
+    CONFIG.get_or_init(loader)   // initialized exactly once, no per-call leak
+}
+```
+::
+
+## Architectural Application
+
+::code-wrapper{language="rust"}
+```rust
+// Rc<RefCell<T>>: compile-time-enforced single-threaded — Rc: !Send, hard wall later
+use std::{cell::RefCell, rc::Rc};
+struct UiWidget { state: Rc<RefCell<i32>> }   // fine for single-threaded GUI state
+
+// Arc<Mutex<T>>: pays synchronization cost, but crosses thread boundaries
+use std::sync::{Arc, Mutex};
+struct SharedCounter { state: Arc<Mutex<i32>> }   // required the moment threads share it
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Weak encodes ownership direction in the type system, not convention
+use std::{cell::RefCell, rc::{Rc, Weak}};
+struct Parent { children: RefCell<Vec<Rc<Child>>> }   // owns, forward
+struct Child { parent: RefCell<Weak<Parent>> }         // refers, non-owning
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Cow: API boundary optimization — common case borrows, uncommon case allocates
+use std::borrow::Cow;
+fn normalize(input: &str) -> Cow<str> {
+    if input.chars().all(|c| c.is_lowercase()) {
+        Cow::Borrowed(input)              // common case: no allocation
+    } else {
+        Cow::Owned(input.to_lowercase())  // uncommon case: allocate transformed copy
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Lock-guard scope determines REAL concurrency, independent of lock granularity
+use std::sync::Mutex;
+fn bad(m: &Mutex<Vec<i32>>) {
+    let mut g = m.lock().unwrap();
+    g.push(expensive_fetch());   // I/O while holding the lock — serializes everyone
+}
+fn good(m: &Mutex<Vec<i32>>) {
+    let v = expensive_fetch();    // do the expensive work FIRST, lock-free
+    m.lock().unwrap().push(v);    // hold the lock only for the cheap push
+}
+fn expensive_fetch() -> i32 { 42 }
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `Rc::strong_count(&rc)` and `Rc::weak_count(&rc)` let you print live reference counts at any point — invaluable for tracking down a suspected cycle leak.
-- **Idiom**: prefer `Rc::clone(&rc)` over `rc.clone()` everywhere in shared codebases; the associated-function form makes "this is just a refcount bump" visible at every call site, especially useful for code reviewers scanning for accidental deep clones.
-- **Performance**: `parking_lot::Mutex`/`RwLock` skip the `Result`/poisoning machinery of `std::sync`, making lock/unlock noticeably cheaper in hot paths — swap in when you don't need poison-based panic detection.
-- **Idiom**: `Rc::get_mut`/`Arc::get_mut` return `Some(&mut T)` only when the strong count is exactly 1 — a cheap way to mutate in place right after construction, before you've shared the handle.
-- **Debug**: `RefCell::try_borrow_mut()` returns a `Result` instead of panicking — use it in debug assertions or logging to diagnose *which* borrow is still outstanding before the panic-causing one fires.
-- **Idiom**: `Rc<str>`/`Arc<str>` (via `Rc::from(&str)`) are cheaper to clone than `Rc<String>` when you never need to mutate the string — they skip one level of indirection.
+- **Debug**: `Rc::strong_count(&rc)` and `Rc::weak_count(&rc)` print live reference counts at any point — invaluable for tracking down a suspected cycle leak.
+- **Idiom**: prefer `Rc::clone(&rc)` over `rc.clone()` everywhere in shared codebases — the associated-function form makes "this is just a refcount bump" visible at every call site to reviewers scanning for accidental deep clones.
+- **Performance**: `parking_lot::Mutex`/`RwLock` skip the `Result`/poisoning machinery of `std::sync`, making lock/unlock noticeably cheaper in hot paths — swap in when poison-based panic detection isn't a requirement.
+- **Idiom**: `Rc::get_mut`/`Arc::get_mut` return `Some(&mut T)` only when the strong count is exactly 1 — a cheap way to mutate in place right after construction, before the handle has been shared.
+- **Debug**: `RefCell::try_borrow_mut()` returns a `Result` instead of panicking — use it in diagnostic logging to identify *which* borrow is still outstanding before the panic-causing one fires.
+- **Idiom**: `Rc<str>`/`Arc<str>` (via `Rc::from(&str)`) are cheaper to clone than `Rc<String>` when the string never needs mutation — one fewer level of indirection.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`RefCell` panics are runtime, not compile-time**: two `.borrow_mut()` calls whose lifetimes overlap only by an easy-to-miss expression ordering (e.g., inside the same `let x = ...` statement as another borrow) panic with "already mutably borrowed" only when that exact code path runs — tests that don't hit the path won't catch it.
-- **`Weak::upgrade()` after the last strong ref drops silently returns `None`**: there's no panic, no error type — a forgotten `Weak` cleanup can quietly make a "parent" pointer permanently `None` without any visible failure until you notice missing data.
-- **`Rc`/`Arc` cycles are a *safe-Rust* memory leak**: the borrow checker and the type system do not prevent reference cycles — `Rc<RefCell<Node>>` trees with back-pointers as `Rc` (not `Weak`) leak forever with zero warnings, compiler or runtime.
-- **`Mutex` poisoning propagates**: once one thread panics while holding a `std::sync::Mutex`, *every future* `.lock()` call from *any* thread returns `Err` — a single panicking worker can silently degrade an entire pool unless you handle poison recovery explicitly.
-- **`Cell<T>` requires `T: Copy` for `.get()`**: this makes `Cell` a poor fit for anything beyond primitives and small `Copy` structs; reaching for `Cell<String>` won't compile, and the fix (`RefCell`) has different panic semantics, not just a bigger API.
-- **`Box::leak` is a real leak, not a trick**: the returned `&'static mut` is legitimate and safe to use, but the memory is never reclaimed for the life of the process — using it in a loop (e.g., per-request config) exhausts memory in production even though every individual use compiles and runs correctly.
-- **Platform quirk**: `Arc`'s atomic refcount operations use `Relaxed`/`Acquire`/`Release` orderings internally that are essentially free on x86 (strongly ordered) but have real cost on ARM — code that "feels" equally fast in local dev (x86) can show different `Arc::clone` overhead on ARM-based CI or deployment targets.
+- **`RefCell` panics are runtime, not compile-time** — two `.borrow_mut()` calls whose live ranges overlap only through a not-obviously-live guard panic only on the exact code path that triggers the overlap; unexercised tests won't catch it.
+- **`Weak::upgrade()` after the last strong reference drops silently returns `None`** — no panic, no error type; a forgotten `Weak` cleanup quietly turns a "parent" pointer permanently `None` with no visible failure until missing data is noticed downstream.
+- **`Rc`/`Arc` cycles are a *safe-Rust* memory leak** — the borrow checker and type system do not prevent reference cycles; `Rc<RefCell<Node>>` trees with strong back-pointers leak forever with zero compiler or runtime warning.
+- **`Mutex` poisoning propagates across the whole shared value** — once one thread panics while holding a `std::sync::Mutex`, every future `.lock()` call from any thread returns `Err`, potentially cascading one bug into apparent total-pool failure.
+- **`Cell<T>` requires `T: Copy` for `.get()`** — a poor fit for anything beyond primitives and small `Copy` structs; the fix (`RefCell`) has different panic semantics, not just a bigger API surface.
+- **`Box::leak` is a genuine leak, not a trick** — the returned `&'static mut` is safe and legitimate to use, but the memory is never reclaimed for the process's lifetime; using it per-request or per-iteration exhausts memory in production even though every individual call compiles and runs correctly.
+- **Platform quirk**: `Arc`'s atomic refcount operations are essentially free on x86 (strongly ordered) but measurably costlier on ARM — code that profiles identically in local x86 development can show real `Arc::clone` overhead differences on ARM-based CI or deployment targets.
 
 ## 🧠 Spot the Bug
 
@@ -425,7 +446,7 @@ fn main() {
 
 This panics at runtime: `already borrowed: BorrowMutError`.
 
-`root.children.borrow()` creates an immutable `Ref` guard bound to `children`, which is **still alive** (in scope) when `root.children.borrow_mut()` is called two lines later — `children` isn't used again until the `println!`, but Rust's borrow checker only enforces *static* (compile-time) borrow rules on the `RefCell` handle itself, not on the `Ref`/`RefMut` guards it hands out. Those guards are ordinary values whose lifetime extends to their last use or scope end, and here `children`'s scope extends to the end of `main` (it's used in `println!`). `RefCell` enforces the actual "no mutable borrow while an immutable one is live" rule at *runtime* by panicking, because the compile-time borrow checker has no visibility into `RefCell`'s internal state — that's the entire point of interior mutability, and also its risk.
+`root.children.borrow()` creates a `Ref` guard bound to `children`, still alive when `borrow_mut()` runs two lines later — its scope extends to the trailing `println!`. The compile-time borrow checker only enforces rules on the `RefCell` handle, not on the guards it hands out; `RefCell` enforces the real rule at *runtime* instead, by panicking.
 
 **The lesson**: `RefCell` moves borrow checking from compile time to runtime — an active `Ref` guard still blocks a `borrow_mut()` even though the compiler can't see the conflict.
 
@@ -433,6 +454,6 @@ This panics at runtime: `already borrowed: BorrowMutError`.
 
 ## Summary
 
-`Box` = single-owner heap. `Rc`/`Arc` = shared ownership. `Cell`/`RefCell`/`Mutex`/`RwLock` = interior mutability. `Cow` = borrowed-or-owned. `Pin` = no-move guarantee for async. `Weak` avoids cycles. Memory leaks via reference cycles are possible in safe Rust — design with `Weak` back-references.
+`Box` is a single owning pointer with zero overhead beyond the allocation itself. `Rc`/`Arc` add a shared control block with strong/weak counters — cheap non-atomic increments for `Rc`, real atomic-instruction cost (platform-dependent) for `Arc`. `Cell` is genuinely zero-cost interior mutability for `Copy` types; `RefCell`/`Mutex`/`RwLock` move borrow checking to runtime, trading a compile-time guarantee for a panic or block risk. Reference cycles via strong `Rc`/`Arc` back-references are a real, silent, safe-Rust memory leak — `Weak` is the structural fix, not an optional nicety. Every one of these types is a deliberate, costed relaxation of the ownership model, not a free upgrade over plain ownership.
 
-Next: Modules and crates — organizing code.
+Next: Modules and crates — organizing code, visibility boundaries, and how they shape a crate's public API surface.

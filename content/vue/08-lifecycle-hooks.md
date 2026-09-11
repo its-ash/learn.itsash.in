@@ -1,213 +1,228 @@
+---
+title: Vue 3 Engineering Reference — Lifecycle Hooks
+description: Full lifecycle sequence, setup-time vs mounted-time hooks, onUnmounted cleanup patterns, KeepAlive activation/deactivation, error capture boundaries, and hook execution order guarantees.
+---
+
 # 08 — Lifecycle Hooks
 
-## The Full Lifecycle
+## The Complete Lifecycle — Execution Order
 
-Every component instance goes through a predictable sequence of stages — creation, DOM mounting, reactive updates, and eventual unmounting. Vue exposes hooks at each stage so you can run code at exactly the right moment.
+::code-wrapper{language="typescript" filename="lifecycle-order.ts"}
+```typescript
+import {
+  onBeforeMount, onMounted, onBeforeUpdate, onUpdated,
+  onBeforeUnmount, onUnmounted, onActivated, onDeactivated,
+  onErrorCaptured, onServerPrefetch, ref
+} from 'vue'
 
-| Composition API | Options API | Fires when |
-|---|---|---|
-| (setup itself) | `beforeCreate` | Before reactive state/props are initialized. |
-| (setup itself) | `created` | After reactive state/props exist, before DOM mounting. |
-| `onBeforeMount` | `beforeMount` | Right before the component's DOM is inserted. |
-| `onMounted` | `mounted` | After the component's DOM is inserted into the document. |
-| `onBeforeUpdate` | `beforeUpdate` | Before the DOM re-renders due to a reactive change. |
-| `onUpdated` | `updated` | After the DOM has re-rendered. |
-| `onBeforeUnmount` | `beforeUnmount` | Right before the component instance is torn down. |
-| `onUnmounted` | `unmounted` | After teardown — DOM removed, effects stopped. |
-| `onErrorCaptured` | `errorCaptured` | When a descendant component throws. |
-| `onActivated` | `activated` | When inside `<KeepAlive>` and shown again (chapter 14). |
-| `onDeactivated` | `deactivated` | When inside `<KeepAlive>` and hidden. |
+// ── Full lifecycle sequence (Composition API names): ────
+//
+// 1.  setup() runs                    — Composition API entry, before "created"
+// 2.  onBeforeMount                   — DOM not yet mounted
+// 3.  DOM mounted                     — Vue creates the DOM tree
+// 4.  onMounted                       — DOM is accessible, refs are populated
+// 5.  ── Reactive state changes ──
+// 6.  onBeforeUpdate                  — before DOM re-render
+// 7.  DOM patched                     — Vue updates the DOM
+// 8.  onUpdated                       — after DOM patch
+// 9.  ── Component unmounts ──
+// 10. onBeforeUnmount                 — cleanup before teardown
+// 11. Component destroyed             — Vue removes DOM + disposes effects
+// 12. onUnmounted                     — final cleanup, all effects disposed
 
-There is no Composition API equivalent for `beforeCreate`/`created` as separate hooks — code in `setup()`/`<script setup>` runs at precisely the point in the lifecycle those two Options API hooks together cover, so it replaces both.
+// ── KeepAlive adds two hooks: ──────────────────────────
+//    onActivated  — component re-activated (inserted from cache)
+//    onDeactivated — component deactivated (cached, not destroyed)
 
-## `onMounted` — the Most-Used Hook
+// ── Error handling: ────────────────────────────────────
+//    onErrorCaptured — catches errors from descendant components
+//      (render, lifecycle hooks, watchers, setup of descendants)
 
-`onMounted` runs after the component's elements exist in the actual DOM — the correct place for anything that needs to measure, focus, or attach to a real DOM node, or for kicking off an initial data fetch:
+// ── SSR-only: ──────────────────────────────────────────
+//    onServerPrefetch — runs on server during SSR, resolved before render
 
-::code-wrapper{language="vue" filename="Chart.vue"}
+// ── Every hook is registration-based, not override-based: ──
+// You can call onMounted() multiple times — ALL registered callbacks fire in order.
+// (Unlike Options API's mounted() which is a single method.)
+onMounted(() => console.log('mounted callback 1'))
+onMounted(() => console.log('mounted callback 2'))
+// Both fire, in registration order.
+```
+::
+
+## onMounted — DOM Measurement and Third-Party Init
+
+::code-wrapper{language="vue" filename="ChartInit.vue"}
 ```vue
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { createChart } from 'some-charting-library'
+import { ref, onMounted, onBeforeUnmount, shallowRef } from 'vue'
+import Chart from 'chart.js/auto'
 
-const chartContainer = ref(null)
-let chartInstance = null
+const canvasRef = ref(null)
+// ── shallowRef: holds the Chart instance without deep reactivity ──
+// Chart.js instances are complex objects — reactive() wrapping breaks them.
+const chart = shallowRef(null)
 
 onMounted(() => {
-  // chartContainer.value is guaranteed to be a real DOM element here —
-  // it would be null if this code ran during setup() instead
-  chartInstance = createChart(chartContainer.value, { type: 'line' })
+  // ── DOM is ready: canvasRef.value is now the <canvas> element ──
+  // Before onMounted, canvasRef.value is null (DOM not created yet).
+  chart.value = new Chart(canvasRef.value, {
+    type: 'bar',
+    data: { labels: ['A', 'B'], datasets: [{ data: [1, 2] }] },
+  })
 })
 
-onUnmounted(() => {
-  chartInstance?.destroy()   // always clean up what you created in onMounted
+onBeforeUnmount(() => {
+  // ── Cleanup: destroy chart instance to free canvas memory ──
+  // onBeforeUnmount runs while the component is still fully functional
+  // (refs, state intact). onUnmounted runs after teardown.
+  chart.value?.destroy()
 })
 </script>
 
 <template>
-  <div ref="chartContainer"></div>
+  <canvas ref="canvasRef" />
 </template>
 ```
 ::
 
-## Template Refs — Accessing Real DOM Elements
+## onBeforeUpdate / onUpdated — Avoiding Infinite Loops
 
-A template ref gives you direct access to a DOM element or child component instance. Declare a `ref()` with the same name as the `ref` attribute in the template:
-
-::code-wrapper{language="vue" filename="AutoFocusInput.vue"}
+::code-wrapper{language="vue" filename="UpdateLoopTrap.vue"}
 ```vue
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onUpdated, onBeforeUpdate } from 'vue'
 
-const inputEl = ref(null)  // must start as null — it's unpopulated until mount
+const items = ref([])
 
-onMounted(() => {
-  inputEl.value.focus()    // populated by the time onMounted runs
+// ── onBeforeUpdate: read DOM BEFORE the patch ──────────
+// Useful for saving scroll position or measuring before changes.
+onBeforeUpdate(() => {
+  // DOM still shows the OLD state — measure before Vue patches it
+  scrollPosition.value = listEl.value?.scrollTop
 })
-</script>
 
-<template>
-  <input ref="inputEl" type="text" />
-</template>
-```
-::
-
-### Template refs inside `v-for`
-
-::code-wrapper{language="vue" filename="ItemList.vue"}
-```vue
-<script setup>
-import { ref, onMounted } from 'vue'
-
-const items = ref(['Apple', 'Banana', 'Cherry'])
-const itemRefs = ref([])   // Vue populates this as an array automatically
-
-onMounted(() => {
-  console.log(itemRefs.value.length)     // 3
-  itemRefs.value[0].classList.add('first')
-})
-</script>
-
-<template>
-  <li v-for="item in items" :key="item" ref="itemRefs">{{ item }}</li>
-</template>
-```
-::
-
-Binding the same `ref="itemRefs"` string to every element in a `v-for` makes Vue collect them into an array automatically, in render order — no manual pushing required.
-
-### Function refs
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <!-- called with the element on mount, and with null on unmount —
-       useful for imperative integration without a dedicated ref variable -->
-  <div :ref="(el) => console.log('mounted with', el)"></div>
-</template>
-```
-::
-
-## `onUpdated` — Reacting After a Re-render
-
-::code-wrapper{language="vue" filename="ChatWindow.vue"}
-```vue
-<script setup>
-import { ref, onUpdated, nextTick } from 'vue'
-
-const messages = ref([])
-const messageList = ref(null)
-
-function addMessage(text) {
-  messages.value.push({ id: Date.now(), text })
-}
-
+// ❌ WRONG: mutating state in onUpdated causes infinite loop
 onUpdated(() => {
-  // by the time onUpdated fires, the DOM already reflects the new message,
-  // so scrollHeight is accurate
-  messageList.value.scrollTop = messageList.value.scrollHeight
+  // This fires AFTER every DOM patch. If you mutate reactive state here,
+  // Vue re-renders → fires onUpdated again → infinite loop.
+  items.value.push(Date.now())  // DON'T DO THIS
+})
+
+// ✅ CORRECT: onUpdated is for DOM reads, not state writes
+onUpdated(() => {
+  // Read-only DOM operations are safe:
+  if (listEl.value) {
+    const isScrolledToBottom =
+      listEl.value.scrollTop + listEl.value.clientHeight >= listEl.value.scrollHeight
+    if (isScrolledToBottom) emit('scroll-bottom')
+  }
 })
 </script>
-
-<template>
-  <ul ref="messageList" class="messages">
-    <li v-for="msg in messages" :key="msg.id">{{ msg.text }}</li>
-  </ul>
-</template>
 ```
 ::
 
-`onUpdated` fires on **every** re-render of this component, for any reason — it's not scoped to "the message list specifically changed." In components with many independent pieces of reactive state, this can fire far more often than intended; `watch`/`watchEffect` with `{ flush: 'post' }` (chapter 04) is usually a more precise tool when you only care about one specific piece of state's post-update DOM effects.
+## onUnmounted — Resource Cleanup Checklist
 
-## `nextTick` — Waiting for the DOM to Catch Up
+::code-wrapper{language="typescript" filename="cleanup.ts"}
+```typescript
+import { onUnmounted, onScopeDispose, ref } from 'vue'
 
-Vue batches DOM updates — mutating reactive state doesn't update the DOM synchronously, it schedules an update that flushes on the next "tick" of the microtask queue. `nextTick()` returns a promise that resolves after that flush:
-
-::code-wrapper{language="vue"}
-```vue
-<script setup>
-import { ref, nextTick } from 'vue'
-
-const showInput = ref(false)
-const inputEl = ref(null)
-
-async function revealAndFocus() {
-  showInput.value = true
-
-  // WRONG (commented out): inputEl.value is still null here, because the
-  // <input> hasn't been created in the DOM yet — the v-if update is
-  // scheduled but not yet flushed
-  // inputEl.value.focus()
-
-  // RIGHT — wait for Vue's pending DOM update to flush first
-  await nextTick()
-  inputEl.value.focus()
-}
-</script>
-
-<template>
-  <button @click="revealAndFocus">Add a note</button>
-  <input v-if="showInput" ref="inputEl" />
-</template>
-```
-::
-
-This is one of the most common real bugs in Vue code — toggling a `v-if` and immediately trying to interact with the element it reveals, in the same synchronous block, before Vue has actually patched the DOM.
-
-## `onBeforeUnmount` / `onUnmounted` — Cleanup
-
-Anything registered in `onMounted` that outlives the component (event listeners, intervals, subscriptions, WebSocket connections) must be explicitly torn down, or it leaks:
-
-::code-wrapper{language="vue" filename="LiveClock.vue"}
-```vue
-<script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-
-const now = ref(new Date())
-let intervalId = null
-
-onMounted(() => {
-  intervalId = setInterval(() => {
-    now.value = new Date()
-  }, 1000)
-})
+// ── Everything registered externally must be cleaned up ──
+// Rule: if you called `add`, you must call `remove` on unmount.
 
 onUnmounted(() => {
-  clearInterval(intervalId)   // without this, the interval keeps firing
-                               // and holding a reference to `now` (and this
-                               // component's closure) forever
+  // ── 1. Event listeners ──
+  window.removeEventListener('resize', resizeHandler)
+  document.removeEventListener('keydown', keyHandler)
+
+  // ── 2. Timers ──
+  clearInterval(pollInterval)
+  clearTimeout(debounceTimer)
+
+  // ── 3. WebSockets / EventSource ──
+  socket.close()
+  eventSource.close()
+
+  // ── 4. Observers ──
+  intersectionObserver.disconnect()
+  resizeObserver.disconnect()
+
+  // ── 5. Third-party instances ──
+  chartInstance.destroy()
+  editorInstance.dispose()
+
+  // ── 6. Animations ──
+  cancelAnimationFrame(rafId)
+
+  // ── 7. AbortController (cancel pending fetches) ──
+  abortController.abort()
+})
+
+// ── Preferred: use onScopeDispose inside composables ──
+// Composables register their own cleanup, parent doesn't need to know details.
+// If the composable uses onScopeDispose, onUnmounted is redundant for that resource.
+```
+::
+
+## KeepAlive — onActivated / onDeactivated
+
+::code-wrapper{language="vue" filename="KeepAliveTabs.vue"}
+```vue
+<script setup>
+import { ref, onMounted, onActivated, onDeactivated, onUnmounted } from 'vue'
+
+// ── KeepAlive lifecycle: ────────────────────────────────
+// First mount: onMounted → onActivated
+// Tab switch away: onDeactivated (component stays in memory, DOM detached)
+// Tab switch back: onActivated (component re-attached, state preserved)
+// KeepAlive removed entirely: onDeactivated → onUnmounted
+
+// ── onMounted fires ONCE even with KeepAlive ──
+onMounted(() => console.log('mounted — fires once'))
+
+// ── onActivated fires on EVERY activation (including first mount) ──
+onActivated(() => {
+  // ── Re-start polling, re-subscribe to events, resume video ──
+  // This is where you "resume" after being cached.
+  startPolling()
+  window.addEventListener('visibilitychange', onVisible)
+})
+
+// ── onDeactivated fires when cached (NOT destroyed) ──
+onDeactivated(() => {
+  // ── Pause polling, unsubscribe, pause video ──
+  // Component is detached from DOM but state is preserved.
+  stopPolling()
+  window.removeEventListener('visibilitychange', onVisible)
+})
+
+// ── onUnmounted fires ONLY when KeepAlive is removed or max exceeded ──
+onUnmounted(() => {
+  // Final cleanup — component is truly destroyed.
+  // Fires after onDeactivated if the component is evicted from cache.
 })
 </script>
+```
 
+::code-wrapper{language="vue" filename="KeepAliveConfig.vue"}
+```vue
 <template>
-  <p>{{ now.toLocaleTimeString() }}</p>
+  <!-- ── KeepAlive props ── -->
+  <KeepAlive
+    :include="['UserList', 'Settings']"  <!-- only cache components matching name -->
+    :exclude="['HeavyChart']"             <!-- never cache these -->
+    :max="5"                              <!-- LRU — keep max 5 instances -->
+  >
+    <component :is="activeComponent" />
+  </KeepAlive>
+  <!-- ── Component name matters: include/exclude match component `name` ── -->
+  <!-- In <script setup>, set name via: defineOptions({ name: 'UserList' }) -->
 </template>
 ```
 ::
 
-`onBeforeUnmount` differs from `onUnmounted` only in timing relative to the actual teardown — `onBeforeUnmount` runs while the component is still fully functional (DOM present, reactive state intact), `onUnmounted` runs after everything is torn down. Cleanup that doesn't depend on the component still being "alive" — like the `clearInterval` above — commonly goes in `onUnmounted`; anything that needs one last read of live component state before teardown goes in `onBeforeUnmount`.
-
-## `onErrorCaptured` — Component-Level Error Boundaries
+## onErrorCaptured — Error Boundary Pattern
 
 ::code-wrapper{language="vue" filename="ErrorBoundary.vue"}
 ```vue
@@ -216,155 +231,165 @@ import { ref, onErrorCaptured } from 'vue'
 
 const error = ref(null)
 
+// ── onErrorCaptured: catches errors from ALL descendant components ──
+// Fires for errors in: descendant render, lifecycle hooks, watchers, setup
+// (e) error, (instance) component instance, (info) lifecycle hook name
 onErrorCaptured((err, instance, info) => {
+  console.error(`Error in ${instance?.$options?.name}:`, err, 'during', info)
   error.value = err
-  console.error('Caught by boundary:', info, err)
-  return false   // returning false stops the error from propagating further up
+
+  // ── Return value controls propagation: ──
+  return false  // stop propagation — error does not reach parent's onErrorCaptured
+  // return true (or undefined) — propagate to parent's error handler
+  // ── This makes it an error boundary: catches and handles, doesn't rethrow ──
 })
 </script>
 
 <template>
-  <div v-if="error" class="error-fallback">
-    Something went wrong. <button @click="error = null">Retry</button>
+  <div v-if="error" class="error-boundary">
+    <h2>Something went wrong</h2>
+    <p>{{ error.message }}</p>
+    <button @click="error = null">Retry</button>
   </div>
-  <slot v-else />
+  <slot v-else />  <!-- child components render here -->
 </template>
 ```
 ::
 
-Wrapping fragile third-party-dependent parts of a page in a component like this prevents one failing widget from crashing the entire application — a real production pattern, not just a toy example.
+## onServerPrefetch — SSR Data Preloading
 
-## Options API: the Full Sequence
+::code-wrapper{language="typescript" filename="server-prefetch.ts"}
+```typescript
+import { ref, onServerPrefetch } from 'vue'
 
-::code-wrapper{language="vue"}
-```vue
-<script>
-export default {
-  data() {
-    return { count: 0 }
-  },
-  beforeCreate() {
-    // `this.count` is NOT yet available here
-  },
-  created() {
-    // `this.count` IS available; DOM is NOT yet mounted (no $refs)
-  },
-  beforeMount() {
-    // template compiled, about to mount
-  },
-  mounted() {
-    // this.$refs.someEl now points at a real DOM element
-  },
-  beforeUpdate() {
-    // reactive change detected, DOM not yet patched
-  },
-  updated() {
-    // DOM patched to reflect the latest state
-  },
-  beforeUnmount() {
-    // instance still fully functional
-  },
-  unmounted() {
-    // torn down — timers/listeners should already be cleared by now
-  }
-}
-</script>
+const data = ref(null)
+
+// ── onServerPrefetch: runs ONLY on the server during SSR ──
+// The callback returns a Promise — the server waits for it to resolve
+// before rendering the component's HTML.
+// On the client (hydration), this hook is SKIPPED — client uses the
+// server-provided state instead of re-fetching.
+
+onServerPrefetch(async () => {
+  const res = await fetch('/api/initial-data')
+  data.value = await res.json()
+  // Server renders with data already populated → no client-side loading flash.
+})
+
+// ── When to use: ────────────────────────────────────────
+// Critical above-the-fold data that must be in the initial HTML (SEO, perceived perf).
+// For non-critical data, prefer client-side fetch with useFetch() composable.
 ```
 ::
-
-## Which Hook Runs First — Parent or Child?
-
-Mounting is child-first (children finish mounting before their parent's `mounted` fires, since the parent isn't "fully mounted" until its children are); unmounting is also child-first — a parent's `beforeUnmount` runs, then it tears down children (their `beforeUnmount`/`unmounted` run), then the parent's own `unmounted` fires:
-
-::code-wrapper{language="javascript"}
-```javascript
-// Order for a Parent containing a Child, on initial mount:
-// Parent setup() → Child setup() → Child onMounted → Parent onMounted
-
-// Order for the same tree, on unmount:
-// Parent onBeforeUnmount → Child onBeforeUnmount → Child onUnmounted → Parent onUnmounted
-```
-::
-
-This ordering matters when a parent's `onMounted` logic assumes a child has already finished its own setup (it has), or when a parent's cleanup logic needs to happen before or after a child's (choose `beforeUnmount` vs `unmounted` accordingly).
 
 ## 💡 Tips & Tricks
 
-- **Debug** — If a template ref is `null` inside `onMounted`, double check it isn't behind a `v-if` that's currently false — Vue only populates a template ref once the element it's attached to actually exists in the DOM; a ref on a conditionally-rendered element needs a `watch` on the condition plus `nextTick`, not a one-time `onMounted` read.
-- **Idiom** — Register cleanup (`onUnmounted`) immediately next to the setup code it corresponds to (`onMounted`) rather than at the bottom of the file — keeping matched setup/teardown pairs visually adjacent makes it much easier to spot a forgotten cleanup during review.
-- **Performance** — `onUpdated` fires on every re-render for any reason; if you only care about one specific value changing, a targeted `watch(specificRef, callback, { flush: 'post' })` avoids running your callback on unrelated updates.
-- **Idiom** — Composables that need to run cleanup logic can call `onUnmounted` internally, exactly like a component can — this is how composables like `useEventListener` or `useFetch` (chapter 07) automatically detach listeners/abort requests when the consuming component unmounts, with zero effort from whoever calls them.
-- **Debug** — `onErrorCaptured` only catches errors from **descendant** components, not errors thrown in the component that defines the hook itself, and not errors from event handlers (those need a plain `try`/`catch` or a global `app.config.errorHandler`).
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. Multiple onMounted calls — all fire in registration order ──
+onMounted(() => console.log('first'))  // fires first
+onMounted(() => console.log('second')) // fires second
+// Unlike Options API's single mounted() method.
+
+// ── 2. Hooks must be called synchronously in setup() ──
+// ❌ onMounted(() => ...) inside setTimeout — registration too late, won't fire
+// ✅ Always register hooks at the top level of setup() or <script setup>
+
+// ── 3. onBeforeUnmount vs onUnmounted ──
+// onBeforeUnmount: component still fully functional (refs, state intact)
+//   → use for cleanup that needs to READ component state
+// onUnmounted: effects already disposed, refs may be null
+//   → use for final logging, pure side-effects
+
+// ── 4. Template refs are null before onMounted ──
+// ref(null) in setup → populated during mount → accessible in onMounted
+// Guard: if (ref.value) { ... } in case of v-if conditional rendering
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Reading a template ref before `onMounted` gets `null`** — Template refs are populated only after the DOM they point to exists; reading `someRef.value` at the top level of `<script setup>` (outside any hook) always gets `null`, because that code runs before mounting.
-- **Toggling `v-if` and immediately using the revealed element in the same function is a race, not a guarantee** — Vue batches DOM updates asynchronously; code immediately after setting a ref to `true` runs before the DOM has actually updated, unless you `await nextTick()` first.
-- **Forgetting cleanup in `onUnmounted` doesn't crash anything — it just leaks silently** — A forgotten `clearInterval`/`removeEventListener` doesn't throw an error; it just keeps running in the background, holding references to a component instance that should have been garbage collected, and can accumulate into a real memory/performance problem in long-lived SPAs with many mount/unmount cycles (e.g., a router-driven app where users navigate back and forth frequently).
-- **`<KeepAlive>`-wrapped components don't actually unmount on "hide"** — A component inside `<KeepAlive>` (chapter 14) fires `onDeactivated` instead of `onUnmounted` when hidden, and `onActivated` instead of `onMounted` when shown again after being cached — code that assumes `onMounted` only ever runs once per component lifetime breaks under `<KeepAlive>`, since it can be "mounted" once but activated/deactivated many times.
-- **`onErrorCaptured` swallows the error tree-wide unless you explicitly return `false` — but also unless you don't, it still propagates further up by default** — Returning `false` stops propagation to ancestor error boundaries and the global handler; returning nothing (`undefined`) lets the error continue bubbling upward even though you already "handled" it locally, which surprises people expecting handling to be implicitly terminal.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. onUpdated fires after EVERY re-render, including child re-renders ──
+// If a child component updates, the parent's onUpdated fires too.
+// Don't use onUpdated for logic that should only run on specific state changes.
+
+// ── 2. onMounted fires before child components are fully mounted ──
+// Parent's onMounted fires BEFORE child's onMounted (inside-out for mounted).
+// If parent needs child to be mounted, use nextTick() or a child-emitted event.
+
+// ── 3. KeepAlive + onMounted: onMounted fires ONCE, onActivated fires every time ──
+// Common bug: putting event listeners in onMounted with KeepAlive.
+// Component is deactivated (listener stays) → activated (no re-registration) → listener works.
+// But if listener is removed in onUnmounted (not onDeactivated), it's never removed while cached.
+
+// ── 4. Hooks registered in async callbacks don't work ──
+// ❌ onMounted(() => setTimeout(() => onUpdated(...), 0))  — onUpdated is too late
+// Hooks must be registered during the synchronous setup() execution.
+
+// ── 5. onErrorCaptured doesn't catch errors in event handlers ──
+// Only catches errors in: render, setup, lifecycle hooks, watchers.
+// Event handler errors go to app.config.errorHandler, not onErrorCaptured.
+
+// ── 6. onServerPrefetch is server-only — skipped on client ──
+// Don't put client-side logic in onServerPrefetch — it won't run during hydration.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A modal auto-focuses its first input when opened. It works the first time, but never again after the modal is closed and reopened.
+A KeepAlive component's event listener persists even after the user navigates away.
 
-::code-wrapper{language="vue" filename="Modal.vue"}
+::code-wrapper{language="vue" filename="KeepAliveBug.vue"}
 ```vue
 <script setup>
-import { ref, onMounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 
-const props = defineProps({ open: Boolean })
-const firstInput = ref(null)
+const position = ref(0)
 
 onMounted(() => {
-  if (props.open) {
-    firstInput.value?.focus()
-  }
+  window.addEventListener('scroll', (e) => {
+    position.value = window.scrollY
+  })
+})
+
+onUnmounted(() => {
+  // ⚠️ This only fires when KeepAlive evicts the component (max exceeded or removed)
+  // NOT when the user navigates to another tab (onDeactivated fires instead)
+  window.removeEventListener('scroll', handler)
 })
 </script>
-
-<template>
-  <div v-if="open" class="modal">
-    <input ref="firstInput" />
-  </div>
-</template>
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`onMounted` fires exactly once, the first time this component instance is mounted — it does not re-run every time `open` flips from `false` to `true` later, because the `v-if="open"` is on the *inner* `<div>`, and the outer `Modal` component instance itself is presumably kept alive by its parent (never actually unmounted/remounted) while `open` toggles. So the auto-focus logic only ever runs once, on the very first mount, and never again on subsequent opens.
+With `KeepAlive`, navigating away fires `onDeactivated`, not `onUnmounted`. The listener stays active while the component is cached, continuing to fire scroll handlers in the background — wasted CPU and potential state bugs on reactivation.
 
-The fix is to react to `open` changing, not to the component mounting:
+**Fix** — use `onActivated`/`onDeactivated` instead of `onMounted`/`onUnmounted`:
 
-::code-wrapper{language="vue" filename="Modal.vue"}
+::code-wrapper{language="vue" filename="KeepAliveFixed.vue"}
 ```vue
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { onActivated, onDeactivated, ref } from 'vue'
 
-const props = defineProps({ open: Boolean })
-const firstInput = ref(null)
+const position = ref(0)
 
-watch(() => props.open, async (isOpen) => {
-  if (isOpen) {
-    await nextTick()          // wait for the v-if to actually render the input
-    firstInput.value?.focus()
-  }
+function handler() { position.value = window.scrollY }
+
+onActivated(() => {
+  window.addEventListener('scroll', handler)  // re-register on every activation
+})
+
+onDeactivated(() => {
+  window.removeEventListener('scroll', handler)  // clean up when cached
 })
 </script>
 ```
 ::
 
-**The lesson**: `onMounted` only ever fires once per component instance — for behavior that should re-run every time a *prop* changes (not every time the component is created), reach for `watch` on that prop instead, and remember to `await nextTick()` if the thing you're interacting with is behind its own `v-if`.
+**The lesson**: with `KeepAlive`, `onMounted`/`onUnmounted` fire only once (initial mount and final eviction). Use `onActivated`/`onDeactivated` for resources that should be active only while the component is visible.
 
 </details>
-
-## Key Takeaways
-
-- `setup()`/`<script setup>` code runs at the point covering both `beforeCreate` and `created`; there's no separate Composition API hook for either.
-- `onMounted` is the right place for DOM measurement, focus, third-party library initialization, and template refs — they're `null` before this point.
-- `nextTick()` resolves after Vue's batched DOM update flushes — necessary whenever you toggle reactive state and immediately need to interact with the DOM it affects.
-- Every `onMounted`/setup-time subscription (listeners, intervals, WebSockets) needs a matching `onUnmounted` teardown, or it leaks.
-- Mounting order is child-before-parent; unmounting order is parent-before-child (for `beforeUnmount`), then child-before-parent for the final `unmounted`.
-- `<KeepAlive>`-wrapped components use `onActivated`/`onDeactivated` instead of repeated `onMounted`/`onUnmounted` cycles — code assuming one-mount-per-lifetime breaks under `<KeepAlive>`.

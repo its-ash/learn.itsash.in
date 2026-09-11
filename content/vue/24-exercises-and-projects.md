@@ -1,194 +1,524 @@
+---
+title: Vue 3 Engineering Reference — Exercises & Projects
+description: Capstone projects building production-grade Vue 3 apps — reactive Kanban board, real-time chat with WebSocket, SSR blog with Nuxt, and component library with TypeScript generics.
+---
+
 # 24 — Exercises & Projects
 
-Reading twenty-three chapters builds vocabulary; building projects is what turns that vocabulary into a skill. This chapter is a capstone set of project ideas, calibrated from your first component to a production-shaped application, each with concrete requirements and stretch goals rather than an open-ended "build a todo app" prompt.
+## Project 1 — Reactive Kanban Board
 
-## How to Use This Chapter
+::code-wrapper{language="typescript" filename="kanban/useBoard.ts"}
+```typescript
+import { ref, computed, watch, type Ref } from 'vue'
 
-- Build projects roughly in order — each tier assumes comfort with everything the previous tier required.
-- Don't skip straight to "Advanced" even if it looks more interesting — the beginner/intermediate projects are deliberately scoped to force practice with specific chapters' concepts (the destructuring trap, `v-model` on components, route guards) that are easy to *read about* but only really click once you've been bitten by them yourself.
-- Revisit an earlier project after finishing a later chapter — adding TypeScript (ch. 17) to a project you built before reading that chapter, or adding tests (ch. 18) retroactively, is itself a valuable exercise.
-- Treat "Requirements" as the definition of done for a minimal, working version; "Stretch Goals" as where the real learning happens once the basics work.
+// ── Capstone: build a Kanban board with drag-and-drop, persistence ──
+// Concepts: reactive state, computed derived state, watch for persistence,
+// composable composition, scoped slots for column rendering.
 
-## Beginner Projects
+interface Column {
+  id: string
+  title: string
+  cardIds: string[]
+}
 
-### 1. Multi-List Todo App
+interface Card {
+  id: string
+  title: string
+  description: string
+  columnId: string
+  order: number
+  createdAt: number
+}
 
-**Requirements:**
-- Multiple named lists (Work, Personal, ...), not just one flat list.
-- Add, edit, complete, and delete items; completed items visually distinct, not just removed.
-- Persist to `localStorage` so a page refresh doesn't lose data.
-- Use `ref`/`reactive` correctly for the list data — this is the project to deliberately hit the destructuring trap from chapter 03 once, on purpose, so you recognize it instantly later.
+export function useKanbanBoard() {
+  const columns: Ref<Column[]> = ref([])
+  const cards: Ref<Card[]> = ref([])
 
-**Stretch Goals:**
-- Drag-and-drop reordering within a list.
-- Extract list-persistence logic into a `useLocalStorage` composable, reusable across all lists.
-- Add due dates with a "overdue" visual state computed reactively from the current date.
+  // ── Computed: cards grouped by column for rendering ──
+  const cardsByColumn = computed(() => {
+    const map = new Map<string, Card[]>()
+    for (const col of columns.value) {
+      map.set(col.id, cards.value
+        .filter(c => c.columnId === col.id)
+        .sort((a, b) => a.order - b.order))
+    }
+    return map
+  })
 
-### 2. Custom Form Controls with `v-model`
+  // ── Move card: update column + order ────────────────────
+  function moveCard(cardId: string, toColumnId: string, toIndex: number) {
+    const card = cards.value.find(c => c.id === cardId)
+    if (!card) return
 
-**Requirements:**
-- Build a `<StarRating>` component supporting `v-model` (chapter 09's custom-input pattern), emitting `update:modelValue`.
-- Build a `<TagInput>` component (type a tag, press Enter, see it as a removable chip) also wired via `v-model`, backed by an array.
-- Combine both into a single "product review" form using multiple `v-model`s (chapter 09) on one parent component.
+    const oldColumn = columns.value.find(c => c.id === card.columnId)
+    const newColumn = columns.value.find(c => c.id === toColumnId)
+    if (!oldColumn || !newColumn) return
 
-**Stretch Goals:**
-- Add validation states (required, min/max) to both controls with visible error messaging.
-- Make `<StarRating>` keyboard-accessible (arrow keys adjust the value, not just mouse clicks).
-- Extract shared validation logic into a `useFieldValidation` composable used by both controls.
+    // Remove from old column's card list
+    oldColumn.cardIds = oldColumn.cardIds.filter(id => id !== cardId)
 
-### 3. Weather Dashboard with Async States
+    // Insert at new position in new column
+    newColumn.cardIds.splice(toIndex, 0, cardId)
+    card.columnId = toColumnId
 
-**Requirements:**
-- Fetch current weather for a city from a public weather API, showing distinct loading/error/success states (chapter 12).
-- A search box lets the user change cities; guard against the chapter-12 race condition where a slow earlier request resolves after a faster later one and overwrites it with stale data.
-- Cache the last 5 searched cities' results in memory so re-searching a recent city doesn't re-fetch.
+    // Re-order all cards in the new column
+    newColumn.cardIds.forEach((id, i) => {
+      const c = cards.value.find(card => card.id === id)
+      if (c) c.order = i
+    })
+  }
 
-**Stretch Goals:**
-- Add a 5-day forecast view using nested/dynamic routes (chapter 11) — `/weather/:city/forecast`.
-- Debounce the search input (chapter 15's custom directive territory, or a `useDebouncedValue` composable) instead of fetching on every keystroke.
-- Handle the API rate-limit error case distinctly from a generic network failure, with a specific user-facing message for each.
+  function addCard(columnId: string, title: string) {
+    const card: Card = {
+      id: crypto.randomUUID(),
+      title,
+      description: '',
+      columnId,
+      order: cards.value.filter(c => c.columnId === columnId).length,
+      createdAt: Date.now(),
+    }
+    cards.value.push(card)
+    columns.value.find(c => c.id === columnId)?.cardIds.push(card.id)
+  }
 
-## Intermediate Projects
+  // ── Persistence: auto-save to localStorage on every change ──
+  watch([columns, cards], () => {
+    localStorage.setItem('kanban', JSON.stringify({
+      columns: columns.value,
+      cards: cards.value,
+    }))
+  }, { deep: true })
 
-### 4. E-Commerce Cart with Pinia
+  // ── Restore from localStorage on init ──────────────────
+  function loadFromStorage() {
+    const saved = localStorage.getItem('kanban')
+    if (saved) {
+      const data = JSON.parse(saved)
+      columns.value = data.columns
+      cards.value = data.cards
+    } else {
+      // Default columns
+      columns.value = [
+        { id: 'todo', title: 'To Do', cardIds: [] },
+        { id: 'progress', title: 'In Progress', cardIds: [] },
+        { id: 'done', title: 'Done', cardIds: [] },
+      ]
+    }
+  }
 
-**Requirements:**
-- A product listing page, a cart (Pinia store, chapter 10), and a checkout summary — cart state must survive navigation between routes.
-- Cart actions: add, remove, change quantity, apply a discount code (an action that validates against a small hardcoded rule set and updates state accordingly).
-- Persist the cart across a page refresh (Pinia persistence plugin, or a hand-rolled `localStorage` sync).
-- Getters (not components computing totals ad hoc) for cart subtotal, discount amount, and final total.
+  loadFromStorage()
 
-**Stretch Goals:**
-- Add a second store (e.g., a wishlist) and compose the two stores together (chapter 10's store composition) — moving an item from wishlist to cart should update both stores consistently.
-- Add route guards (chapter 11) preventing checkout access with an empty cart.
-- Write Vitest unit tests (chapter 18) for the cart store's actions and getters in isolation, without mounting any component.
+  return { columns, cards, cardsByColumn, moveCard, addCard }
+}
+```
+::
 
-### 5. Kanban Board with Drag-and-Drop
+## Project 2 — Real-Time Chat with WebSocket
 
-**Requirements:**
-- Columns (To Do / In Progress / Done) with cards draggable between them.
-- Card creation/editing via a modal, implemented with Teleport (chapter 16) so it isn't visually clipped by a scrolling/overflow-hidden column.
-- State management via Pinia; moving a card between columns is a store action, not a component-local mutation.
+::code-wrapper{language="typescript" filename="chat/useChat.ts"}
+```typescript
+import { ref, onScopeDispose, type Ref } from 'vue'
 
-**Stretch Goals:**
-- Add a `<Suspense>` boundary (chapter 16) around an async "load board from API" step, with a real fallback state, not just a loading spinner slapped on top of broken layout.
-- Implement undo for the last move/delete action (a small history stack in the store).
-- Add keyboard-only card movement as an accessibility fallback to drag-and-drop.
+// ── Capstone: real-time chat with WebSocket composable ──
+// Concepts: WebSocket lifecycle, reconnection, message buffering,
+// onScopeDispose for cleanup, reactive message list.
 
-### 6. Admin Panel with Route Guards and Nested Routes
+interface ChatMessage {
+  id: string
+  userId: string
+  text: string
+  timestamp: number
+}
 
-**Requirements:**
-- Nested routes (chapter 11): `/admin` as a layout shell with `/admin/users`, `/admin/settings`, `/admin/reports` as children rendering into a shared sidebar layout.
-- A route guard redirecting unauthenticated users to `/login`, implemented as real middleware, not an `if` check duplicated in every page component.
-- Lazy-loaded route components (chapter 11/21) for every `/admin/*` page — verify in the Network tab that each is its own chunk, not part of the initial bundle.
+export function useChat(roomId: string) {
+  const messages: Ref<ChatMessage[]> = ref([])
+  const connected = ref(false)
+  const error = ref<Error | null>(null)
 
-**Stretch Goals:**
-- Role-based guards: a `/admin/reports` route accessible only to a specific role, with a distinct "forbidden" page (not a silent redirect) for an authenticated user lacking that role.
-- Add a global loading bar tied to route navigation start/end events.
-- Convert the whole project to TypeScript (chapter 17), typing route params and guard signatures.
+  let ws: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectAttempts = 0
 
-## Advanced Projects
+  function connect() {
+    // ── Clean up existing connection ──
+    ws?.close()
 
-### 7. Real-Time Collaborative Notes App
+    const url = `wss://chat.example.com/rooms/${roomId}`
+    ws = new WebSocket(url)
 
-**Requirements:**
-- Multiple users editing shared notes, synced via WebSocket — reflect remote changes reactively without a manual page refresh.
-- Custom composables (chapter 07/23) encapsulating the WebSocket connection lifecycle (`useWebSocket`), with correct `onUnmounted` cleanup (chapter 23's leaked-listener gotcha, made real).
-- Optimistic local updates: a user's own edit appears instantly, then reconciles with the server's authoritative state when it arrives.
+    ws.onopen = () => {
+      connected.value = true
+      error.value = null
+      reconnectAttempts = 0  // reset on successful connect
+    }
 
-**Stretch Goals:**
-- Conflict resolution when two users edit the same note near-simultaneously (last-write-wins is acceptable; document the tradeoff versus an operational-transform/CRDT approach).
-- Presence indicators (show which other users currently have a given note open).
-- Add SSR (chapter 20) for the initial note list for faster first paint, falling back to the WebSocket connection only after hydration.
+    ws.onmessage = (event) => {
+      const message: ChatMessage = JSON.parse(event.data)
+      messages.value.push(message)
+    }
 
-### 8. Component Library with Renderless/Compound Components
+    ws.onerror = (e) => {
+      error.value = new Error('WebSocket error')
+    }
 
-**Requirements:**
-- Build and publish (at least locally, via Vite library mode — chapter 21) a small component library: a compound `<Tabs>`/`<Tab>` set (chapter 23), a renderless `<DataFetcher>` (chapter 13/23), and at least one custom directive (chapter 15).
-- Correctly mark `vue` as an external peer dependency (chapter 21) and verify, in a separate throwaway consuming app, that `provide`/`inject` works correctly across the library boundary.
-- Full TypeScript types (chapter 17) for every exported component's props, emits, and slots.
+    ws.onclose = () => {
+      connected.value = false
+      // ── Exponential backoff reconnection ────────────
+      if (reconnectAttempts < 5) {
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 30_000)
+        reconnectTimer = setTimeout(() => {
+          reconnectAttempts++
+          connect()
+        }, delay)
+      }
+    }
+  }
 
-**Stretch Goals:**
-- Add a documentation/demo site for the library, itself built with Nuxt Content (chapter 20) — dogfooding the same system this curriculum is written in.
-- Write component tests (chapter 18) covering the renderless component's scoped-slot contract specifically (that it exposes the right shape of data to its slot, independent of any particular consumer's markup).
-- Add a visual regression or accessibility audit step to a CI pipeline for the library.
+  function send(text: string) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      error.value = new Error('Not connected')
+      return
+    }
+    ws.send(JSON.stringify({ text, timestamp: Date.now() }))
+  }
 
-### 9. SSR E-Commerce Storefront with Nuxt
+  // ── Cleanup: close WebSocket + clear timer on scope dispose ──
+  onScopeDispose(() => {
+    ws?.close()
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+  })
 
-**Requirements:**
-- A Nuxt-based storefront (chapter 20) with SSR-rendered product listing and detail pages for real SEO benefit — verify with "view page source" that product content is present without JavaScript execution.
-- `useFetch`/`useAsyncData` for all product data, with correctly-keyed fetches per route param (chapter 20's stale-cache gotcha, avoided deliberately).
-- A cart that works correctly across the server/client boundary — cart state itself should be client-only (`<ClientOnly>` or deferred to `onMounted`, chapter 20) since it's inherently per-session, while product content remains server-rendered.
-- CSP headers (chapter 22) configured for the deployed site, verified via response headers, not just assumed.
+  connect()  // start immediately
 
-**Stretch Goals:**
-- Add a server route (`server/api/*`) acting as a backend-for-frontend, proxying and shaping a third-party product API rather than calling it directly from the client.
-- Sanitize any user-generated content (product reviews) with DOMPurify (chapter 22) before rendering, and add a `Spot the Bug`-style deliberate near-miss (an allowlist covering tags but not URL schemes) to your own PR description as a self-review exercise.
-- Run a Lighthouse audit before and after adding route-level code splitting and image optimization, and record the concrete before/after metrics.
+  return { messages, connected, error, send, reconnect: connect }
+}
+```
+::
 
-### 10. Performance-Instrumented Data Grid
+## Project 3 — SSR Blog with Nuxt
 
-**Requirements:**
-- A large (10,000+ row) sortable, filterable data grid using virtual scrolling (chapter 19).
-- Use `v-memo` (chapter 19) on row rendering, with a correctly-scoped dependency array (not an object/array reference, per chapter 19's gotcha) — verify with Vue DevTools' render-flash overlay that unaffected rows genuinely skip re-render on a filter change.
-- Ship it with route-level and component-level code splitting (chapter 21), and use `rollup-plugin-visualizer` to confirm the grid's own (likely non-trivial) dependency weight is isolated to its own lazy-loaded chunk.
+::code-wrapper{language="vue" filename="blog/pages/[slug].vue"}
+```vue
+<script setup>
+// ── Capstone: Nuxt SSR blog with dynamic routes, SEO, markdown ──
+// Concepts: useAsyncData for SSR data fetching, useHead for SEO,
+// markdown rendering, static generation (SSG).
 
-**Stretch Goals:**
-- Add column-level virtualization in addition to row virtualization, for a grid wide enough that horizontal scroll performance also matters.
-- Benchmark and document, with real before/after numbers, the difference `v-memo` and `shallowRef` (chapter 19) make on this specific dataset size — don't take the chapter's claims on faith, measure your own.
-- Add full keyboard navigation and screen-reader-appropriate ARIA roles, addressing chapter 19's virtual-scrolling-breaks-accessibility gotcha directly rather than leaving it as a known limitation.
+const route = useRoute()
+const { data: post } = await useAsyncData(`post-${route.params.slug}`, async () => {
+  // ── Fetch from API during SSR, hydrate on client ──
+  const res = await $fetch(`/api/posts/${route.params.slug}`)
+  return res
+})
 
-## Capstone: Combine Three Projects Into One
+// ── SEO: dynamic meta tags from post data ──────────────
+useHead({
+  title: () => post.value?.title ?? 'Loading...',
+  meta: [
+    { name: 'description', content: () => post.value?.excerpt ?? '' },
+    { property: 'og:title', content: () => post.value?.title ?? '' },
+    { property: 'og:type', content: 'article' },
+  ],
+})
 
-Once at least one beginner, one intermediate, and one advanced project are built, combine pieces of them into a single larger application — e.g., the E-Commerce Cart (4) plus the SSR Storefront (9) plus the Component Library (8), using your own published library's `<Tabs>` for a product page's description/reviews/specs sections, your own cart store, server-rendered for SEO, deployed with a real CSP. This is deliberately open-ended: the goal is integrating separately-learned pieces into one coherent codebase, which surfaces integration problems (a composable that assumed client-only execution, now running under SSR; a component library's peer-dependency assumption, now tested for real) that no single isolated project exercises on its own.
+// ── Markdown rendering with sanitization ──────────────
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
-## Reading Code to Mastery
+const renderedHtml = computed(() => {
+  if (!post.value?.content) return ''
+  return DOMPurify.sanitize(marked.parse(post.value.content))
+})
+</script>
 
-Reading production Vue source is as valuable as building — study:
+<template>
+  <article v-if="post">
+    <h1>{{ post.title }}</h1>
+    <time :datetime="post.publishedAt">{{ new Date(post.publishedAt).toLocaleDateString() }}</time>
 
-- **Vue core** (`runtime-core`, `reactivity` packages) — the actual Proxy-based reactivity implementation behind every `ref`/`reactive` used across this whole curriculum.
-- **Pinia** — a relatively small, readable codebase; a good first "real library" to read end to end after chapter 10.
-- **VueUse** — dozens of composables demonstrating chapter 23's conventions (`MaybeRef` parameters, ref-object returns, careful cleanup) applied consistently at scale.
-- **Vue Router** — navigation guards and route matching, underpinning chapter 11.
-- **Nuxt** (`nuxt/nuxt`) — how file-based routing, auto-imports, and `useFetch` are actually implemented on top of Vite and Vue.
-- **Headless UI (Vue) / Radix Vue** — production-grade compound and renderless component patterns, directly extending chapter 23.
+    <!-- Sanitized markdown content -->
+    <div class="prose" v-html="renderedHtml" />
 
-## Practice Sites
+    <RouterLink to="/">Back to all posts</RouterLink>
+  </article>
 
-- **Vue SFC Playground** (the official online playground) — fastest way to test a small reactivity or template question in isolation, no project setup needed.
-- **Frontend Mentor** — real-world UI-design challenges, good for practicing component composition against a fixed visual spec.
-- **Codewars / LeetCode** — general JavaScript algorithm practice; not Vue-specific, but the underlying language fluency directly supports faster Vue development.
+  <div v-else>Post not found</div>
+</template>
+```
 
-## Open Source Contribution
+::code-wrapper{language="typescript" filename="blog/server/api/posts/[slug].get.ts"}
+```typescript
+// ── Nuxt server route: API endpoint for blog posts ─────
+// File-based: server/api/posts/[slug].get.ts → GET /api/posts/:slug
 
-- `vuejs/core` — the framework itself; look for `good first issue` labels, though core reactivity/compiler issues are genuinely advanced.
-- `vuejs/pinia` — smaller surface area, approachable for a first real-world PR.
-- `vueuse/vueuse` — an excellent place to both read idiomatic composables and contribute a new one.
-- `nuxt/nuxt` — larger and more complex, but directly relevant if you're building on Nuxt day to day.
+export default defineEventHandler(async (event) => {
+  const slug = getRouterParam(event, 'slug')
 
-## Mastery Self-Check
+  // ── Fetch from database (parameterized query — injection-safe) ──
+  const post = await db.prepare('SELECT * FROM posts WHERE slug = ?').get(slug)
 
-Can you confidently:
+  if (!post) {
+    throw createError({
+      statusCode: 404,
+      statusMessage: 'Post not found',
+    })
+  }
 
-- Explain the destructuring trap without looking it up? (Destructuring a `reactive` object copies out plain values, disconnected from reactivity — access via `.value` on individual `ref`s, or use `toRefs`, to preserve it.)
-- Explain why `v-memo="[product]"` is usually useless on a `.map()`-derived list? (A new object reference every render means the shallow comparison never sees "unchanged," so nothing is ever skipped.)
-- State the one thing `shallowRef` does and does not track? (Tracks `.value` reassignment; does not track in-place mutation of what `.value` points to.)
-- Explain why `onMounted` never fires during SSR? (There's no real DOM being mounted on the server — the hook is specifically the client-only/DOM-mounted boundary.)
-- Explain why `import.meta.env.SOME_SECRET` (unprefixed) is `undefined` in client code, and why that's a security boundary, not a bug? (Only `VITE_`-prefixed variables are exposed to the client bundle by design, preventing accidental secret leakage.)
-- Explain why a tag allowlist alone doesn't make `v-html` safe? (Attribute *values* — like a `javascript:` URL in `href` — need their own allowlist; permitting a tag says nothing about what's safe inside its attributes.)
-- Explain the actual failure mode of `return { ...reactiveObj, someMethod }` from a composable? (Spread copies current values out as a one-time plain-object snapshot — not live refs — so the caller never sees future updates.)
-- Choose, without hesitating, between a composable and a renderless component for a given piece of shared logic? (Consumer needs to control markup → renderless component; consumer just needs reactive values → composable.)
-- Explain why bundling `vue` into a published component library breaks `provide`/`inject` for its consumers? (Produces two separate Vue runtime instances — each with its own separate `provide`/`inject` registry — instead of one shared instance.)
-- Read a component and correctly identify whether it's genuinely presentational, or a container mislabeled as one? (No fetching/store/router access, purely a function of props and emitted events, with no exceptions.)
+  return post
+})
+```
+::
 
-If you can answer all ten without opening another chapter, you've internalized this curriculum, not just read it.
+## Project 4 — Component Library with TypeScript Generics
 
-## Final Words
+::code-wrapper{language="vue" filename="library/DataSelect.vue"}
+```vue
+<script setup lang="ts" generic="T extends { id: string }">
+// ── Capstone: reusable type-safe DataSelect component ──
+// Concepts: generic components (3.3+), defineModel, defineEmits,
+// typed props with generics, composable integration.
 
-Vue rewards exactly the kind of careful attention this curriculum tried to model throughout: reactivity is forgiving until the one time it silently isn't (the destructuring trap, `shallowRef` mutation, a `reactive` spread), and every "gotcha" section in the previous twenty-three chapters exists because real developers hit that exact thing in real production code, not because it's a clever trick question.
+// ── Generic prop: T extends { id: string } constrains the item type ──
+// Parent: <DataSelect :items="users" v-model="selectedUserId" />
+// T is inferred as User (where User has an id property).
+const props = defineProps<{
+  items: T[]
+  labelKey: keyof T  // which property to display as the label
+  placeholder?: string
+}>()
 
-Build the projects. Read the source of the libraries you depend on daily. Hit the destructuring trap once, on purpose, so you recognize its shape instantly the next time it shows up disguised as a completely different-looking bug. Open Vue DevTools and actually watch reactivity happen rather than only reasoning about it abstractly.
+const model = defineModel<string>()  // selected id (string)
 
-Welcome to being a Vue developer.
+// ── Computed: selected item object (derived from id + items) ──
+const selectedItem = computed(() =>
+  props.items.find(item => item.id === model.value) ?? null
+)
 
-💚
+// ── Computed: display labels ────────────────────────────
+const labels = computed(() =>
+  props.items.map(item => ({
+    id: item.id,
+    label: String(item[props.labelKey]),  // cast to string for display
+  }))
+)
+
+const isOpen = ref(false)
+
+function select(id: string) {
+  model.value = id  // defineModel handles the emit automatically
+  isOpen.value = false
+}
+
+function close() { isOpen.value = false }
+
+// ── Click outside: close dropdown when clicking elsewhere ──
+const rootRef = ref<HTMLElement | null>(null)
+onClickOutside(rootRef, close)
+</script>
+
+<template>
+  <div ref="rootRef" class="data-select">
+    <button @click="isOpen = !isOpen">
+      {{ selectedItem ? selectedItem[labelKey] : placeholder ?? 'Select...' }}
+    </button>
+
+    <ul v-if="isOpen" class="options">
+      <li
+        v-for="item in items"
+        :key="item.id"
+        @click="select(item.id)"
+        :class="{ selected: item.id === model }"
+      >
+        {{ item[labelKey] }}
+      </li>
+    </ul>
+  </div>
+</template>
+```
+
+::code-wrapper{language="vue" filename="library/DataTable.vue"}
+```vue
+<script setup lang="ts" generic="T extends Record<string, any>">
+// ── Generic DataTable: type-safe columns + data ──
+// Concepts: generic components, scoped slots with typed props,
+// dynamic column configuration, renderless data layer.
+
+interface Column<K extends string> {
+  key: K
+  label: string
+  sortable?: boolean
+}
+
+const props = defineProps<{
+  data: T[]
+  columns: Column<keyof T & string>[]
+}>()
+
+const sortBy = ref<keyof T | null>(null)
+const sortDir = ref<'asc' | 'desc'>('asc')
+
+// ── Computed: sorted data (immutable — doesn't mutate prop) ──
+const sortedData = computed(() => {
+  if (!sortBy.value) return props.data
+  return [...props.data].sort((a, b) => {
+    const av = a[sortBy.value!]
+    const bv = b[sortBy.value!]
+    const cmp = av < bv ? -1 : av > bv ? 1 : 0
+    return sortDir.value === 'asc' ? cmp : -cmp
+  })
+})
+
+function toggleSort(col: Column<keyof T & string>) {
+  if (!col.sortable) return
+  if (sortBy.value === col.key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortBy.value = col.key
+    sortDir.value = 'asc'
+  }
+}
+
+// ── Scoped slot: pass row + column data to parent for custom rendering ──
+// Parent: <DataTable :data="users" :columns="cols">
+//   <template #cell="{ row, column, value }">{{ value }}</template>
+// </DataTable>
+</script>
+
+<template>
+  <table>
+    <thead>
+      <tr>
+        <th
+          v-for="col in columns"
+          :key="col.key"
+          @click="toggleSort(col)"
+          :class="{ sortable: col.sortable }"
+        >
+          {{ col.label }}
+          <span v-if="sortBy === col.key">{{ sortDir === 'asc' ? '↑' : '↓' }}</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="(row, index) in sortedData" :key="index">
+        <td v-for="col in columns" :key="col.key">
+          <!-- Scoped slot: parent gets row, column, and value ── -->
+          <slot name="cell" :row="row" :column="col" :value="row[col.key]">
+            {{ row[col.key] }}  <!-- default rendering if slot not filled -->
+          </slot>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</template>
+```
+::
+
+## 💡 Tips & Tricks
+
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. Generic components: use <script setup generic="T"> for type-safe reuse ──
+// T is inferred from props — no manual type annotation needed at call site.
+// Constraint: generic="T extends { id: string }" ensures T has an id property.
+
+// ── 2. Persistence with watch deep:true — auto-save on any nested change ──
+// watch(state, saveToStorage, { deep: true }) — fires on any nested mutation.
+// Debounce the save for frequent updates (don't write to localStorage per keystroke).
+
+// ── 3. WebSocket reconnection: exponential backoff with max attempts ──
+// delay = min(1000 * 2^attempts, 30_000) — caps at 30s, gives up after N tries.
+// Reset attempts to 0 on successful connection.
+
+// ── 4. Nuxt useAsyncData: unique key per route for cache isolation ──
+// useAsyncData(`post-${slug}`, fetcher) — each post has its own cache entry.
+// Without unique keys, navigating between posts shows stale data.
+
+// ── 5. Component library: expose API via defineExpose + TypeScript ──
+// Generic components can expose typed methods (validate, focus, reset) for
+// parent use via template refs — fully type-checked at the call site.
+```
+::
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Generic components: T is erased at runtime — no instanceof checks ──
+// generic="T" exists only at compile time. At runtime, all generics are `any`.
+// Don't rely on T for runtime logic — use props for runtime values.
+
+// ── 2. WebSocket: onclose fires even on intentional close() ──
+// If you close() on unmount, onclose still fires → triggers reconnection.
+// Set a flag (intentionalClose = true) before close() and check in onclose.
+
+// ── 3. localStorage persistence: non-serializable values break ──
+// Date objects → strings, Map/Set → {}, class instances lose methods.
+// Use a replacer/reviver in JSON.stringify/parse, or store primitives only.
+
+// ── 4. Nuxt useAsyncData: errors during SSR crash the page ──
+// If the fetcher throws on server, the entire page render fails (500).
+// Wrap in try/catch, or use the `default` option for fallback data.
+
+// ── 5. Kanban drag-and-drop: HTML5 drag events are finicky ──
+// dragstart, dragover (preventDefault!), drop — order and preventDefault matter.
+// Use a library (vuedraggable, @vueuse/integrations/useSortable) for reliability.
+
+// ── 6. Component library generics: scoped slot props are NOT typed with T ──
+// <slot :row="row" /> — row is T, but the parent's slot prop is `any` unless
+// the parent explicitly types it. Vue 3.4+ improves this with defineSlots.
+```
+::
+
+## 🧠 Spot the Bug
+
+A WebSocket chat reconnects even after the user intentionally navigates away.
+
+::code-wrapper{language="typescript" filename="WSBug.ts"}
+```typescript
+let ws: WebSocket | null = null
+
+function connect() {
+  ws = new WebSocket(url)
+  ws.onclose = () => {
+    // ⚠️ Reconnects even after intentional close() on unmount
+    setTimeout(connect, 1000)
+  }
+}
+
+onScopeDispose(() => {
+  ws?.close()  // this triggers onclose → reconnection!
+})
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+`ws.close()` triggers the `onclose` handler, which schedules a reconnection. The component is unmounted, but the WebSocket reconnects in the background — wasting resources and potentially causing errors when it tries to update unmounted reactive state.
+
+**Fix** — set a flag before closing and check it in `onclose`:
+
+::code-wrapper{language="typescript" filename="WSFixed.ts"}
+```typescript
+let ws: WebSocket | null = null
+let intentionalClose = false
+
+function connect() {
+  ws = new WebSocket(url)
+  ws.onclose = () => {
+    if (intentionalClose) return  // don't reconnect on intentional close
+    setTimeout(connect, 1000)
+  }
+}
+
+onScopeDispose(() => {
+  intentionalClose = true  // set flag before close
+  ws?.close()               // onclose sees the flag → no reconnect
+})
+```
+::
+
+**The lesson**: `WebSocket.close()` triggers `onclose`, which runs reconnection logic. Set an `intentionalClose` flag before closing to prevent the reconnect handler from firing after the component unmounts.
+
+</details>

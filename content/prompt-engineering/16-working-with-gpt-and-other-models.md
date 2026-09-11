@@ -1,35 +1,79 @@
-# 16 — Working With GPT and Other Models
+---
+title: "16 — Working with GPT & Other Models"
+description: "Prompt portability across model families — OpenAI conventions, reasoning-optimized models, open-weight chat templates, graceful degradation patterns, and migration testing. Code-first reference for mid-to-senior engineers."
+---
+
+# 16 — Working with GPT & Other Models
 
 ## The Portability Problem
 
-Chapter 15 covered Claude's specific conventions in depth. This chapter asks the harder question: what happens when you take a prompt that works well on one model and run it against another? The honest answer is that instruction-following style, formatting conventions, and even how literally a constraint is honored all vary meaningfully across model families — a prompt engineered and tuned against one model is not guaranteed to perform the same way on another, even when both are described as "highly capable" in their respective marketing. Treating a prompt as portable-by-default, without re-validation, is one of the more common causes of a prompting approach quietly degrading after a model swap or an unplanned model upgrade.
+::code-wrapper{language="python" filename="portability_problem.py"}
+```python
+# An identical prompt string is NOT an identical instruction across model families.
+# Instruction-following style, formatting conventions, and how literally a constraint
+# is honored all vary meaningfully across model families.
 
-This isn't a reason to write entirely separate prompts per model from scratch. It's a reason to understand *which parts* of a prompt tend to transfer cleanly (the model-agnostic fundamentals from Parts I–III of this course) and which parts need re-tuning per family (formatting conventions, system-message weighting, reasoning-elicitation phrasing).
+# A prompt engineered and tuned against one model is NOT guaranteed to perform the
+# same way on another, even when both are "highly capable." Treating a prompt as
+# portable-by-default without re-validation is a common cause of silent degradation
+# after a model swap or upgrade.
 
-## OpenAI Conventions
+# WHAT TRANSFERS CLEANLY (model-agnostic fundamentals):
+#   - clarity, specificity, explicit constraints (Chapter 4)
+#   - structural decomposition (Chapter 10)
+#   - role separation (Chapter 2)
+#   - structured output schemas (Chapter 7)
 
-OpenAI's models (the GPT family, and its reasoning-focused model lines) have their own set of documented and empirically-observed conventions, some overlapping with Claude's and some distinct.
-
-**Message roles carry somewhat different weight.** OpenAI's chat-completion-style APIs use `system`, `user`, and `assistant` roles, and — as of writing — recent OpenAI guidance has introduced more granular instruction-hierarchy concepts (distinguishing platform-level, developer-level, and user-level instructions) rather than treating "system prompt" as the single highest-priority channel the way earlier conventions did. Because this hierarchy has been actively evolving, check current OpenAI documentation for the specific role/priority model of the API version you're targeting rather than assuming it matches an older mental model.
-
-**Markdown and structured formatting are well-respected**, similarly to Claude, but some OpenAI model versions have specifically been documented as trending toward heavier or lighter use of markdown formatting (bullets, headers, bold) in default responses across different releases — if your application parses or displays model output in a way that's sensitive to formatting (rendering into a UI that expects plain prose, for instance), it's worth explicitly specifying the desired formatting rather than relying on a model version's current default tendency, which can shift between releases.
-
-::code-wrapper{language="markdown"}
-```markdown
-Respond in plain prose only. Do not use markdown formatting — no bullet
-points, no headers, no bold text, no numbered lists — even if the
-content would normally lend itself to a list.
+# WHAT NEEDS RE-TUNING PER FAMILY:
+#   - formatting conventions (XML tags, markdown defaults)
+#   - system-message weighting / instruction hierarchy
+#   - reasoning-elicitation phrasing (CoT vs. let-the-model-reason-internally)
+#   - refusal/caution thresholds
+#   - verbosity defaults
 ```
 ::
 
-**Reasoning-focused models often need less explicit chain-of-thought prompting, and sometimes actively discourage it.** OpenAI's reasoning-optimized model lines are trained to perform extended internal reasoning before answering, similar in spirit to Claude's extended thinking (Chapter 15), and OpenAI's own guidance for these models has generally recommended *simpler*, more direct prompts rather than heavily hand-crafted "think step by step" scaffolding — the model's built-in reasoning process can be actively hindered by a prompt that tries to over-specify its reasoning steps, in some documented cases. This is a meaningful contrast with a standard (non-reasoning-optimized) chat model, where Chapter 5's explicit chain-of-thought techniques still reliably help. Which regime a given model falls into is not always obvious from its name alone, and shifts across releases — check the model-specific guidance before assuming either "add explicit reasoning steps" or "keep it simple and let the model reason internally" is the right default.
+## OpenAI Conventions
 
-## A Concrete Portability Example
+::code-wrapper{language="python" filename="openai_conventions.py"}
+```python
+# MESSAGE ROLES carry different weight than Claude's system-priority model.
+# OpenAI has evolved toward more granular instruction hierarchy:
+#   - platform-level instructions (highest)
+#   - developer-level instructions
+#   - user-level instructions
+# This is actively evolving — check current OpenAI docs for the specific
+# role/priority model of the API version you're targeting.
 
-Consider a structured-extraction prompt (Chapter 7) tuned against one model family using heavy XML tagging:
+# MARKDOWN is well-respected, but default formatting tendency (heavier vs lighter
+# use of bullets/headers/bold) shifts across model versions. If your app parses
+# or displays output in a way sensitive to formatting, specify the desired format
+# explicitly rather than relying on a version's current default.
 
-::code-wrapper{language="markdown"}
+# REASONING-OPTIMIZED MODELS (o1, o3, etc.) often need LESS explicit CoT prompting
+# — and sometimes actively DISCOURAGE it. The model's built-in reasoning process can
+# be HINDERED by a prompt trying to over-specify reasoning steps. This is a meaningful
+# contrast with standard chat models where Chapter 5's explicit CoT techniques help.
+
+# RULE: check model-specific guidance before assuming either
+# "add explicit reasoning steps" or "keep it simple and let it reason" is right.
+```
+::
+
+::code-wrapper{language="markdown" filename="openai_format_control.md"}
 ```markdown
+Respond in plain prose only. Do not use markdown formatting — no bullet
+points, no headers, no bold text, no numbered lists — even if the content
+would normally lend itself to a list.
+```
+::
+
+## Portability Example: Structured Extraction
+
+::code-wrapper{language="markdown" filename="portable_vs_nonportable.md"}
+```markdown
+<!-- Claude-optimized prompt using XML tags — works on most models but
+     reliability of the JSON output specifically varies by family -->
 <email>
 {{raw email text}}
 </email>
@@ -41,110 +85,205 @@ level (low/medium/high) as JSON.
 ```
 ::
 
-This prompt is likely to work reasonably on most capable models — XML-as-delimiter is broadly readable — but the *reliability* of the JSON output specifically (does it always come back as valid, parseable JSON with no surrounding prose?) tends to vary by family and by whether you're using a model's dedicated structured-output or JSON-mode feature rather than prompting for JSON in free text. A more portable version of the same task leans on each provider's actual structured-output mechanism (JSON schema mode, function-calling-shaped output, or equivalent) rather than relying purely on prompted formatting instructions, precisely because the prompted version's reliability is the part most likely to vary across families and across model versions within the same family.
+::code-wrapper{language="python" filename="portable_structured_output.py"}
+```python
+import json
 
-::code-wrapper{language="json"}
-```json
-{
-  "type": "object",
-  "properties": {
-    "requested_action": {"type": "string"},
-    "deadline": {"type": ["string", "null"]},
-    "urgency": {"type": "string", "enum": ["low", "medium", "high"]}
-  },
-  "required": ["requested_action", "deadline", "urgency"]
+# MORE PORTABLE: use each provider's NATIVE structured-output mechanism
+# rather than relying purely on prompted formatting instructions.
+# The SHAPE GUARANTEE transfers even when prose-level instruction nuances don't.
+
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "requested_action": {"type": "string"},
+        "deadline": {"type": ["string", "null"]},
+        "urgency": {"type": "string", "enum": ["low", "medium", "high"]},
+    },
+    "required": ["requested_action", "deadline", "urgency"],
 }
+
+# Provider-specific invocation (parameter names differ — check current docs):
+# Claude: output_config={"format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA}}
+# OpenAI: response_format={"type": "json_schema", "json_schema": {"schema": EXTRACTION_SCHEMA}}
+#
+# The conceptual point that transfers everywhere: prefer letting the API constrain
+# generation over prompting-and-hoping whenever the feature is available.
 ```
 ::
 
-Using this schema through a provider's native structured-output feature, where available, is more portable in the sense that matters practically — the *shape guarantee* transfers even when the prose-level instruction-following nuances underneath it don't transfer identically.
+## Open-Weight Models and Chat Templates
 
-## Differences in Instruction-Following Style
-
-Beyond formatting, model families differ in how they resolve ambiguity, how eagerly they add unrequested elaboration, and how they handle conflicting instructions — none of which is fully documented in any provider's guide, and all of which are best discovered empirically for your specific use case rather than assumed from general reputation.
-
-A few patterns that show up often enough to be worth watching for when porting a prompt, stated carefully as tendencies rather than guarantees, since they shift across model versions:
-
-- **Verbosity defaults differ.** A prompt that produces an appropriately terse answer on one model can produce a noticeably longer, more hedged, or more heavily caveated answer on another with an identical instruction — if response length matters to your application, state a length constraint explicitly (Chapter 4) rather than relying on either model's default verbosity matching what you saw during initial development.
-- **Refusal and caution thresholds differ.** A request that one model handles directly can trigger a more cautious, hedged, or declining response on another, particularly around medical, legal, financial, or safety-adjacent topics — a prompt developed and tested against one model's threshold can unexpectedly start failing (or unexpectedly stop failing) after a model swap, which is a strong argument for the eval-set regression testing covered in Chapter 19 whenever you change model or model version.
-- **Sensitivity to instruction position in a long prompt differs.** Chapter 8 covered position effects generally; the exact shape of that effect (how much a middle-buried instruction degrades versus one near the start or end) is not identical across model families or even necessarily stable across versions of the same family.
-
-## Prompting Open-Weight and Smaller Models
-
-Open-weight models (Llama, Mistral, and others) and smaller models generally are often more sensitive to exact prompt template formatting than the larger hosted-API models this course has mostly discussed — many open-weight models were instruction-tuned against a very specific chat template (particular special tokens or role markers), and deviating from that exact template, even in ways a hosted API model would tolerate gracefully, can measurably degrade output quality:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="chat_template.md"}
 ```markdown
-Wrong (informal, ignores the model's expected chat template):
-"Hey, can you summarize this: {{document}}"
+<!-- WRONG: informal, ignores the model's expected chat template -->
+Hey, can you summarize this: {{document}}
 
-Right (matches the model's documented chat template exactly, typically
-handled by the inference library/tokenizer rather than hand-typed, but
-shown here for illustration):
+<!-- RIGHT: matches the model's documented chat template exactly.
+     In practice, this is handled by the serving framework (transformers, vLLM,
+     llama.cpp) automatically. The actionable takeaway: confirm your tooling is
+     applying the CORRECT template for the specific model checkpoint. -->
 <s>[INST] Summarize the following document.
 
 {{document}} [/INST]
 ```
 ::
 
-In practice this templating is usually handled for you by the serving framework or SDK (Hugging Face's `transformers`, `vLLM`, `llama.cpp` bindings, etc.) applying the correct chat template automatically — the actionable takeaway is to confirm your tooling is applying the *correct* template for the specific model checkpoint you're using, rather than assuming a generic one works, and to expect noticeably less forgiving behavior around ambiguous or unconventional prompt phrasing than a large hosted API model exhibits. Smaller models also generally benefit more, not less, from explicit few-shot examples (Chapter 3) — the zero-shot instruction-following gap between a frontier hosted model and a smaller open-weight one is often exactly the gap that one or two good examples closes.
+::code-wrapper{language="python" filename="open_weight_tips.py"}
+```python
+# Open-weight models (Llama, Mistral, etc.) are OFTEN MORE SENSITIVE to exact
+# prompt template formatting than large hosted-API models. Many were instruction-tuned
+# against a VERY SPECIFIC chat template (particular special tokens or role markers).
+# Deviating from that exact template — even in ways a hosted model tolerates — can
+# measurably degrade output quality.
 
-## Writing Prompts That Degrade Gracefully Across Models
+# In practice, the templating is handled by the serving framework:
+#   - Hugging Face transformers: applies the correct chat template automatically
+#   - vLLM: same
+#   - llama.cpp: same
+# The actionable takeaway: CONFIRM your tooling applies the correct template.
 
-Given that full portability isn't realistic, the practical goal is a prompt that degrades *gracefully* rather than catastrophically when run against a different model than it was tuned for:
-
-- **State constraints explicitly rather than relying on a model's default tendency** — length, tone, and format instructions written out plainly transfer better than a prompt that omits them because "the model I tested with just does this by default."
-- **Prefer native structured-output mechanisms over prompted formatting instructions** wherever more than one model family needs to consume the same prompt, since the underlying guarantee is closer to universal even when the exact API shape to invoke it differs per provider.
-- **Keep chain-of-thought elicitation as a clearly separable, easily removable block** — a prompt that has "think step by step, then answer" as a distinct, isolated instruction is trivial to strip out if you later target a reasoning-optimized model that performs worse with it; a prompt where reasoning instructions are woven inextricably through the whole task description is much harder to adapt.
-- **Build the eval set (Chapter 19) before you need it for a model migration, not during one** — the single most reliable way to know whether a prompt survived a model swap is a concrete before/after comparison on real test cases, not an impression from a handful of manual spot checks.
-
-## 💡 Tips & Tricks
-
-- **Portability** — When a prompt needs to run against multiple model families in production (a fallback provider, an A/B test, a multi-model router), maintain one shared "core task" block and small per-model wrapper sections for formatting/role conventions, rather than forking the entire prompt per model — this keeps the actual task logic in one place to update.
-- **Debug** — If a prompt that worked well suddenly degrades after a routine model version upgrade (even within the same family), suspect a shifted default behavior (verbosity, refusal threshold, formatting tendency) before suspecting your own prompt — providers do change these defaults between versions without it counting as a breaking API change.
-- **Idiom** — For reasoning-optimized models specifically, try the simplest possible direct prompt first and only add explicit reasoning scaffolding if you can show, empirically, that it improves your eval-set results — the "more explicit structure is always at least neutral" assumption from earlier chapters does not reliably hold for this model category.
-- **Performance** — When working with a smaller or open-weight model, invest evaluation effort in confirming the chat template is applied correctly before concluding the model itself is the limiting factor — a surprising fraction of "this small model is just bad at instruction-following" reports trace back to a template mismatch, not a capability gap.
-- **Idiom** — Keep a small, explicit "model assumptions" note alongside any production prompt (which model and version it was tuned against, what native features it relies on) — this turns a future model migration into a checklist instead of an archaeology project.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **A prompt that relies on implicit system-prompt priority can fail silently on an API using a different instruction hierarchy** — an instruction placed in a system message assuming it always overrides user-turn content may not hold with the same strength across every provider's role-priority model, especially as these hierarchies (particularly OpenAI's, as of writing) continue to evolve; a security-relevant constraint should never depend solely on message-role placement across an unverified provider (see also Chapter 18).
-- **Refusal-threshold differences can look like a regression when they're actually a policy difference.** A legitimate, benign request that one model handles and another declines is not necessarily a prompting bug to fix by rephrasing more aggressively — sometimes it correctly reflects a different safety threshold, and the right response is adjusting the request's framing or context, not trying to engineer around a deliberate guardrail.
-- **JSON-mode-style constraints from one provider don't automatically mean valid JSON from another** — different "guaranteed structured output" features have different actual guarantees (schema-validated versus merely JSON-syntax-valid versus best-effort), and treating them as interchangeable without checking is a common source of a "the schema validation started failing after we switched providers" incident.
-- **A model swap can silently change token-counting and context-window behavior** even when the numbers look similar on paper — different tokenizers segment the same text differently, so a prompt that fit comfortably under one model's context limit is not guaranteed to fit under a superficially similar-sized limit on another, since the actual token count for the same input text differs by tokenizer.
-- **"It works when I test it manually" is not evidence of portability.** Manual spot-checking during a model migration reliably misses the specific edge cases (unusual formatting requests, boundary-length inputs, ambiguous phrasing) where behavior actually diverges between families — this is precisely the gap the eval-set approach in Chapter 19 exists to close, and skipping it during a model migration is a common, avoidable source of production regressions.
-
-## 🧠 Spot the Issue
-
-A team's support-ticket triage prompt was developed and tuned entirely against one model family. It's ported to a second provider with no changes, on the assumption that "it's just an API call, the prompt is the prompt":
-
-::code-wrapper{language="markdown"}
-```markdown
-You are a ticket triage assistant. Categorize the ticket and return
-JSON: {"category": "...", "priority": "..."}
-
-Think through your reasoning step by step before giving the final JSON.
-
-Ticket: {{ticket_text}}
+# Smaller models also generally benefit MORE from explicit few-shot examples (Chapter 3).
+# The zero-shot instruction-following gap between a frontier model and a smaller
+# open-weight one is often exactly the gap that 1-2 good examples closes.
 ```
 ::
 
-After the switch, an increasing number of responses fail to parse as JSON — the model now often includes a paragraph of reasoning text before the JSON object, sometimes with the object embedded mid-paragraph rather than isolated. What changed, and what's the more robust fix?
+## Graceful Degradation Across Models
+
+::code-wrapper{language="python" filename="graceful_degradation.py"}
+```python
+# Full portability isn't realistic. The practical goal: degrade GRACEFULLY,
+# not catastrophically, when run against a different model than tuned for.
+
+GRACEFUL_DEGRADATION_PRINCIPLES = {
+    "explicit_constraints": "State length, tone, format plainly — don't rely on a model's default tendency",
+    "native_structured_output": "Prefer API-enforced schemas over prompted formatting when >1 model family",
+    "separable_cot": "Keep 'think step by step' as a clearly isolated, removable block — trivial to strip for reasoning-optimized models",
+    "eval_set_before_migration": "Build the eval set (Chapter 19) BEFORE you need it — the most reliable way to know if a prompt survived a swap",
+}
+
+# ANTI-PATTERN: forking the entire prompt per model
+# PRODUCTION: maintain one shared "core task" block + small per-model wrapper sections
+# for formatting/role conventions. Keeps the actual task logic in one place to update.
+
+SHARED_CORE = """
+Classify the support ticket into BILLING, BUG_REPORT, FEATURE_REQUEST,
+ACCOUNT_ACCESS, or OTHER. Reply with only the category label.
+"""
+
+# Per-model wrapper (tiny — only what differs):
+CLAUDE_WRAPPER = {"system": f"You are a ticket triage assistant.\n\n{SHARED_CORE}"}
+GPT_WRAPPER = {"system": SHARED_CORE}  # GPT may not need the persona wrapper
+OPEN_WEIGHT_WRAPPER = {
+    "system": f"You are a ticket triage assistant. {SHARED_CORE}\n\nExamples:\nTicket: 'charged twice' → BILLING\nTicket: 'app crashes' → BUG_REPORT",
+    # Open-weight benefits more from few-shot examples (Chapter 3)
+}
+```
+::
+
+## 💡 Tips & Tricks
+
+::code-wrapper{language="python" filename="tips.py"}
+```python
+# [Portability] When a prompt runs against multiple model families (fallback,
+# A/B test, multi-model router), maintain one shared "core task" block + small
+# per-model wrapper sections for formatting/role conventions. Don't fork the
+# entire prompt per model.
+
+# [Debug] If a prompt that worked well suddenly degrades after a routine model
+# version upgrade (even within the same family), suspect a shifted default behavior
+# (verbosity, refusal threshold, formatting) before suspecting your own prompt.
+# Providers change defaults between versions without it being a "breaking change."
+
+# [Idiom] For reasoning-optimized models, try the simplest possible direct prompt
+# FIRST and only add explicit reasoning scaffolding if you can show empirically
+# it improves eval-set results. "More structure is always at least neutral" does
+# NOT hold for this model category.
+
+# [Performance] When working with a smaller/open-weight model, invest evaluation
+# effort in confirming the chat template is applied correctly BEFORE concluding
+# the model itself is the limiting factor. Many "this small model is just bad at
+# instruction-following" reports trace to a template mismatch, not a capability gap.
+
+# [Idiom] Keep a small "model assumptions" note alongside any production prompt:
+# which model/version it was tuned against, what native features it relies on.
+# This turns a future model migration into a checklist instead of archaeology.
+```
+::
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="python" filename="edge_cases.py"}
+```python
+# [Safety] A prompt relying on implicit system-prompt priority can fail silently on
+# an API using a different instruction hierarchy. A security-relevant constraint
+# should NEVER depend solely on message-role placement across an unverified provider.
+
+# [Gotcha] Refusal-threshold differences can look like a regression when they're a
+# policy difference. A legitimate request one model handles and another declines is
+# not necessarily a prompting bug — sometimes it reflects a different safety threshold.
+# The right response is adjusting the request's framing, not engineering around a guardrail.
+
+# [Gotcha] JSON-mode guarantees differ across providers: schema-validated vs merely
+# JSON-syntax-valid vs best-effort. Treating them as interchangeable without checking
+# is a common source of "schema validation started failing after we switched providers."
+
+# [Gotcha] A model swap can silently change token-counting behavior. Different
+# tokenizers segment the same text differently — a prompt that fit under one model's
+# context limit is NOT guaranteed to fit under a similar-sized limit on another.
+
+# [Gotcha] "It works when I test it manually" is NOT evidence of portability. Manual
+# spot-checking during a migration reliably misses the specific edge cases where
+# behavior actually diverges. This is the gap the eval-set approach (Chapter 19) closes.
+```
+::
+
+## 🧠 Spot the Bug
+
+A support-ticket triage prompt tuned on one model family is ported unchanged to a second provider: "You are a ticket triage assistant. Categorize the ticket and return JSON: {\"category\": \"...\", \"priority\": \"...\"}. Think through your reasoning step by step before giving the final JSON." After the switch, responses increasingly fail to parse as JSON — the model includes reasoning text before the JSON, sometimes with the object embedded mid-paragraph. What changed?
 
 <details>
 <summary>Answer</summary>
 
-Two portability assumptions failed at once. First, "think step by step" combined with a request for a clean, isolated JSON object works fine on some models but is exactly the kind of interaction the new model family may handle differently — its default behavior might interleave reasoning and answer more freely, or might not cleanly separate "thinking out loud" from "the actual structured answer" the way the original model did, so the visible reasoning text ends up sitting right next to (or wrapped around) the JSON instead of cleanly preceding it. Second, and more fundamentally, the original prompt was relying on *prompted* JSON formatting rather than any provider-native structured-output guarantee — that reliability gap was already a portability risk noted earlier in this chapter, and switching providers is exactly the event that exposes it, since "the model usually formats it correctly" was never actually enforced. The robust fix is twofold: use the new provider's native structured-output/JSON-schema feature so the final answer's shape is enforced by the API rather than requested in prose, and if step-by-step reasoning is still wanted, request it in a clearly separate, explicitly delimited section (or via that provider's dedicated reasoning mechanism, if it has one) rather than trusting that "think step by step, then give JSON" parses the same way it used to just because the English instruction text is identical.
+Two portability assumptions failed at once:
 
-**The lesson**: an identical prompt string is not an identical instruction across model families — reasoning-elicitation phrasing and prompted-only formatting are exactly the two things most likely to break silently on a model swap, and provider-native structured-output mechanisms exist specifically to remove that fragility.
+1. **"Think step by step" + a request for clean isolated JSON** works on some models but is exactly the interaction the new model family may handle differently — its default behavior interleaves reasoning and answer more freely, so the reasoning text sits next to (or wrapped around) the JSON instead of cleanly preceding it.
+
+2. **The original prompt relied on *prompted* JSON formatting** rather than any provider-native structured-output guarantee. That reliability gap was already a portability risk — switching providers is exactly the event that exposes it.
+
+The robust fix: use the new provider's native structured-output/JSON-schema feature so the final answer's shape is enforced by the API, and if step-by-step reasoning is still wanted, request it in a clearly separate, explicitly delimited section (or via the provider's dedicated reasoning mechanism) rather than trusting "think step by step, then give JSON" parses the same way across families.
+
+The lesson: an identical prompt string is not an identical instruction across model families — reasoning-elicitation phrasing and prompted-only formatting are the two things most likely to break silently on a model swap.
 
 </details>
 
 ## Key Takeaways
 
-- Prompt portability across model families is partial, not automatic — the model-agnostic fundamentals (clarity, structure, decomposition) transfer well; formatting conventions, system-message priority, and reasoning-elicitation phrasing often do not.
-- OpenAI's conventions include an evolving, more granular instruction-hierarchy model (beyond a flat system/user split) and reasoning-optimized models that often perform better with simpler, less heavily-scaffolded prompts than Chapter 5's chain-of-thought techniques suggest for standard models.
-- Prefer a provider's native structured-output mechanism over purely prompted formatting instructions whenever a prompt might run against more than one model or model version — the enforced-shape guarantee transfers far better than prompted formatting reliability does.
-- Open-weight and smaller models are typically more sensitive to exact chat-template formatting and benefit more from explicit few-shot examples — confirm your serving stack applies the correct template before concluding a model lacks the capability to do the task.
-- Verbosity defaults, refusal/caution thresholds, and position-in-context sensitivity all vary across families and across versions within a family — a prompt's behavior on one model is a data point about that model, not a universal fact about the prompt.
-- The only reliable way to know whether a prompt survived a model migration is eval-set regression testing (Chapter 19) built before the migration, not manual spot-checking during or after it.
+::code-wrapper{language="python" filename="key_takeaways.py"}
+```python
+"""
+Working with GPT & other models — portability and graceful degradation.
+"""
+
+# 1. Prompt portability is PARTIAL, not automatic. Model-agnostic fundamentals
+#    (clarity, structure, decomposition) transfer well; formatting conventions,
+#    system-message priority, and reasoning phrasing often do NOT.
+
+# 2. OpenAI: evolving instruction hierarchy (beyond flat system/user), reasoning-
+#    optimized models that often perform better with SIMPLER prompts, not heavier
+#    CoT scaffolding. Check model-specific guidance.
+
+# 3. Prefer provider-native structured-output mechanisms over prompted formatting
+#    whenever a prompt might run against >1 model family. The enforced-shape
+#    guarantee transfers far better than prompted formatting reliability.
+
+# 4. Open-weight/smaller models: more sensitive to exact chat-template formatting,
+#    benefit MORE from few-shot examples. Confirm your serving stack applies the
+#    correct template before concluding a model lacks capability.
+
+# 5. The only reliable way to know if a prompt survived a model migration is
+#    eval-set regression testing (Chapter 19) built BEFORE the migration —
+#    not manual spot-checking during or after it.
+```
+::

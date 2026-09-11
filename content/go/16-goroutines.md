@@ -1,198 +1,397 @@
+---
+title: "16 — Goroutines"
+description: "Goroutine scheduling model (G-M-P), stack growth, GOMAXPROCS, leak prevention, and the preemptive scheduler — the concurrency engine."
+---
+
 # 16 — Goroutines
 
-Goroutines are Go's lightweight concurrency primitive — functions running concurrently in the same address space, managed by the Go runtime (not the OS).
-
-## Starting a Goroutine
+## The G-M-P Scheduling Model
 
 ::code-wrapper{language="go"}
 ```go
-go myFunction(arg1, arg2)
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ Go's scheduler uses a G-M-P model:                                   │
+// │                                                                      │
+// │   G (Goroutine)  — a goroutine (your `go func()`)                    │
+// │   M (Machine)    — an OS thread (managed by the runtime)             │
+// │   P (Processor)  — a logical processor (GOMAXPROCS of these)         │
+// │                                                                      │
+// │   Each P has a local run queue of Gs.                                │
+// │   M executes Gs from its P's queue.                                  │
+// │   When a G blocks (syscall, channel), the M is parked and the P      │
+// │   is handed to another M to keep running Gs.                         │
+// │                                                                      │
+// │   Work stealing: if a P's queue is empty, it steals Gs from other Ps.│
+// │   This keeps all CPUs busy without OS-level thread management.       │
+// │                                                                      │
+// │   Goroutine stack: starts at 2KB (Go 1.4+), grows on demand.         │
+// │   You can have millions of goroutines (each ~2-8KB).                 │
+// └──────────────────────────────────────────────────────────────────────┘
 
-go func() {
-	fmt.Println("anonymous goroutine")
-}()
-``
-::
+func schedulingModel() {
+	// GOMAXPROCS = number of Ps = concurrent CPU-bound goroutines.
+	// Default = runtime.NumCPU().
+	fmt.Println("GOMAXPROCS:", runtime.GOMAXPROCS(0))  // e.g., 8 on 8-core
 
-`go f(args)` starts `f` in a new goroutine and returns immediately — the caller continues while `f` runs concurrently. Goroutines share memory (same address space) — synchronize with channels or `sync` (chapters 17-20).
-
-## Lightweight
-
-Goroutines are cheap — a few KB of stack each (growable), managed by the Go scheduler, not OS threads. You can have **millions** of goroutines:
-
-::code-wrapper{language="go"}
-```go
-for i := 0; i < 100000; i++ {
-	go func(i int) {
-		// do work
-	}(i)
+	// I/O-bound goroutines block on syscalls — the M parks, the P gets
+	// a new M. So you can have MORE goroutines than GOMAXPROCS (they
+	// block on I/O, yielding the thread).
 }
-``
-::
+```
 
-The Go scheduler multiplexes goroutines onto a small number of OS threads (`GOMAXPROCS`, default = number of CPU cores). Don't create OS threads for concurrent work in Go — use goroutines.
-
-## The Main Goroutine
-
-`func main` runs in the main goroutine. When `main` returns, the program exits — **all other goroutines are killed** without running their deferred functions:
+## Starting Goroutines
 
 ::code-wrapper{language="go"}
 ```go
+// `go f(args)` starts f in a new goroutine and returns immediately.
+// The caller continues while f runs concurrently.
+
+func fetchURL(url string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("fetch %s: %v", url, err)
+		return
+	}
+	defer resp.Body.Close()
+	// process resp
+}
+
 func main() {
+	urls := []string{"https://a.com", "https://b.com", "https://c.com"}
+	var wg sync.WaitGroup
+	for _, url := range urls {
+		wg.Add(1)
+		go fetchURL(url, &wg)  // launch one goroutine per URL
+	}
+	wg.Wait()  // block until all fetches complete
+}
+
+// ⚠️ The main goroutine can exit before others finish — all goroutines
+// are killed when main returns. ALWAYS synchronize (WaitGroup, channel).
+```
+
+## The Main Exit Problem
+
+::code-wrapper{language="go"}
+```go
+// ❌ ANTI-PATTERN: no synchronization — goroutine may not run
+func badMain() {
 	go func() {
-		fmt.Println("hello from goroutine")
+		fmt.Println("hello from goroutine")  // might never print!
 	}()
-	// main returns immediately — the goroutine may or may not run!
+	// main returns immediately — the goroutine is killed.
 }
-``
-::
 
-This is the classic "I started a goroutine and nothing happened" — `main` exits before the goroutine runs. Use `time.Sleep` (for demos only), a `sync.WaitGroup`, or a channel to wait:
-
-::code-wrapper{language="go"}
-```go
-func main() {
+// ✅ CORRECT: WaitGroup — block until goroutines finish
+func goodMain() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		fmt.Println("hello from goroutine")
 	}()
-	wg.Wait()   // blocks until the goroutine calls Done
+	wg.Wait()  // blocks until Done is called
 }
-``
-::
 
-## GOMAXPROCS
-
-`GOMAXPROCS` controls how many OS threads run Go code simultaneously. Default = number of CPU cores. `runtime.GOMAXPROCS(n)` sets it (returns the old value).
-
-::code-wrapper{language="go"}
-```go
-runtime.GOMAXPROCS(4)   // use at most 4 OS threads
-n := runtime.GOMAXPROCS(0)   // query without changing
-``
-::
-
-For CPU-bound work, `GOMAXPROCS = cores` is optimal. For I/O-bound work, more goroutines than cores is fine (they block on I/O, yielding the thread).
-
-## Goroutine Leaks
-
-A goroutine that can't proceed (blocked on a channel, waiting for a lock, in an infinite loop) and isn't reachable is **leaked** — it stays alive forever, consuming memory:
-
-::code-wrapper{language="go"}
-```go
-func leak() {
-	ch := make(chan int)
+// ✅ CORRECT: channel — block until signal received
+func channelMain() {
+	done := make(chan struct{})
 	go func() {
-		val := <-ch   // blocks forever — no one sends to ch
+		fmt.Println("working...")
+		close(done)  // signal completion
+	}()
+	<-done  // block until done is closed
+}
+```
+
+## Goroutine Leaks — Detection and Prevention
+
+::code-wrapper{language="go"}
+```go
+// A leaked goroutine is one that's blocked forever and can't be reached.
+// It stays alive, consuming memory (stack + any captured variables).
+
+// ❌ LEAK: goroutine blocks forever — no one sends to ch
+func leakyFunc() {
+	ch := make(chan int)  // unbuffered
+	go func() {
+		val := <-ch  // blocks forever — no sender
 		fmt.Println(val)
 	}()
-	// leak() returns; the goroutine is stuck, never freed
+	// leakyFunc returns; the goroutine is stuck, never freed.
 }
-``
-::
 
-Leaked goroutines accumulate, eventually exhausting memory. Prevent leaks by:
-- Always ensuring a goroutine has a way to exit (a done channel, `context` cancellation).
-- Using `select` with a `default` or `<-ctx.Done()` to avoid blocking forever.
-- Tools: `pprof` goroutine profile (chapter 27) shows stuck goroutines.
+// ✅ FIX: pass a context so the goroutine can exit
+func nonLeaky(ctx context.Context) <-chan int {
+	ch := make(chan int, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case ch <- compute():
+		case <-ctx.Done():  // exit path — prevents leak
+			return
+		}
+	}()
+	return ch
+}
 
-## `runtime.Gosched` and Blocking
+// ❌ LEAK: goroutine blocks on send — no receiver
+func leakyProducer() {
+	ch := make(chan int)  // unbuffered
+	go func() {
+		for i := 0; i < 1000; i++ {
+			ch <- i  // blocks if no one receives — leak
+		}
+	}()
+	// receiver never starts → goroutine stuck on first send
+}
 
-- `runtime.Gosched()` — yields the current goroutine, letting others run. Rarely needed (the scheduler is preemptive since Go 1.14).
-- Blocking operations (channel send/receive, syscall, lock) yield the goroutine's thread to another goroutine. The scheduler handles this automatically.
+// ✅ FIX: buffered channel + context, or select with ctx.Done
+func safeProducer(ctx context.Context) <-chan int {
+	ch := make(chan int, 100)  // buffer absorbs bursts
+	go func() {
+		defer close(ch)
+		for i := 0; ; i++ {
+			select {
+			case ch <- i:
+			case <-ctx.Done():
+				return  // exit when cancelled
+			}
+		}
+	}()
+	return ch
+}
+```
 
-## When to Use Goroutines
+## Detecting Leaks with `pprof`
 
-- **I/O-bound work** — network calls, file I/O, database queries. Goroutines block on I/O, yielding the thread.
-- **CPU-bound parallelism** — when you have independent work units, goroutines + `GOMAXPROCS` parallelize across cores.
-- **Concurrency** — when independent operations can proceed in parallel (fan-out, pipelines).
+::code-wrapper{language="go"}
+```go
+// import _ "net/http/pprof"
+// go func() {
+//     log.Println(http.ListenAndServe("localhost:6060", nil))
+// }()
 
-**Don't use goroutines for**:
-- Sequential dependencies (no parallelism to exploit).
-- Tiny operations (goroutine creation overhead exceeds the work).
-- Unbounded fan-out (millions of goroutines doing trivial work — use a worker pool, chapter 26).
+// Then, in another terminal:
+// go tool pprof http://localhost:6060/debug/pprof/goroutine
+// (pprof) top
+// (pprof) traces
+
+// This shows all live goroutines and their stack traces.
+// Leaked goroutines appear as stuck on a channel send/receive.
+// Look for goroutines that don't have a <-ctx.Done() exit path.
+
+// In tests, use go.uber.org/goleak to detect leaks:
+//
+// import "go.uber.org/goleak"
+// func TestMain(m *testing.M) {
+//     goleak.VerifyTestMain(m)  // fails if goroutines leak after tests
+// }
+```
+
+## Unbounded Fan-Out — The Resource Exhaustion Trap
+
+::code-wrapper{language="go"}
+```go
+// ❌ ANTI-PATTERN: unbounded goroutine creation
+func fetchAllBad(urls []string) {
+	for _, url := range urls {
+		go fetch(url)  // creates len(urls) goroutines at once!
+	}
+	// With 1M URLs: 1M goroutines, 1M HTTP connections, 1M DNS lookups.
+	// Exhausts memory, file descriptors, and overwhelms the server.
+}
+
+// ✅ CORRECT: worker pool — bounded concurrency
+func fetchAllGood(urls []string, maxWorkers int) {
+	jobs := make(chan string, len(urls))
+	results := make(chan error, len(urls))
+	var wg sync.WaitGroup
+
+	// Start a fixed number of workers:
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for url := range jobs {
+				results <- fetch(url)
+			}
+		}()
+	}
+
+	// Send all jobs:
+	for _, url := range urls {
+		jobs <- url
+	}
+	close(jobs)
+
+	// Wait for all workers to finish:
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results:
+	for err := range results {
+		if err != nil {
+			log.Printf("fetch error: %v", err)
+		}
+	}
+}
+```
+
+## The Closure Capture Trap (Pre-1.22)
+
+::code-wrapper{language="go"}
+```go
+// ❌ Pre-1.22: all goroutines capture the SAME i — print "3 3 3"
+func captureBad() {
+	for i := 0; i < 3; i++ {
+		go func() {
+			fmt.Println(i)  // captures i by reference — sees final value
+		}()
+	}
+	time.Sleep(time.Second)
+}
+
+// ✅ Fix (portable): pass i as an argument — fresh copy per goroutine
+func captureGood() {
+	for i := 0; i < 3; i++ {
+		go func(i int) {
+			fmt.Println(i)  // i is a parameter — distinct per call
+		}(i)
+	}
+}
+
+// ✅ Fix (portable): shadow i — new variable per iteration
+func captureShadow() {
+	for i := 0; i < 3; i++ {
+		i := i  // shadow — new i per iteration
+		go func() { fmt.Println(i) }()
+	}
+}
+
+// Go 1.22+: the original code is safe — each iteration has its own i.
+// The `go func(i int) { ... }(i)` pattern is still correct on 1.22+.
+```
+
+## Panic in Goroutines — Program Crash
+
+::code-wrapper{language="go"}
+```go
+// ❌ An unrecovered panic in a goroutine CRASHES THE ENTIRE PROGRAM.
+//   go func() {
+//       panic("boom")  // terminates the whole process, not just this goroutine
+//   }()
+
+// ✅ Always recover in goroutines that handle external input:
+func safeGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("goroutine panic: %v\n%s", r, debug.Stack())
+			}
+		}()
+		fn()
+	}()
+}
+
+// Usage in an HTTP server — one bad request shouldn't crash the server:
+func handler(w http.ResponseWriter, r *http.Request) {
+	safeGo(func() {
+		processBackgroundJob(r.Context())
+	})
+}
+```
+
+## GOMAXPROCS — When to Change It
+
+::code-wrapper{language="go"}
+```go
+func gomaxprocs() {
+	// Default = NumCPU. Don't change it unless you have a specific reason.
+
+	// Reasons to REDUCE GOMAXPROCS:
+	//   - In containers with CPU limits, set GOMAXPROCS = the limit
+	//     (Go reads the host's CPU count, not the cgroup limit — this
+	//     over-allocates threads. Use automaxprocs or set it manually.)
+	//   - In a shared environment where you want to leave cores for other
+	//     processes.
+
+	// Reasons to INCREASE GOMAXPROCS (rare):
+	//   - I/O-bound workload with many goroutines blocking on syscalls.
+	//     More Ps allow more syscalls to run concurrently. But each P
+	//     can spawn an M (OS thread), so this increases thread count.
+
+	// ⚠️ In Kubernetes/Docker with CPU limits:
+	//   Go 1.22+ respects cgroup CPU limits automatically (GOMAXPROCS
+	//   = the cgroup quota). Pre-1.22, use go.uber.org/automaxprocs or
+	//   set GOMAXPROCS explicitly.
+	runtime.GOMAXPROCS(4)  // cap at 4 Ps
+
+	// Query without changing:
+	n := runtime.GOMAXPROCS(0)
+	fmt.Println("Ps:", n)
+}
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: always ensure a goroutine has a way to exit — pass a `context.Context` (chapter 20) or a `done` channel, and `select` on `<-ctx.Done()` in any blocking wait. A goroutine that can block forever with no exit path is a leak.
-- **Idiom**: use `sync.WaitGroup` to wait for a known set of goroutines — `wg.Add(n)` before starting each, `defer wg.Done()` in each, `wg.Wait()` to block until all finish. This is the standard pattern for "do N things concurrently, then continue."
-- **Idiom**: use a worker pool (chapter 26) for bounded concurrency — unbounded `go f()` in a loop can create millions of goroutines, exhausting memory or overwhelming a downstream resource (DB connections, API rate limits). A fixed pool of N workers processes jobs from a channel.
-- **Debug**: goroutine leaks show up in `pprof`'s goroutine profile (`go tool pprof http://localhost:6060/debug/pprof/goroutine`) — it shows the stack traces of all live goroutines, revealing stuck ones. Leaked goroutines accumulate over time, slowly exhausting memory.
-- **Idiom**: `go func() { ... }()` for a one-off concurrent task, but pass loop variables as arguments (`go func(i int) { ... }(i)`) on pre-1.22 to avoid the capture-the-final-value bug. Go 1.22+ fixes loop variable scoping, so `go func() { ... use(i) ... }()` is safe.
+- **Idiom**: always pass `context.Context` to goroutines and `select` on `<-ctx.Done()` — this gives every goroutine an exit path, preventing leaks. A goroutine that can block forever with no exit is a leak waiting to happen.
+- **Idiom**: use `sync.WaitGroup` to wait for a known set of goroutines — `wg.Add(1)` before `go f()`, `defer wg.Done()` inside, `wg.Wait()` to block. Never `Add` inside the goroutine (race with `Wait`).
+- **Idiom**: use a worker pool for bounded concurrency — unbounded `go f()` in a loop can create millions of goroutines, exhausting memory and overwhelming downstream resources (DB connections, API rate limits).
+- **Debug**: `go tool pprof http://localhost:6060/debug/pprof/goroutine` shows all live goroutines and their stack traces — leaked goroutines appear stuck on a channel send/receive with no `<-ctx.Done()` path.
+- **Safety**: always `recover` in goroutines that handle external input — a single bad request causing a panic shouldn't crash the server. Log the panic + stack trace for debugging.
+- **Debug**: `go.uber.org/goleak.VerifyTestMain(m)` in tests — fails if goroutines leak after the test suite. Catches leaks in CI before they hit production.
 
 ## ⚠️ Edge Cases & Gotchas
 
 - **Main exiting kills all goroutines**: `main` returning terminates the program immediately — goroutines are stopped without running deferred functions. Use `WaitGroup`/channels to wait.
-- **Goroutine leak**: a goroutine blocked forever with no exit path is a leak — it stays alive, consuming memory. Use `context`/`done` channels and `select` to ensure exit paths.
-- **Closure capturing loop variables (pre-1.22)**: `for i := 0; ... { go func() { use(i) }() }` — all goroutines see the final `i`. Pass as argument or update to Go 1.22+.
+- **Goroutine leak**: a goroutine blocked forever with no exit path consumes memory forever. Use `context`/`done` channels and `select` to ensure exit paths.
+- **Closure capturing loop variables (pre-1.22)**: `for i := 0; ... { go func() { use(i) }() }` — all goroutines see the final `i`. Pass as argument or use Go 1.22+.
 - **No goroutine ID**: Go deliberately doesn't expose goroutine IDs (no `goroutine.ID()`) to discourage goroutine-local state. Use `context` for request-scoped values.
-- **Panic in a goroutine crashes the program**: an unrecovered panic in a goroutine terminates the whole program (not just the goroutine). Recover in goroutines that might panic (or ensure they can't).
-- **Goroutines aren't free**: a few KB of stack + scheduler overhead. Millions of goroutines doing trivial work waste resources — use a worker pool for bounded concurrency.
-- **`GOMAXPROCS` default = cores**: usually correct. Setting it > cores doesn't help CPU-bound work (no cores to run on); < cores underutilizes. For I/O-bound work, more goroutines than GOMAXPROCS is fine (they block on I/O, yielding threads).
-- **`runtime.LockOSThread`**: binds a goroutine to its OS thread — needed for some C libraries (via CGO) or runtime-specific APIs. Rare.
-- **Goroutine scheduling is preemptive (Go 1.14+)**: a goroutine can be preempted even without blocking (the scheduler sends async preemption). Long-running CPU loops don't starve other goroutines. Pre-1.14, a tight loop could starve.
-- **Starting a goroutine in a loop without bounds**: `for _, item := range huge { go process(item) }` creates len(huge) goroutines at once — can exhaust memory. Use a worker pool with a fixed number of workers.
+- **Panic in a goroutine crashes the program**: unrecovered panics terminate the whole process. Recover in goroutines that handle external input.
+- **Goroutines aren't free**: ~2KB stack minimum + scheduler overhead. Millions of goroutines doing trivial work waste resources — use a worker pool.
+- **`GOMAXPROCS` default = CPU count**: usually correct. In containers with CPU limits (pre-1.22), set it explicitly or use `automaxprocs` — Go reads the host's CPU count, not the cgroup limit.
+- **`runtime.LockOSThread`**: binds a goroutine to an OS thread — needed for some C libraries (CGO) or runtime-specific APIs. Rare; don't use without a specific reason.
+- **Goroutine scheduling is preemptive (Go 1.14+)**: a goroutine can be preempted even without blocking (async preemption). Long CPU loops don't starve other goroutines.
+- **Starting goroutines in a loop without bounds**: `for _, item := range huge { go process(item) }` creates len(huge) goroutines at once — exhausts memory. Use a worker pool.
 
-## 🧠 Spot the Bug
-
-A developer starts goroutines to fetch URLs, but the program prints nothing and exits:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
 func main() {
-	urls := []string{"a.com", "b.com", "c.com"}
-	for _, u := range urls {
+	for i := 0; i < 3; i++ {
 		go func() {
-			resp, _ := http.Get("http://" + u)
-			fmt.Println(u, resp.Status)
+			time.Sleep(100 * time.Millisecond)
+			fmt.Print(i, " ")
 		}()
 	}
+	time.Sleep(time.Second)
 }
 ```
+
+On Go 1.22+, what's printed? (Order may vary.)
 ::
-
-What are the bugs?
-
 <details>
 <summary>Answer</summary>
 
-Three bugs:
-
-1. **Main exits immediately**: `main` returns after starting the goroutines, before they finish. The program terminates, killing all goroutines — nothing prints. Fix: wait for the goroutines (WaitGroup or channel).
-
-2. **Loop variable capture (pre-1.22)**: `go func() { ... u ... }()` captures `u` by reference — all goroutines see the final value of `u` ("c.com"). Fix: pass `u` as an argument: `go func(u string) { ... }(u)`. (Go 1.22+ fixes this.)
-
-3. **Ignored error**: `resp, _ := http.Get(...)` discards the error — if the fetch fails, `resp` is nil and `resp.Status` panics. Fix: check the error.
-
-The corrected version:
-
-```go
-func main() {
-	urls := []string{"a.com", "b.com", "c.com"}
-	var wg sync.WaitGroup
-	for _, u := range urls {
-		wg.Add(1)
-		go func(u string) {
-			defer wg.Done()
-			resp, err := http.Get("http://" + u)
-			if err != nil {
-				fmt.Println(u, "error:", err)
-				return
-			}
-			defer resp.Body.Close()
-			fmt.Println(u, resp.Status)
-		}(u)
-	}
-	wg.Wait()
-}
+Go 1.22+:
 ```
-::
-**The lesson**: main exits before goroutines finish (use WaitGroup); pre-1.22 loop variables are captured by reference (pass as argument); ignored errors cause nil-dereference panics (check errors).
+0 1 2
+```
+(order may vary because goroutines run concurrently)
+
+Go 1.22 makes each iteration's loop variable distinct. Each goroutine captures its own `i`, so they print 0, 1, 2 (in some order).
+
+On pre-1.22, the output would be `3 3 3` — all goroutines capture the same `i`, which is 3 after the loop ends.
+
+The fix for pre-1.22 (portable to all versions): `go func(i int) { ... }(i)` — pass `i` as an argument, creating a fresh copy per goroutine.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now start goroutines with `go`, understand their lightweight nature and the scheduler, use `WaitGroup` to wait for them, prevent leaks with exit paths (`context`/`done`), avoid the loop-variable-capture bug, and know that main exiting kills all goroutines. Next: channels — the communication mechanism between goroutines.
+→ [17 — Channels](/go/17-channels) — unbuffered vs buffered semantics, close rules, directional channels, and nil channel patterns in select.

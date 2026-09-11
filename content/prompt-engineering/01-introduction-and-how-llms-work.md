@@ -1,98 +1,372 @@
+---
+title: 01 — Introduction & How LLMs Work
+description: The mechanical underpinnings of LLMs — next-token prediction, tokenization, context budgets, and inference-time conditioning — shown through production-grade annotated code, anti-patterns, edge cases, and failure modes.
+---
+
 # 01 — Introduction & How LLMs Work
 
-## What Prompt Engineering Actually Is
+## The Core Mechanism: Next-Token Prediction
 
-Prompt engineering is the practice of designing the input to a large language model (LLM) so that the output reliably does what you need. It sits at an odd intersection: part writing, part systems design, part empirical science. You are not "talking to" the model in the way you talk to a person — you are constructing a specific sequence of tokens that steers a statistical process toward a useful continuation.
+::code-wrapper{language="python" filename="next_token_prediction.py"}
+```python
+import torch
+from torch.nn.functional import softmax, log_softmax
+from dataclasses import dataclass
 
-That framing matters more than it sounds. Every technique in this course — few-shot examples, chain-of-thought, system prompts, XML structuring — is really a way of shaping the probability distribution the model samples from. Once you internalize that, a lot of "why does this work" questions answer themselves.
+@dataclass
+class GenerationConfig:
+    """Sampling parameters that shape the probability distribution at each step."""
+    temperature: float = 1.0       # >1 flattens (more random), <1 sharpens (more deterministic)
+    top_k: int = 0                 # 0 = disabled; otherwise only consider top-k logits
+    top_p: float = 1.0             # 1.0 = disabled; otherwise nucleus sampling — smallest set whose cumulative prob >= top_p
+    max_tokens: int = 512          # hard stop regardless of EOS
+    stop_sequences: tuple[str, ...] = ()  # early termination on exact string match
 
-This chapter covers the mechanics: what an LLM does when it generates text, what tokens and context windows are, and why the same request phrased two different ways can produce wildly different results.
+def generate_next_token(
+    model,                        # frozen transformer — weights never change during inference
+    token_ids: torch.Tensor,      # shape: [seq_len] — the full context so far, including model's own output
+    config: GenerationConfig,
+    is_first_token: bool = False,  # first generation step after the user prompt
+) -> int:
+    """
+    The ONE thing an LLM does: given a token sequence, produce the next token id.
+    Everything — reasoning, coding, refusal, translation — is this function called in a loop.
+    """
+    with torch.no_grad():                # inference only — no gradient computation, no weight updates
+        logits = model(token_ids)        # [vocab_size] — raw unnormalized scores for every possible next token
 
-## Next-Token Prediction: The One Thing an LLM Does
+    # --- Temperature: scales logits before softmax ---
+    # temperature=0.5 makes high-probability tokens even more likely (sharper distribution)
+    # temperature=2.0 flattens, making low-probability tokens more likely (more creative / noisier)
+    if config.temperature != 1.0:
+        logits = logits / config.temperature   # divide logits by T; T<1 amplifies differences, T>1 dampens them
 
-Stripped to its core, a large language model does exactly one thing: given a sequence of tokens, it predicts a probability distribution over what token comes next. That's it. Everything — answering questions, writing code, holding a conversation, refusing harmful requests — is this single mechanism applied repeatedly, one token at a time.
+    # --- Top-k: keep only the k highest-scoring tokens, set rest to -inf ---
+    if config.top_k > 0:
+        top_vals, _ = torch.topk(logits, config.top_k)
+        min_val = top_vals[-1]                       # the k-th highest logit
+        logits = torch.where(logits < min_val, torch.tensor(float('-inf')), logits)
 
-Concretely, generation works like this:
+    # --- Top-p (nucleus): keep smallest set of tokens whose cumulative prob >= top_p ---
+    if config.top_p < 1.0:
+        sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(softmax(sorted_logits, dim=-1), dim=-1)
+        # mask tokens that fall outside the nucleus (past the cumulative threshold)
+        sorted_mask = cumulative_probs - softmax(sorted_logits, dim=-1) > config.top_p
+        sorted_logits[sorted_mask] = float('-inf')
+        logits = torch.full_like(logits, float('-inf'))
+        logits[sorted_idx] = sorted_logits          # scatter back to original positions
 
-1. The model receives your prompt as a sequence of tokens.
-2. It computes a probability distribution over its entire vocabulary (tens of thousands of possible next tokens) for "what token is most likely to come next."
-3. It samples one token from that distribution (the exact sampling strategy varies — more on this below).
-4. That token gets appended to the sequence, and the process repeats, now including the token just generated, until a stop condition is reached (an end-of-turn marker, a stop sequence, or a length limit).
+    # --- Sample from the (possibly filtered, temperature-scaled) distribution ---
+    probs = softmax(logits, dim=-1)                 # normalize to a valid probability distribution
+    next_token_id = torch.multinomial(probs, num_samples=1).item()
 
-This is why LLMs are sometimes described as "extremely sophisticated autocomplete." That description is technically accurate but misleading in its implications — the model learned this next-token-prediction skill from a training corpus so large and varied that the resulting behavior includes reasoning, coding, translation, and instruction-following as emergent capabilities. Autocomplete on your phone predicts the next word from a small local pattern; a frontier LLM predicts the next token from a compressed representation of most of humanity's written text, run through a network with hundreds of billions of parameters. The mechanism is the same shape; the capability is not comparable.
+    # NOTE: even with temperature=0 (greedy = argmax), floating-point non-determinism
+    # across GPU batches means you CANNOT guarantee bit-identical output run-to-run.
+    # Never build a system that assumes exact reproducibility from an LLM.
+    return next_token_id
 
-### Why this matters for prompting
+def generate_loop(model, prompt_ids: list[int], config: GenerationConfig) -> list[int]:
+    """The autoregressive loop: append, re-feed, repeat. Each token depends on ALL prior tokens."""
+    token_ids = torch.tensor(prompt_ids)
+    generated: list[int] = []
+    for i in range(config.max_tokens):
+        next_id = generate_next_token(model, token_ids, config, is_first_token=(i == 0))
+        if next_id == model.eos_token_id:            # end-of-turn marker — model decided it's done
+            break
+        generated.append(next_id)
+        token_ids = torch.cat([token_ids, torch.tensor([next_id])])
+        # CRITICAL: the model conditions on its OWN output as it generates.
+        # If it starts hedging ("I'm not sure, but..."), those tokens make further hedging
+        # more probable — the model can "talk itself into" a stance it wouldn't have started with.
+    return generated
+```
+::
 
-Because generation is sequential and autoregressive (each token depends on all tokens before it, including ones the model itself just generated), **everything you put earlier in the prompt conditions everything that comes after** — including the model's own output as it writes it. This has concrete consequences:
-
-- If your prompt is ambiguous early on, the model commits to an interpretation early, and that interpretation shapes every subsequent token. You can't "clarify later in the same generation" — once tokens are committed, the model conditions on them as fact.
-- If the model starts an answer poorly (say, it begins listing reasons why a request is problematic), it becomes statistically more likely to continue in that vein, because it's now conditioning on its own hedging text. This is one reason "the model talked itself into a refusal it wouldn't have started with" is a real, observed phenomenon.
-- Order matters. Two prompts with identical content but different token order can produce different outputs, because the model never gets to "see the whole prompt at once and then decide" — it processes it, then generates conditioned on the whole thing, but its own generation is still a left-to-right walk that compounds early framing.
+The entire field of prompt engineering targets the `prompt_ids` input to this loop. Every technique in this course — few-shot examples, chain-of-thought, system prompts, XML structuring — is a way of shaping the token sequence that enters `generate_loop`, which in turn shapes the probability distribution sampled at each step.
 
 ## Training vs. Inference
 
-It helps to keep two very different phases distinct:
+::code-wrapper{language="python" filename="training_vs_inference.py"}
+```python
+from dataclasses import dataclass
 
-| Phase | What happens | What you control |
-|---|---|---|
-| **Training** | The model's weights are adjusted (via gradient descent over enormous datasets) so that it gets better at predicting the next token, and later fine-tuned/aligned with techniques like RLHF (reinforcement learning from human feedback) to follow instructions and avoid harmful outputs. | Nothing — this already happened, by the model provider, before you ever sent a request. |
-| **Inference** | The trained, frozen model reads your prompt and generates tokens. No weights change. The model "learns" nothing new; any adaptation is purely from the text you put in its context window this one time. | Everything — the prompt, the system instructions, the examples, the sampling parameters. |
+@dataclass
+class TrainingPhase:
+    """What happens BEFORE you ever send a request. You control NOTHING here."""
+    objective: str = "next-token prediction via gradient descent"
+    # The model's weights are adjusted over billions of text examples so that
+    # P(next_token | context) increasingly matches the training distribution.
+    alignment: tuple[str, ...] = ("RLHF", "DPO", "constitutional_ai")
+    # After base pretraining, fine-tuning + human-feedback alignment shapes
+    # instruction-following, refusal behavior, and helpfulness.
+    weights_change: bool = True              # ← THIS is the defining difference
+    you_control: tuple[str, ...] = ()        # nothing — the provider already did this
 
-Prompt engineering is entirely an **inference-time** activity. This is why it's sometimes called "in-context learning" — you're not training the model, you're giving it enough context, on the fly, that it can perform the task correctly using patterns it already learned during training. A well-crafted few-shot prompt can make a general-purpose model perform a narrow task almost as if it were fine-tuned for it, without ever touching a weight.
+@dataclass
+class InferencePhase:
+    """What happens when YOU send a request. You control EVERYTHING here."""
+    weights_change: bool = False             # ← frozen. The model learns NOTHING new.
+    # "In-context learning" is a misnomer — no learning occurs. You're selecting
+    # which pre-trained distribution region to sample from via the tokens you supply.
+    you_control: tuple[str, ...] = (
+        "system_prompt",       # conditions the distribution toward a role/behavior region
+        "user_prompt",         # the actual task
+        "few_shot_examples",   # demonstrates the input→output mapping in-context
+        "temperature",         # sampling entropy
+        "top_k", "top_p",      # truncation of the candidate token set
+        "max_tokens",          # generation budget
+        "stop_sequences",      # early termination triggers
+    )
 
-This distinction also explains a common point of confusion: **the model has no persistent memory of your previous conversations** unless you (or the product you're using) explicitly re-supply that history as part of the prompt on each new request. Every API call is stateless from the model's point of view — "memory" in a chat product is an illusion created by resending the transcript.
+# --- The key distinction for prompt engineers ---
+# Training: model.weights <- gradient_step(loss(predictions, targets))
+#   You weren't there. The model's capability ceiling is already fixed.
+# Inference: output = sample(model.forward(your_tokens))
+#   model.weights are READ-ONLY. Your ONLY lever is the token sequence you send.
+#   A well-crafted few-shot prompt can approximate fine-tuned behavior —
+#   without touching a single weight. This is why prompting is powerful.
+
+@dataclass
+class ChatMemoryIllusion:
+    """Explains why 'chat memory' is not real memory."""
+    # Every API call is stateless. The model has NO persistent state between calls.
+    # What products call "memory" is actually:
+    #   1. Your client code stores prior messages
+    #   2. On each new request, the ENTIRE transcript is re-sent as input tokens
+    #   3. The model re-reads everything from scratch — it has no idea it "remembers"
+    # This means: longer "memory" = more input tokens = more cost + latency per turn
+    # AND eventually the transcript exceeds the context window and old messages
+    # must be dropped, summarized, or truncated — silently, if you're not careful.
+    api_is_stateless: bool = True
+    memory_mechanism: str = "client resends full transcript as tokens each request"
+```
+::
 
 ## Tokenization
 
-Models don't see characters or words — they see **tokens**, which are chunks of text produced by a tokenizer. A token might be a whole word ("the"), part of a word ("token" + "ization"), a single character, a punctuation mark, or even whitespace. Different providers use different tokenizers (Claude, GPT, and Gemini each tokenize text somewhat differently), which is one reason token counts for the "same" text differ across models and why you should never assume a token-count estimate from one model's tokenizer transfers to another.
+::code-wrapper{language="python" filename="tokenizer_inspection.py"}
+```python
+"""
+Compare how different tokenizers split the 'same' text.
+This is why token-count estimates do NOT transfer between models.
+"""
+from typing import Literal
 
-Rough rules of thumb (these vary by language and content type, so treat them as approximations, not guarantees):
+# --- Simulated BPE (byte-pair encoding) tokenizers for demonstration ---
+# Real tokenizers (tiktoken for GPT, Claude's, Gemini's) have 50K-200K vocab entries.
+# The merge rules are learned from a training corpus — and that corpus is English-heavy.
 
-- English prose: roughly 4 characters per token, or about 0.75 tokens per word.
-- Code: often *more* tokens per character than prose, because of punctuation, indentation, and symbols that don't compress as neatly into common subword chunks.
-- Non-English languages, especially those with non-Latin scripts, frequently tokenize less efficiently — the same sentence in Japanese or Arabic can consume noticeably more tokens than the "equivalent" English sentence, because the tokenizer's vocabulary was trained with an English-dominant corpus.
+# In production, use the actual provider tokenizer, never a word-count heuristic:
+#   import tiktoken
+#   enc = tiktoken.encoding_for_model("gpt-4o")
+#   tokens = enc.encode("strawberry")  # → [straw, berry] or similar — NOT ['s','t','r',...]
 
-### Why tokenization is not just trivia
+def tokenize_naive_word_split(text: str) -> list[str]:
+    """What beginners ASSUME the model sees. Wrong — models never see words."""
+    return text.split()
 
-Tokenization has real prompting implications:
+def tokenize_bpe_english(text: str) -> list[str]:
+    """Simulated English-trained BPE. Whole words and common subwords merge."""
+    # "strawberry" might be 1-2 tokens; common words like "the" = 1 token
+    # Numbers like "1234" might be 1 token ("1234") or split ("12","34")
+    merges = {"strawberry": ["straw", "berry"], "tokenization": ["token", "ization"],
+              "the": ["the"], "1234": ["1234"], "54321": ["543", "21"]}
+    tokens = []
+    for word in text.split():
+        word = word.strip(",.;!?")
+        tokens.extend(merges.get(word, [word]))
+    return tokens
 
-- **Character-level tasks are surprisingly hard.** Asking a model to "count the number of letters in this word" or "reverse this string" can fail because the model operates on tokens, not characters — it may never have "seen" the word broken into individual letters the way you're imagining. This is the underlying mechanism behind the infamous "how many Rs are in strawberry" failures: if "strawberry" is one or two tokens, the model has to infer letter composition indirectly rather than read it off directly.
-- **Numbers tokenize unevenly.** Depending on the tokenizer, "1234" might be one token, or it might split as "12" + "34", or digit-by-digit. This affects arithmetic reliability — a model doing multi-digit multiplication is, in a real sense, doing token-pattern arithmetic, not digit-by-digit arithmetic the way you learned in school. It's part of why models are more reliable at arithmetic when allowed to show intermediate steps (see Chapter 5, Chain-of-Thought).
-- **Cost and limits are token-based, not word-based or character-based.** API pricing (input and output) and context-window limits are both denominated in tokens. A prompt that "looks short" in a non-English language or in dense code can burn far more tokens than an English prose prompt of similar visual length.
+def tokenize_bpe_japanese(text: str) -> list[str]:
+    """Simulated BPE applied to Japanese — far less efficient due to English-dominant vocab."""
+    # Non-Latin scripts tokenize poorly: same semantic content costs 2-3x more tokens
+    # because the tokenizer's merge table has few non-English entries
+    return list(text.replace(" ", ""))  # char-level fallback — many more tokens
+
+# --- THE strawberry problem ---
+# "How many r's in strawberry?" — the model fails because:
+#   1. "strawberry" is 1-2 tokens, NOT 9 character tokens
+#   2. The model has no internal character-level representation
+#   3. It must INFER letter composition from training patterns, not read it
+# Fix in production: ask the model to spell it out first, or use a code-execution tool.
+
+# --- THE number tokenization problem ---
+# "1234" → ["1234"] (1 token)  vs  "54321" → ["543", "21"] (2 tokens)
+# This is why LLM arithmetic is unreliable: multi-digit math is pattern-completion
+# over number-tokens of varying granularity, NOT digit-by-digit school arithmetic.
+# Fix: let the model write intermediate steps (chain-of-thought) or call a calculator tool.
+
+# --- Token budget comparison utility ---
+def estimate_token_cost(text: str, tokenizer: Literal["gpt", "claude", "gemini"],
+                        input_price_per_1k: float, output_price_per_1k: float) -> dict:
+    """Compare token counts across tokenizers — never assume parity."""
+    # In production, call the actual token-count API for each provider.
+    # Heuristic ratios (APPROXIMATE, always verify with real tokenizer):
+    ratios = {"gpt": 4.0, "claude": 3.8, "gemini": 4.2}  # chars per token (English prose)
+    estimated_tokens = max(1, len(text) // ratios[tokenizer])
+    return {
+        "tokenizer": tokenizer,
+        "char_count": len(text),
+        "estimated_tokens": estimated_tokens,
+        "estimated_input_cost_usd": round(estimated_tokens / 1000 * input_price_per_1k, 6),
+        "warning": "Non-English text and code typically cost 1.5-3x more tokens than this estimate",
+    }
+```
+::
 
 ## Context Windows
 
-The **context window** is the maximum number of tokens a model can process in a single request — this includes your system prompt, the conversation history, any documents or tool outputs you've included, and the space reserved for the model's own response. Exceeding it means older content must be dropped, truncated, or summarized before the model ever sees it.
+::code-wrapper{language="python" filename="context_budget_allocator.py"}
+```python
+"""
+A production context-budget allocator.
+Context window is a BUDGET, not a bottomless bucket — every token costs money + latency.
+"""
+from dataclasses import dataclass, field
+from enum import Enum
 
-As of this writing, context windows vary widely by model and provider and change frequently — treat any specific number as a snapshot, not a permanent fact:
+class TokenAllocationError(Exception):
+    """Raised when allocations exceed the context budget — fail loudly, never truncate silently."""
 
-| Model family | Approximate context window (check current docs) |
-|---|---|
-| Claude (Opus/Sonnet/Haiku, current generation) | Commonly around 200K tokens on standard tiers, with some models and tiers offering substantially more (up to roughly 1M tokens) |
-| GPT (current generation) | Varies by model, commonly in the 128K–1M token range |
-| Gemini (current generation) | Historically among the largest available, often quoted in the 1M+ token range |
+class Section(Enum):
+    SYSTEM_PROMPT    = "system_prompt"
+    FEW_SHOT         = "few_shot_examples"
+    USER_MESSAGE     = "user_message"
+    RETRIEVED_DOCS   = "retrieved_documents"
+    CONVERSATION     = "conversation_history"
+    TOOL_OUTPUTS     = "tool_outputs"
+    RESPONSE_RESERVE = "response_reserve"   # space set aside for the model's output
 
-Don't memorize these numbers as facts about the world — memorize the fact that **you should check current documentation before designing around a specific limit**, because these ceilings move upward roughly every few months across the industry.
+@dataclass
+class ContextBudget:
+    """Validated token budget for a single API request."""
+    model: str
+    max_context: int                              # provider-documented context window limit
+    allocations: dict[Section, int] = field(default_factory=dict)
+    reserved_for_response: int = 4096             # never let input eat the response space
 
-### Why context windows matter for prompting
+    def __post_init__(self):
+        if self.reserved_for_response >= self.max_context:
+            raise TokenAllocationError(
+                f"Response reserve ({self.reserved_for_response}) must be < context window ({self.max_context})"
+            )
+        self.allocations[Section.RESPONSE_RESERVE] = self.reserved_for_response
 
-- **A large context window is not a free lunch.** Even within the window, models exhibit **position effects** — information placed at the very beginning or very end of a long context is generally recalled more reliably than information buried in the middle (often called the "lost in the middle" effect). We cover this in depth in Chapter 8, but it's a direct consequence of how attention mechanisms weight different positions, and it means "I have a 1M token window, so I'll just dump everything in" is not a strategy — placement inside that window still matters.
-- **Every token in context costs money and latency**, whether it's your carefully written instructions or forty pages of a PDF the user pasted in. Context is a budget, not a bottomless bucket.
-- **The model attends to everything in context simultaneously**, in the sense that any earlier token can influence any later generated token via the attention mechanism — but *how much* influence varies by position, relevance, and how the model was trained to weight recency versus earlier context. This is why conflicting instructions at different points in a long prompt produce inconsistent behavior: the model isn't "confused," it's genuinely weighing two real, contradictory signals in its context.
+    @property
+    def available_for_input(self) -> int:
+        """The hard ceiling for all input tokens (everything except the model's response)."""
+        return self.max_context - self.reserved_for_response
 
-## Why Prompting Works At All
+    @property
+    def total_allocated(self) -> int:
+        return sum(v for k, v in self.allocations.items() if k != Section.RESPONSE_RESERVE)
 
-Given that the model is "just" predicting the next token, why does something like "You are an expert tax attorney. Explain the tax implications of..." produce noticeably better, more accurate, more appropriately-hedged output than "explain tax implications"?
+    @property
+    def remaining(self) -> int:
+        return self.available_for_input - self.total_allocated
 
-The mechanism: during training, the model saw enormous amounts of text where certain framings, register, and structure correlated with certain kinds of continuations. Text that opens like an expert legal explainer is statistically more likely to be followed by careful, hedged, jargon-appropriate content than text that opens like a casual forum post — because that's the pattern in the training data. When you write "You are an expert tax attorney," you are not making the model *become* a tax attorney (it has no persistent identity) — you are **conditioning the probability distribution** toward the region of "expert tax attorney explanation" text that it learned from training. Chapter 6 covers persona prompting in depth, including where this technique helps and where it backfires.
+    def allocate(self, section: Section, tokens: int, strict: bool = True) -> None:
+        """Reserve tokens for a section. Raises if it would overflow."""
+        if tokens < 0:
+            raise TokenAllocationError(f"Cannot allocate negative tokens for {section.value}")
+        tentative_total = self.total_allocated + tokens - self.allocations.get(section, 0)
+        if strict and tentative_total > self.available_for_input:
+            raise TokenAllocationError(
+                f"Allocating {tokens} tokens to {section.value} would exceed input budget "
+                f"({tentative_total}/{self.available_for_input}). "
+                f"Currently allocated: {self.total_allocated}. "
+                f"Overflow by {tentative_total - self.available_for_input} tokens."
+            )
+        self.allocations[section] = tokens
 
-This is the single most useful mental model for the entire discipline: **a prompt is a specification of which region of the model's learned distribution you want to sample from.** Every technique in this course — instructions, examples, formatting, personas, reasoning scaffolds — is a lever for narrowing that region toward the outputs you actually want.
+    def truncate_to_fit(self, section: Section, content_tokens: int) -> int:
+        """How many tokens of `content_tokens` can actually fit in the remaining budget."""
+        space = min(content_tokens, self.available_for_input - self.total_allocated)
+        return max(0, space)
 
-## A Minimal Real-World Example
+# --- Production usage ---
+budget = ContextBudget(model="claude-sonnet", max_context=200_000, reserved_for_response=4096)
+budget.allocate(Section.SYSTEM_PROMPT, 800)
+budget.allocate(Section.FEW_SHOT, 1_200)
+budget.allocate(Section.RETRIEVED_DOCS, 50_000)
+budget.allocate(Section.CONVERSATION, 30_000)
 
-Here's a production-style system prompt for a customer-support triage assistant, showing several of the concepts above already in play (we'll unpack each piece in later chapters):
+# Simulate a user pasting a massive document
+doc_tokens = 150_000
+fits = budget.truncate_to_fit(Section.USER_MESSAGE, doc_tokens)
+# → only ~118,000 tokens fit — the rest MUST be dropped, summarized, or chunked.
+# NEVER silently truncate: the caller decides the strategy (summarize? embed+retrieve? error?)
 
-::code-wrapper{language="markdown"}
+# --- THE "lost in the middle" effect ---
+# A 200K context window means the API ACCEPTS 200K tokens — NOT that the model
+# reliably USES all 200K. Attention weight is position-dependent:
+#   - Beginning tokens: high recall (primacy effect)
+#   - End tokens: high recall (recency effect)
+#   - Middle tokens: degraded recall (the "lost in the middle" valley)
+# Production implication: put critical instructions at the START or END of context,
+# not buried in the middle of a 50-page document dump.
+```
+::
+
+## Why Prompting Works: Conditioning the Model
+
+::code-wrapper{language="python" filename="conditioning_demo.py"}
+```python
+"""
+Why "You are an expert tax attorney" produces better tax answers than "explain taxes".
+The model has no persistent identity — you are selecting a REGION of its learned distribution.
+"""
+from dataclasses import dataclass
+
+@dataclass
+class PromptAsDistributionSelector:
+    """
+    During training, the model saw that text opening like an expert legal explainer
+    is statistically followed by careful, hedged, jargon-appropriate content.
+    Text opening like a casual forum post is followed by casual, less precise content.
+    Your prompt selects WHICH distribution region to sample from.
+    """
+    prompt_prefix: str
+    # The prefix conditions P(output | prefix) toward a specific region of learned behavior.
+
+    def expected_output_region(self) -> str:
+        """Maps prompt framing to the training-distribution region it activates."""
+        regions = {
+            "You are an expert tax attorney": "legal_explainer_region → hedged, precise, cites statutes",
+            "explain tax implications":        "general_forum_region → casual, may omit edge cases, less hedged",
+            "You are a senior Rust engineer":   "rust_expert_region → idiomatic code, mentions ownership/lifetimes",
+            "write a rust function":            "beginner_region → may use .clone() excessively, miss lifetime annotations",
+        }
+        return regions.get(self.prompt_prefix, "default_region → average of training distribution")
+
+# --- The mechanical view ---
+# P(output | "You are an expert tax attorney. Explain...")  ≠  P(output | "explain taxes")
+#                                                  ↑
+#                          The prefix shifts the conditional probability mass.
+#                          The model doesn't "become" a tax attorney —
+#                          it samples from the text distribution that follows
+#                          tax-attorney-style openings in its training data.
+
+# --- Why early tokens are load-bearing ---
+# Generation is autoregressive: token[n] is sampled conditioned on tokens[0..n-1].
+# The FIRST output token disproportionately constrains all subsequent tokens.
+#   If the model starts with "Based on IRC Section 280A..." → locked into citation-heavy mode
+#   If the model starts with "Sure! So basically..." → locked into casual explainer mode
+# This is why "the model starts well, it tends to finish well" — and the inverse.
+
+# --- Anti-pattern: conflicting conditioning ---
+# If your system prompt says "Be extremely concise" but your user prompt says
+# "Explain in exhaustive detail with examples", the model isn't "confused" —
+# it's weighting two REAL, contradictory signals in its context.
+# Whichever has stronger positional/relevance attention weight wins, unpredictably.
+# Fix: ensure system and user instructions are ALIGNED, not competing.
+```
+::
+
+## A Production System Prompt Example
+
+::code-wrapper{language="markdown" filename="triage_system_prompt.md"}
 ```markdown
 You are a support-ticket triage assistant for a B2B SaaS company.
 
@@ -104,34 +378,187 @@ on their own language, not your judgment of how urgent it "really" is.
 Respond with only a JSON object in this exact shape:
 {"category": "...", "urgency": "...", "summary": "one sentence, no more than 20 words"}
 
-If the message doesn't clearly fit one category, choose the closest one and
-lower your confidence is not something you report — always pick exactly one.
+Rules:
+- category MUST be one of the five uppercase strings above — no others, ever.
+- urgency MUST be one of: LOW, MEDIUM, HIGH.
+- summary MUST be a single sentence, maximum 20 words.
+- If the message doesn't clearly fit one category, choose the closest one —
+  always pick exactly one, never refuse or say "unclear".
+- Do not include any text outside the JSON object. No preamble, no explanation.
 ```
 ::
 
-Notice: this prompt sets a role (conditioning the distribution toward "careful classifier" behavior), gives an explicit enumerated output space (constraining the token distribution at generation time to a small set of valid category tokens), and specifies exact output format (reducing the search space for what a "correct" continuation looks like). Every clause here exists to narrow what the next tokens could plausibly be — that's prompt engineering, mechanically.
+::code-wrapper{language="python" filename="triage_validator.py"}
+```python
+"""Client-side validation for the triage system prompt above — never trust raw LLM output."""
+import json
+from dataclasses import dataclass
+from enum import Enum
+
+class Category(Enum):
+    BILLING = "BILLING"
+    BUG_REPORT = "BUG_REPORT"
+    FEATURE_REQUEST = "FEATURE_REQUEST"
+    ACCOUNT_ACCESS = "ACCOUNT_ACCESS"
+    OTHER = "OTHER"
+
+class Urgency(Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+@dataclass
+class TriageResult:
+    category: Category
+    urgency: Urgency
+    summary: str
+
+    @classmethod
+    def from_llm_output(cls, raw: str) -> "TriageResult":
+        """Parse + validate LLM output. Raises on any deviation from the contract."""
+        # Strip any accidental preamble/epilogue the model might add despite instructions
+        raw = raw.strip()
+        # Find the JSON object even if surrounded by stray text
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            raise ValueError(f"No JSON object found in LLM output: {raw[:100]!r}")
+        try:
+            data = json.loads(raw[start : end + 1])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON from LLM: {e}") from e
+
+        # Validate category against the enumerated set — reject anything else
+        cat_str = data.get("category", "")
+        try:
+            category = Category(cat_str)
+        except ValueError:
+            raise ValueError(f"Invalid category {cat_str!r} — must be one of {[c.value for c in Category]}")
+
+        # Validate urgency
+        urg_str = data.get("urgency", "")
+        try:
+            urgency = Urgency(urg_str)
+        except ValueError:
+            raise ValueError(f"Invalid urgency {urg_str!r} — must be one of {[u.value for u in Urgency]}")
+
+        summary = data.get("summary", "")
+        if not summary or len(summary.split()) > 20:
+            raise ValueError(f"Summary must be 1-20 words, got {len(summary.split())}: {summary!r}")
+
+        return cls(category=category, urgency=urgency, summary=summary)
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Mental model, not anthropomorphism** — When debugging a bad output, resist the urge to think "why doesn't it understand me?" and instead ask "what text, statistically, would plausibly follow what I just wrote?" The second question usually reveals the fix immediately (e.g., you asked an open-ended question and got a rambling answer because open-ended questions are, in the training data, usually followed by rambling answers).
-- **Token budgets are asymmetric** — Input tokens are typically much cheaper than output tokens across most providers. When designing a system that runs at scale, it's often cheaper to send more context (input) if it lets you request a shorter, more targeted answer (output), rather than a sparse prompt that produces a long, exploratory response.
-- **Use the provider's tokenizer, not a guess** — If you need to know exactly how many tokens a piece of text will consume, use the actual tokenizer/token-counting endpoint for the model you're targeting rather than a word-count heuristic or another model's tokenizer — the differences compound in long documents.
-- **Early tokens are load-bearing** — Because generation is autoregressive, the first sentence of your desired output (if you can influence it, e.g., through formatting instructions or a strong opening constraint) disproportionately shapes everything that follows. This is the mechanism behind "if the model starts well, it tends to finish well."
-- **"Temperature 0" is not determinism** — Many people assume setting temperature to zero (see Chapter 5 and provider docs) guarantees identical output every time. In practice, floating-point non-determinism in the underlying computation (especially across different hardware/batch configurations) means even greedy decoding can produce slightly different outputs run to run. Don't build systems that assume bit-for-bit reproducibility from any LLM.
+::code-wrapper{language="python" filename="tips_and_tricks.py"}
+```python
+# ─── [Performance] Token budgets are asymmetric: input is cheaper than output ───
+# Most providers charge 3-5x more for output tokens than input tokens.
+# Strategy: invest in MORE input context (examples, constraints, retrieved docs)
+# to get SHORTER, more targeted output — cheaper AND higher quality.
+#   BAD:  sparse prompt → model writes 800 output tokens exploring → expensive + verbose
+#   GOOD: rich prompt with 5 examples → model writes 50 output tokens matching pattern → cheap + precise
+
+# ─── [Debug] The "what text follows this?" mental model ───
+# When output is bad, don't ask "why doesn't it understand me?"
+# Ask: "In the training distribution, what text statistically follows what I wrote?"
+#   You wrote an open-ended question → training data says open-ended questions get long rambling answers
+#   Fix: constrain the output format so the continuation space is narrow
+
+# ─── [Idiom] Use the provider's real tokenizer, not a heuristic ───
+# import tiktoken
+# enc = tiktoken.encoding_for_model("gpt-4o")
+# exact_count = len(enc.encode(your_text))
+# Never use len(text.split()) or len(text) // 4 for billing-critical calculations.
+# Differences compound across long documents and across providers.
+
+# ─── [Performance] Early tokens are load-bearing — front-load constraints ───
+# Because generation is left-to-right autoregressive, the first sentence of the
+# model's output shapes everything after it. If you can influence the opening
+# (via formatting instructions or a strong constraint on the first line), do it.
+# "Start your response with the JSON object. No preamble." ← this is a performance optimization.
+
+# ─── [Safety] "Temperature 0" is NOT determinism ───
+# Even greedy decoding (argmax) can produce different outputs across runs due to:
+#   - floating-point non-determinism in GPU kernels
+#   - batch-dependent parallelism (same request in different batches → different rounding)
+#   - provider-side model versioning (silent weight updates between calls)
+# Never build a system that assumes bit-for-bit reproducibility. Always have a
+# validation layer that checks output STRUCTURE, not exact string equality.
+
+# ─── [Idiom] Append boilerplate in post-processing, not in the prompt ───
+# If every response needs a fixed footer (survey link, disclaimer), DON'T ask
+# the model to generate it — append it in your application code after the API call.
+# Why: forcing the model to emit fixed text BEFORE its substantive answer conditions
+# every subsequent token on irrelevant context, degrading answer quality.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Empty or whitespace-only prompts** — Sending an empty string or a prompt of only whitespace typically produces either an error, a generic "How can I help you?" style response, or highly unpredictable output, because the model has essentially no conditioning signal at all. Always validate that user-supplied input isn't empty before sending it to the model, and decide explicitly what should happen in that case rather than letting the model guess.
-- **Token limits truncate mid-instruction, not just mid-answer** — If your *input* prompt itself is so long it approaches the context window limit (rare, but happens with huge pasted documents), some client libraries or naive implementations will silently truncate the prompt itself — potentially cutting off your instructions before the actual task description, which is disastrous and often invisible until output quality mysteriously craters. Always check documented limits and fail loudly (raise an error) rather than silently truncating.
-- **The "reasoning looks right, arithmetic is wrong" trap** — Because of tokenization, a model can write a completely correct chain of reasoning about a math problem and still botch the final multiplication of two five-digit numbers, because multi-digit arithmetic isn't really character-by-character computation for the model — it's pattern completion over number-tokens it has seen with varying frequency in training. Don't trust unaided LLM arithmetic for anything that matters; use a tool/calculator call instead (Chapter 13).
-- **Non-English text costs more tokens for the "same" content** — If you're budgeting a fixed token limit for user-generated content in a multilingual product, remember that the same message in Korean, Japanese, Arabic, or Hindi may consume 2–3x the tokens of the English equivalent, purely from tokenizer inefficiency on non-Latin scripts. A per-message token cap that works fine for English users can truncate non-English users' messages far more aggressively.
-- **Context window ≠ effective recall window** — A model with a 200K-token context window will accept 200K tokens without erroring, but that doesn't mean it will retrieve a fact from the middle of that context as reliably as one from the beginning or end. Don't confuse "the API accepted my input" with "the model reliably used all of it" — these are different claims, and only the first one is guaranteed by the context-window number.
+::code-wrapper{language="python" filename="edge_cases.py"}
+```python
+# ─── [Gotcha] Empty / whitespace-only prompts produce chaos ───
+def validate_user_input(prompt: str) -> str:
+    """Never send empty input to the model — it has no conditioning signal."""
+    if not prompt or not prompt.strip():
+        raise ValueError("Empty prompt — model has zero conditioning, output is unpredictable.")
+    return prompt.strip()
+# Without validation: empty string → model outputs "How can I help you?" or hallucinated content
+# With validation: fail explicitly, let the caller decide (default message? retry? error to user?)
+
+# ─── [Gotcha] Silent truncation of the PROMPT itself, not just the answer ───
+# If your input prompt approaches the context limit, naive client libraries may
+# truncate the PROMPT — potentially cutting off your instructions before the task.
+# The model then answers a question it never fully received. Output quality craters
+# with no error message. Always check limits and fail loudly.
+def safe_prompt_send(prompt: str, token_count_fn, max_input_tokens: int) -> str:
+    count = token_count_fn(prompt)
+    if count > max_input_tokens:
+        raise ValueError(
+            f"Prompt is {count} tokens, exceeds input limit {max_input_tokens}. "
+            f"Truncating would cut instructions — refusing to send."
+        )
+    return prompt  # safe to send
+
+# ─── [Gotcha] "Reasoning looks right, arithmetic is wrong" ───
+# A model can write a flawless proof and then botch 54321 * 98765.
+# Multi-digit arithmetic is token-pattern completion, not digit-by-digit computation.
+# The model might tokenize "54321" as ["543", "21"] — it never "sees" individual digits.
+# Fix: NEVER trust unaided LLM arithmetic for anything that matters.
+#       Use a tool call / code execution for any numeric computation.
+#       result = llm_with_tools.generate("Calculate 54321 * 98765", tools=[calculator_tool])
+
+# ─── [Safety] Non-English text costs 2-3x more tokens for the same content ───
+# A per-message token cap tuned for English users will truncate Japanese/Korean/Arabic/Hindi
+# users far more aggressively — their messages hit the cap at half the semantic content.
+# Fix: use character-aware or language-aware limits, not a flat token cap.
+def adaptive_token_limit(text: str, base_limit: int) -> int:
+    """Expand the token budget for non-Latin scripts that tokenize inefficiently."""
+    non_latin_ratio = sum(1 for c in text if ord(c) > 0x2E80) / max(len(text), 1)
+    # 0x2E80 = start of CJK radicals; rough proxy for non-Latin scripts
+    if non_latin_ratio > 0.3:
+        return int(base_limit * 2.5)  # non-Latin text needs more tokens for same meaning
+    return base_limit
+
+# ─── [Gotcha] Context window ≠ effective recall window ───
+# A 200K-token context window means the API ACCEPTS 200K tokens — that's all the
+# guarantee gives you. It does NOT mean the model reliably RETRIEVES a fact from
+# token position 100,000 in a 200K-token input.
+# The "lost in the middle" effect: recall degrades for mid-context positions.
+# Production fix: place critical info at the START (primacy) or END (recency) of context.
+#   system_prompt → [critical constraints here, position 0-800 tokens]
+#   retrieved_docs → [bulk context, lower recall expected]
+#   user_message → [the actual task, near the end, high recency recall]
+```
+::
 
 ## 🧠 Spot the Issue
 
 A developer wants a customer-service bot to always end responses with a satisfaction survey link, so they write this system prompt:
 
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="bad_survey_prompt.md"}
 ```markdown
 You are a customer service assistant. Help the user with their question.
 At the very beginning of your response, before anything else, include this
@@ -140,21 +567,69 @@ Then answer their question below that.
 ```
 ::
 
-The developer tests it and finds that response *quality* has gotten noticeably worse — the model seems to answer more superficially and sometimes gets facts wrong that it handled fine before this instruction was added. Why, mechanically, would putting the survey link at the *start* of the response cause this?
+The developer tests it and finds that response **quality** has gotten noticeably worse — the model answers more superficially and sometimes gets facts wrong that it handled fine before. Why, mechanically, would putting the survey link at the *start* cause this?
 
 <details>
 <summary>Answer</summary>
 
-Because generation is autoregressive and left-to-right, forcing the model to emit the survey link **before** it has "thought about" or generated any of the actual answer means every token of the real answer is now conditioned on a prefix that has nothing to do with the customer's question. The model can't reason about the problem first and then write the boilerplate — it has to commit to the boilerplate token sequence first, and only then start generating the substantive answer, with no opportunity to have "planned ahead." This is especially damaging for questions that benefit from any implicit reasoning before the answer (which is most non-trivial questions) — you've effectively forced the model to skip straight to answering without the benefit of the reasoning-adjacent tokens that would normally precede a careful response.
+Generation is autoregressive and left-to-right. Forcing the model to emit the survey boilerplate **before** it generates any of the actual answer means every token of the substantive answer is conditioned on a prefix (`"Thanks for reaching out! Here's your survey link: [link]"`) that has **zero semantic relevance** to the customer's question.
 
-**The lesson**: fixed boilerplate that doesn't depend on the model's reasoning about the specific request should go at the *end* of the response (or be appended by your application code after the fact), not the beginning — putting it first taxes every subsequent token with a context that isn't relevant to solving the user's actual problem.
+The model cannot reason about the problem first and then write the boilerplate — it must commit to the boilerplate token sequence first, and only then begin the real answer, with no "planning" tokens preceding it. This is especially damaging for questions that benefit from implicit reasoning before the answer (which is most non-trivial questions). You've forced the model to skip the reasoning-adjacent preamble that would normally precede a careful response.
+
+**The fix**: fixed boilerplate that doesn't depend on the model's reasoning should go at the **end** of the response — or, better, be appended by your application code after the API call returns, so it never enters the generation path at all.
+
+::code-wrapper{language="python" filename="fixed_survey_pattern.py"}
+```python
+# BAD — boilerplate in the prompt, forced at the START of generation
+SYSTEM_PROMPT_BAD = """You are a customer service assistant.
+Before anything else, output: 'Thanks for reaching out! Survey: [link]'
+Then answer the question."""
+
+# GOOD — boilerplate appended in post-processing, model never generates it
+SYSTEM_PROMPT_GOOD = """You are a customer service assistant. Answer the user's question thoroughly."""
+SURVEY_FOOTER = "\n\n---\nThanks for reaching out! Here's your survey link: [link]"
+
+def build_response(user_question: str, llm_generate) -> str:
+    answer = llm_generate(system=SYSTEM_PROMPT_GOOD, user=user_question)
+    return answer + SURVEY_FOOTER  # model's generation is uncontaminated; boilerplate is deterministic
+```
+::
 
 </details>
 
 ## Key Takeaways
 
-- An LLM's only fundamental operation is predicting the next token given everything before it; every higher-level capability (reasoning, coding, conversation) is this mechanism applied repeatedly and emerges from training on massive, varied text.
-- Prompting is entirely an inference-time activity — it never changes the model's weights. It works by conditioning the model's probability distribution toward the region of learned behavior you want, not by "teaching" it anything new.
-- Tokenization (not characters or words) is the model's real unit of perception, which explains character-counting failures, uneven arithmetic reliability, and why non-English text often costs more tokens.
-- Context windows bound how much text a model can process per request, but a large window does not guarantee uniform recall across all of it — position within the context still matters (see Chapter 8).
-- Because generation is left-to-right and autoregressive, early tokens in a prompt — and early tokens in the model's own output — disproportionately shape everything that follows, which is the mechanistic root of many prompting best practices covered in later chapters.
+::code-wrapper{language="python" filename="key_takeaways.py"}
+```python
+"""
+The mechanical core of prompt engineering, in code.
+"""
+
+# 1. An LLM does ONE thing: predict the next token given all prior tokens.
+#    Every capability — reasoning, coding, conversation — is this in a loop.
+#    def llm(tokens): return sample(softmax(model.forward(tokens)))
+#    def generate(prompt): return [llm(prompt + generated_so_far) for _ in range(max_tokens)]
+
+# 2. Prompting is inference-time only. Weights NEVER change.
+#    You are not teaching — you are SELECTING a region of the pre-trained distribution.
+#    training:   weights -= lr * grad(loss(predictions, targets))    # you weren't here
+#    inference:  output = sample(model.forward(your_tokens))          # your only lever
+
+# 3. Tokenization, not characters/words, is the model's unit of perception.
+#    "strawberry" = 1-2 tokens, not 9 characters → character-counting fails.
+#    "54321" = ["543","21"] → arithmetic is pattern completion, not digit math.
+#    Non-English text costs 2-3x more tokens for the same semantic content.
+
+# 4. Context window is a BUDGET, not a guarantee of recall.
+#    budget = max_context - response_reserve
+#    if input_tokens > budget: RAISE, don't silently truncate.
+#    recall(position) is NOT uniform — primacy + recency > middle ("lost in the middle").
+
+# 5. Generation is left-to-right autoregressive — early tokens are load-bearing.
+#    token[n] is conditioned on tokens[0..n-1], INCLUDING the model's own output.
+#    If the model starts hedging → further hedging becomes more probable.
+#    If the model starts precise → further precision is reinforced.
+#    → Front-load constraints. Put fixed boilerplate at the END (or in post-processing).
+#    → Ensure system + user instructions are ALIGNED, not competing for attention weight.
+```
+::

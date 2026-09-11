@@ -1,276 +1,261 @@
+---
+title: "07 — useContext & Prop Drilling"
+description: "Context API, provider/consumer patterns, re-render mechanics, context splitting for stable vs dynamic values, and custom hook idioms. Code-first reference for mid-to-senior React engineers."
+---
+
 # 07 — `useContext` & Prop Drilling
 
-## Revisiting the Prop Drilling Problem
+## The Problem: Prop Drilling
 
-Chapter 3 introduced prop drilling: a value needed deep in the tree gets threaded through every intermediate component, even ones that don't use it themselves. Context is React's built-in answer to that specific problem — a way for a component to "publish" a value that any descendant can "subscribe" to directly, skipping the layers in between.
+::code-wrapper{language="javascript" filename="prop_drilling.js"}
+```javascript
+// ANTI-PATTERN: passing props through components that don't use them
+function App() {
+  const [user, setUser] = useState(null)
+  return <Layout user={user} setUser={setUser} />  // Layout doesn't use user
+}
+function Layout({ user, setUser }) {
+  return <Sidebar user={user} setUser={setUser} />  // Sidebar doesn't use user
+}
+function Sidebar({ user, setUser }) {
+  return <UserMenu user={user} setUser={setUser} />  // UserMenu is the actual consumer
+}
+// 3 levels of drilling for a value only UserMenu needs.
+// Adding a new prop to user → update every intermediate component's interface.
+// Refactoring any intermediate component → risk breaking the prop chain.
+```
+::
 
-## Creating and Providing Context
+## createContext + useContext
 
-Three pieces: `createContext` (define it), a `Provider` (supply a value from some point in the tree down), and `useContext` (read it from any descendant).
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="context_basics.js"}
 ```javascript
 import { createContext, useContext, useState } from 'react'
 
-const ThemeContext = createContext(null)  // default value, used only if no Provider is an ancestor
+// 1. Create a context with a default value (used only when NO provider is found)
+const AuthContext = createContext(null)  // null default = "no auth context"
 
+// 2. Provide a value at the top of the tree
 function App() {
-  const [theme, setTheme] = useState('light')
-
-  return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
-      <Page />
-    </ThemeContext.Provider>
-  )
-}
-
-function Page() {
-  return <Sidebar />  // Page never touches theme — no drilling needed
-}
-
-function Sidebar() {
-  return <ThemedButton />  // Sidebar never touches theme either
-}
-
-function ThemedButton() {
-  const { theme, setTheme } = useContext(ThemeContext)  // reads directly, skipping Page/Sidebar
-  return (
-    <button
-      className={`btn btn--${theme}`}
-      onClick={() => setTheme(t => (t === 'light' ? 'dark' : 'light'))}
-    >
-      Toggle Theme
-    </button>
-  )
-}
-```
-::
-
-## The Default Value Is a Fallback, Not a Config
-
-The value passed to `createContext(defaultValue)` is only used when a component calls `useContext` **without** any matching `Provider` above it in the tree — it is not a "default config" that merges with what a Provider supplies.
-
-::code-wrapper{language="javascript"}
-```javascript
-const UserContext = createContext(null)
-
-function ProfileBadge() {
-  const user = useContext(UserContext)
-  // If ProfileBadge is rendered outside any <UserContext.Provider>, `user` is null here —
-  // NOT some default user object, even if you intended `null` to just mean "not logged in
-  // yet." Consumers must handle the no-Provider case explicitly.
-  if (!user) return <GuestBadge />
-  return <span>{user.name}</span>
-}
-```
-::
-
-## A Production-Realistic Pattern: Context + Custom Hook
-
-Exporting the raw context object invites consumers to forget the null-check, misuse `useContext` outside a provider, or import from the wrong module path. The standard production pattern wraps both the provider and the consumption in a dedicated module, throwing a clear error if used incorrectly.
-
-::code-wrapper{language="javascript" filename="AuthContext.jsx"}
-```javascript
-import { createContext, useContext, useState, useEffect } from 'react'
-
-const AuthContext = createContext(undefined)
-
-export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
-  const [status, setStatus] = useState('loading')
-
-  useEffect(() => {
-    fetchCurrentUser()
-      .then(u => { setUser(u); setStatus('ready') })
-      .catch(() => { setUser(null); setStatus('ready') })
-  }, [])
-
-  const value = { user, status, login: (u) => setUser(u), logout: () => setUser(null) }
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={{ user, setUser }}>
+      <Layout />
+    </AuthContext.Provider>
+  )
 }
 
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (ctx === undefined) {
-    // Fails loudly and immediately at the call site, instead of a confusing
-    // "cannot read property 'user' of undefined" three components later.
-    throw new Error('useAuth must be used within an <AuthProvider>')
+// 3. Consume in any descendant — no drilling through intermediate components
+function UserMenu() {
+  const { user, setUser } = useContext(AuthContext)  // directly, no props
+  if (!user) return <LoginButton onClick={() => setUser(loginUser())} />
+  return <div>{user.name}</div>
+}
+// Layout and Sidebar no longer need to know about user at all.
+```
+::
+
+## Context Re-render Mechanics
+
+::code-wrapper{language="javascript" filename="context_renders.js"}
+```javascript
+// CRITICAL: when the Provider's value changes, ALL consumers re-render.
+// EVERY component that calls useContext(AuthContext) re-renders, regardless of
+// whether it uses the part that changed.
+
+// ANTI-PATTERN: new value object every render → all consumers re-render every time
+function App() {
+  const [user, setUser] = useState(null)
+  const [theme, setTheme] = useState('dark')  // unrelated state
+  return (
+    <AuthContext.Provider value={{ user, setUser }}>
+      {/* Every time setTheme fires, App re-renders → { user, setUser } is a NEW
+          object → AuthContext value changes → ALL consumers re-render,
+          even though user didn't change. */}
+      <Layout />
+    </AuthContext.Provider>
+  )
+}
+
+// FIX: memoize the value object
+function App() {
+  const [user, setUser] = useState(null)
+  const [theme, setTheme] = useState('dark')
+
+  const authValue = useMemo(() => ({ user, setUser }), [user])
+  // setUser is stable (useState guarantees this), so deps only include user.
+  // Now the value object only changes when user changes → consumers only
+  // re-render when auth actually changes, not when theme toggles.
+
+  return (
+    <AuthContext.Provider value={authValue}>
+      <Layout />
+    </AuthContext.Provider>
+  )
+}
+```
+::
+
+## Context Splitting: Stable vs Dynamic
+
+::code-wrapper{language="javascript" filename="context_splitting.js"}
+```javascript
+// PRODUCTION PATTERN: split contexts by change frequency
+// Stable values (setUser, theme config) in one context.
+// Dynamic values (user object, loading state) in another.
+
+const AuthActionsContext = createContext(null)  // stable: setters, callbacks
+const AuthStateContext = createContext(null)     // dynamic: user, loading
+
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  // Actions are stable — setUser and setLoading are guaranteed stable by useState
+  const actions = useMemo(() => ({
+    login: async (credentials) => {
+      setLoading(true)
+      const user = await api.login(credentials)
+      setUser(user)
+      setLoading(false)
+    },
+    logout: () => setUser(null),
+  }), [])  // no deps → stable forever
+
+  // State changes on login/logout
+  const state = useMemo(() => ({ user, loading }), [user, loading])
+
+  return (
+    <AuthActionsContext.Provider value={actions}>
+      <AuthStateContext.Provider value={state}>
+        {children}
+      </AuthStateContext.Provider>
+    </AuthActionsContext.Provider>
+  )
+}
+
+// A component that only needs login() doesn't re-render when user changes:
+function LoginButton() {
+  const { login } = useContext(AuthActionsContext)  // stable → no re-renders from state
+  return <button onClick={() => login(creds)}>Log In</button>
+}
+// A component that shows user info re-renders only when user changes:
+function Profile() {
+  const { user, loading } = useContext(AuthStateContext)  // re-renders on user change
+  if (loading) return <Spinner />
+  return <div>{user?.name}</div>
+}
+```
+::
+
+## Custom Hooks for Context Consumption
+
+::code-wrapper{language="javascript" filename="custom_context_hooks.js"}
+```javascript
+// PRODUCTION PATTERN: wrap useContext in a custom hook for type safety + error checking
+function useAuth() {
+  const context = useContext(AuthContext)
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider')
+    // This error fires if someone uses useAuth outside <AuthProvider> —
+    // catches the mistake at runtime with a clear message instead of a
+    // confusing null reference error deep in a consumer.
   }
-  return ctx
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-function App() {
-  return (
-    <AuthProvider>
-      <Dashboard />
-    </AuthProvider>
-  )
+  return context
 }
 
-function Dashboard() {
-  const { user, status, logout } = useAuth()
-  if (status === 'loading') return <Spinner />
-  return (
-    <div>
-      <p>Welcome, {user?.name ?? 'Guest'}</p>
-      <button onClick={logout}>Log Out</button>
-    </div>
-  )
-}
-```
-::
-
-## Composing Multiple Contexts
-
-Real apps typically have several independent contexts (auth, theme, locale, feature flags). Nest providers explicitly, or build a single `AppProviders` composition component to avoid a deeply indented "provider pyramid" at the app root.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Provider pyramid — works, but grows unreadable past 3-4 contexts
-function App() {
-  return (
-    <AuthProvider>
-      <ThemeProvider>
-        <LocaleProvider>
-          <FeatureFlagsProvider>
-            <Dashboard />
-          </FeatureFlagsProvider>
-        </LocaleProvider>
-      </ThemeProvider>
-    </AuthProvider>
-  )
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Flattened composition — same behavior, easier to scan and reorder
-function AppProviders({ children }) {
-  return (
-    <AuthProvider>
-      <ThemeProvider>
-        <LocaleProvider>
-          <FeatureFlagsProvider>{children}</FeatureFlagsProvider>
-        </LocaleProvider>
-      </ThemeProvider>
-    </AuthProvider>
-  )
+// Usage:
+function UserMenu() {
+  const { user, logout } = useAuth()  // clean, self-documenting, type-safe
+  // ...
 }
 
-function App() {
-  return (
-    <AppProviders>
-      <Dashboard />
-    </AppProviders>
-  )
-}
-```
-::
-
-## When to Use Context vs. When to Just Pass Props
-
-Context is not a general-purpose state management replacement — it's specifically for values that are genuinely **global to a subtree**: the current authenticated user, the active theme, the current locale, feature flags. For state that's local to a feature or a couple of sibling components, plain props (or lifting state up to the nearest common ancestor) is simpler, more explicit, and easier to trace.
-
-| Situation | Prefer |
-|---|---|
-| Value needed by one child, one level down | Direct prop |
-| Value needed by 2-3 nested levels, one clear path | Props (drilling this shallow is fine) |
-| Value needed by many components scattered across the tree, at unpredictable depths | Context |
-| Frequently changing value needed by performance-sensitive, high-frequency-rendering trees | A dedicated state library (chapter 18) — Context causes broad re-renders on every value change |
-
-## Performance Implications: Context Re-Renders Everything That Consumes It
-
-Every component that calls `useContext(SomeContext)` re-renders whenever that context's `value` changes — **regardless of whether the specific field that component reads actually changed**. This is because the `Provider`'s `value` is compared as a whole by reference, not field-by-field.
-
-::code-wrapper{language="javascript"}
-```javascript
-// BUG: a new object literal is created every render of AppShell,
-// so EVERY consumer of AppStateContext re-renders on every AppShell render,
-// even if neither `user` nor `notifications` actually changed.
-function AppShell() {
-  const [user, setUser] = useState(initialUser)
-  const [notifications, setNotifications] = useState([])
-
-  return (
-    <AppStateContext.Provider value={{ user, notifications }}>
-      <Dashboard />
-    </AppStateContext.Provider>
-  )
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Fixed: memoize the value object so its reference is stable
-// across renders where user/notifications didn't change.
-function AppShell() {
-  const [user, setUser] = useState(initialUser)
-  const [notifications, setNotifications] = useState([])
-
-  const value = useMemo(() => ({ user, notifications }), [user, notifications])
-
-  return (
-    <AppStateContext.Provider value={value}>
-      <Dashboard />
-    </AppStateContext.Provider>
-  )
-}
-```
-::
-
-Even with memoization, every consumer still re-renders whenever *any* field in the value object changes — Context has no built-in field-level selector mechanism (unlike Redux's `useSelector` or Zustand's selector hooks, chapter 18). For state that changes frequently and is read by many components, splitting into multiple, narrower contexts (e.g., separate `UserContext` and `NotificationsContext` instead of one combined `AppStateContext`) limits the blast radius of each update.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Split contexts: updating notifications no longer re-renders
-// components that only read UserContext.
-<UserContext.Provider value={user}>
-  <NotificationsContext.Provider value={notifications}>
-    <Dashboard />
-  </NotificationsContext.Provider>
-</UserContext.Provider>
+// The default value should be undefined (not null) to enable the error check:
+const AuthContext = createContext(undefined)
+// createContext(null) → context === null → the undefined check won't catch it
+// createContext(undefined) → context === undefined → the check fires correctly
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Always pair a context with a custom `useX` hook (`useAuth`, `useTheme`) that throws a clear error when called outside its provider, instead of exporting the raw context object — this turns a silent `undefined` bug three components away into an immediate, actionable error at the exact call site.
-- **Performance** — Memoize the object passed to a `Provider`'s `value` prop with `useMemo` whenever it's constructed from multiple pieces of state — otherwise every render of the provider component creates a new reference and re-renders every consumer, memoized or not.
-- **Idiom** — Split large, multi-field contexts into several narrower ones (auth vs. theme vs. notifications) rather than one mega-context — it limits how many unrelated components re-render when only one slice of state changes.
-- **Debug** — If a component seems to re-render far more than its own props/state would explain, check the React DevTools Profiler's "why did this render" panel for a context value change — context re-renders are a common invisible cause that doesn't show up just by reading the component's own code.
-- **Idiom** — Reach for Context only for values that are genuinely tree-wide (auth, theme, locale, feature flags) — for anything narrower, plain props or lifting state to the nearest shared ancestor stays easier to trace than adding another context.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Always wrap useContext in a custom hook (useAuth, useTheme, useCart).
+// Benefits: type safety, clear error if used outside provider, self-documenting.
+
+// [Performance] Memoize context values with useMemo. A new object literal
+// { a, b } every render causes ALL consumers to re-render even if a and b
+// haven't changed — Object.is fails on new object references.
+
+// [Idiom] Split contexts by change frequency. Put stable values (setters,
+// callbacks) in a separate context from dynamic values (data, loading state).
+// Consumers of stable values won't re-render when dynamic values change.
+
+// [Debug] If a consumer isn't getting the provider's value, check:
+// 1. Is the consumer INSIDE the provider in the tree?
+// 2. Is the default value undefined (to enable the "outside provider" error)?
+// 3. Are you nesting providers correctly (outer wraps inner)?
+
+// [Idiom] For context values that are just functions (dispatch, callbacks),
+// useCallback each function and wrap in useMemo for the value object.
+// useState setters are already stable — no need to useCallback them.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **A `Provider` with no ancestor falls back to `createContext`'s default value silently** — no error is thrown; components just quietly receive the default, which can mask a genuine bug like a `Provider` accidentally placed below the component that needs it, or omitted entirely in a test render.
-- **Every consumer re-renders on any `value` change, not just the fields it reads** — a component that only destructures `{ user }` from a context still re-renders when `notifications` changes, if both live in the same context value — this is invisible from reading that one component in isolation.
-- **A new inline object literal as `value` defeats all downstream memoization** — `<Context.Provider value={{ a, b }}>` without `useMemo` creates a new reference every render of the provider, which cascades a re-render to every consumer regardless of whether `React.memo` wraps them.
-- **Context does not work across separate React roots (e.g., micro-frontends)** — a `Provider` rendered in one `createRoot` tree is invisible to a `useContext` call in a different, independently-mounted root, even if they're on the same page; each root has its own React tree and context resolution only walks within it.
-- **Updating context state inside a deeply nested consumer is still just calling `useState`'s setter from wherever it's defined** — Context does not provide any special two-way binding; the actual state and its updater function still live in whichever component called `useState`, and `value` merely exposes both to descendants.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] The default value is used ONLY when no provider is found above the
+// consumer. If a provider exists but passes value={undefined}, the consumer
+// gets undefined — NOT the default. The default is a fallback for missing
+// providers, not for undefined values.
+
+// [Gotcha] useContext inside a component that's ABOVE the provider returns the
+// default value (or throws if your custom hook checks for it). The provider
+// must wrap the consumer in the component tree.
+
+// [Gotcha] Context value changes cause ALL consumers to re-render — there's no
+// way to opt out per-consumer. If only one field changes, every consumer that
+// uses the context (even for other fields) re-renders. This is why context
+// splitting (stable vs dynamic) matters for performance.
+
+// [Gotcha] Nested providers of the same context: the INNERMOST provider wins.
+// <ThemeContext.Provider value="dark">
+//   <ThemeContext.Provider value="light">  ← consumers here get "light"
+//     <Component />
+//   </ThemeContext.Provider>
+// </ThemeContext.Provider>
+// This can be used intentionally for overrides (e.g., a dark section in a light app).
+
+// [Gotcha] Context does NOT participate in bailout optimizations. Even if a
+// consumer's props haven't changed and it's wrapped in React.memo, a context
+// value change will still trigger a re-render. React.memo only checks props,
+// not context. To prevent this, split the context so the consumer subscribes
+// only to the slice it needs.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A settings page wraps its content in a context provider, but toggling a single, unrelated "sidebar collapsed" state causes the entire user profile section (which reads from the same context) to visibly flash/re-render on every toggle, hurting perceived performance.
+Every keystroke in a search input causes the entire app to re-render, even though the search state is local to one component:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
-function SettingsPage() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [user, setUser] = useState(currentUser)
-
+function App() {
+  const [user, setUser] = useState(null)
   return (
-    <AppContext.Provider value={{ sidebarCollapsed, setSidebarCollapsed, user, setUser }}>
-      <Sidebar />
-      <UserProfileSection />
-    </AppContext.Provider>
+    <AuthContext.Provider value={{ user, setUser }}>
+      <SearchPage />
+    </AuthContext.Provider>
   )
+}
+function SearchPage() {
+  const [query, setQuery] = useState('')
+  // Every keystroke → setQuery → App re-renders → { user, setUser } is a NEW
+  // object → AuthContext value changes → ALL AuthContext consumers re-render.
+  return <input value={query} onChange={e => setQuery(e.target.value)} />
 }
 ```
 ::
@@ -278,16 +263,38 @@ function SettingsPage() {
 <details>
 <summary>Answer</summary>
 
-`sidebarCollapsed` and `user` are combined into a single context value object, created fresh on every render of `SettingsPage`. Toggling the sidebar updates `sidebarCollapsed`, which re-renders `SettingsPage`, which creates a brand-new `value` object (even though `user` itself hasn't changed) — and since `UserProfileSection` consumes the same context, it re-renders too, because context comparison is by object reference, not by field.
+The `AuthContext.Provider` value is `{ user, setUser }` — a new object literal created on every render of `App`. When `SearchPage`'s local state (`query`) changes, it causes `App` to re-render (because `SearchPage` is a child of `App`). On `App`'s re-render, `{ user, setUser }` creates a new object reference → the context value changes → **all** `AuthContext` consumers re-render, even though `user` didn't change.
 
-**The lesson**: split unrelated pieces of state into separate contexts (`SidebarContext` and `UserContext`) so a change to one doesn't ripple into consumers of the other — or, if they must stay combined, memoize the value with `useMemo` keyed on the fields that actually changed (though splitting the contexts is the more complete fix here, since even a memoized combined value still re-renders every consumer when *either* field changes).
+**Fix**: memoize the value object so it only changes when `user` changes:
+
+```javascript
+const authValue = useMemo(() => ({ user, setUser }), [user])
+// setUser is stable (useState guarantee), so deps only needs user.
+// Now the context value is referentially stable across unrelated re-renders.
+```
 
 </details>
 
 ## Key Takeaways
 
-- Context lets a value be published once and read by any descendant, avoiding the pass-through props chapter 3 named as "prop drilling."
-- The default value passed to `createContext` only applies with no `Provider` ancestor — it is not merged with a `Provider`'s value.
-- Pair every context with a custom hook (`useAuth`, `useTheme`) that throws when used outside its provider, rather than exporting the raw context.
-- Every consumer of a context re-renders on any change to its `value`, regardless of which specific field that consumer reads — memoize the value and/or split into narrower contexts to limit the blast radius.
-- Context is for genuinely tree-wide values (auth, theme, locale); it is not a general state-management replacement for frequently-changing, performance-sensitive state — see chapter 18 for dedicated libraries.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. Context solves prop drilling — provide at the top, consume anywhere below.
+//    createContext(default) + Provider value={...} + useContext(context).
+
+// 2. When the Provider value changes, ALL consumers re-render — no opt-out.
+//    Memoize the value with useMemo to prevent unnecessary re-renders.
+
+// 3. Split contexts by change frequency: stable values (setters, callbacks) in
+//    one context, dynamic values (data, loading) in another. Consumers of
+//    stable values don't re-render when dynamic values change.
+
+// 4. Wrap useContext in a custom hook (useAuth) with an "outside provider" error
+//    check. Use createContext(undefined) so the check can distinguish "no provider"
+//    from "provider with undefined value."
+
+// 5. React.memo does NOT prevent context-triggered re-renders — memo only checks
+//    props. To prevent context re-renders, split the context so the consumer
+//    subscribes only to the slice it needs.
+```
+::

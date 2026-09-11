@@ -1,194 +1,356 @@
-# 14 — Modules
+---
+title: "JavaScript 14 — Module Systems: ESM Internals, CommonJS & Dynamic Import"
+description: "Deep-dive into JavaScript module systems: ES Module loading phases (construction, instantiation, evaluation), live bindings vs CommonJS copies, dynamic import and code splitting, circular dependency handling, and package.json exports. Code-first reference for senior engineers."
+---
 
-## ES Modules (ESM)
+# 14 — Module Systems: ESM Internals, CommonJS & Dynamic Import
 
-::code-wrapper{language="javascript" filename="math.js"}
-```javascript
-// Named exports
-export const PI = 3.14159
-export function square(x) { return x * x }
-export function cube(x) { return x * x * x }
-
-// Default export — one per module
-export default class Calculator {
-  add(a, b) { return a + b }
-}
-```
-::
-::
-
-::code-wrapper{language="javascript" filename="main.js"}
-```javascript
-// Named imports — must match export names
-import { PI, square } from './math.js'
-
-// Default import — any name
-import Calc from './math.js'
-
-// Both
-import Calc, { PI, square, cube } from './math.js'
-
-// Namespace import — all exports as object
-import * as math from './math.js'
-math.PI       // 3.14159
-math.square(5) // 25
-
-// Rename imports
-import { square as sq } from './math.js'
-
-// Import for side effects only (no bindings)
-import './polyfill.js'
-```
-::
-::
-
-## Dynamic Import
+## ES Modules: Loading Phases and Live Bindings
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// Returns a promise — lazy load modules
-const module = await import('./heavy-module.js')
-module.doSomething()
+// ── ESM loading has 3 phases (per module, depth-first) ──
+// 1. CONSTRUCTION: download/parse all modules in the dependency graph
+//    - Traverse imports recursively, build the module graph
+//    - No code executes yet — just parsing
+// 2. INSTANTIATION: create module environment records and live bindings
+//    - Allocate memory for exported/imported bindings
+//    - Wire up import ↔ export references (live bindings)
+// 3. EVALUATION: execute module top-level code in dependency order
+//    - Run the module body (top-level code, not functions)
+//    - Side effects happen here (console.log, assignments, etc.)
 
-// Conditional loading
-if (featureFlags.charts) {
-  const { renderChart } = await import('./chart.js')
-  renderChart(data)
-}
+// ── ESM exports (named and default) ──
+// math.js:
+export const PI = 3.14159;          // named export (live binding)
+export function add(a, b) { return a + b; }  // named export (function)
+export default function multiply(a, b) { return a * b; }  // default export (one per module)
 
-// Error handling
-try {
-  const mod = await import('./optional.js')
-} catch (e) {
-  console.warn('Optional module failed to load')
-}
+// ── ESM imports ──
+// app.js:
+import multiply, { PI, add } from "./math.js";  // default + named imports
+import * as math from "./math.js";              // namespace import (all exports as an object)
+import { add as plus } from "./math.js";        // rename import
+
+console.log(multiply(2, 3));  // 6 (default export)
+console.log(PI);              // 3.14159 (named export)
+console.log(add(1, 2));       // 3 (named export)
+console.log(math.PI);         // 3.14159 (namespace)
+
+// ── Live bindings: imports reflect the exporter's current value ──
+// counter.js:
+export let count = 0;       // mutable export binding
+export function increment() { count++; }  // modifies the export
+
+// app.js:
+import { count, increment } from "./counter.js";
+console.log(count);  // 0
+increment();
+console.log(count);  // 1 — live binding! The import reflects the updated value.
+// In CommonJS, this would be a stale copy (0), because CJS copies the value at import time.
 ```
 ::
-::
 
-## Re-exports
-
-::code-wrapper{language="javascript" filename="index.js"}
-```javascript
-// Re-export everything
-export * from './math.js'
-
-// Re-export specific
-export { square, cube } from './math.js'
-
-// Re-export default as named
-export { default as Calculator } from './math.js'
-
-// Rename during re-export
-export { square as sq } from './math.js'
-```
-::
-::
-
-## `package.json` Configuration
-
-::code-wrapper{language="json" filename="package.json"}
-```json
-{
-  "type": "module",
-  "exports": {
-    ".": "./src/index.js",
-    "./utils": "./src/utils.js",
-    "./package.json": "./package.json"
-  },
-  "imports": {
-    "#internal": "./src/internal.js"
-  }
-}
-```
-::
-::
-
-## Best Practices
+## ESM vs CommonJS: The Fundamental Differences
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// ✅ Prefer named exports — better refactor support, tree-shaking
-export function add(a, b) { return a + b }
+// ── CommonJS (Node.js, require/module.exports) ──
+// cjs/counter.js:
+let count = 0;
+function increment() { count++; }
+module.exports = { count, increment };  // COPIES current values at export time
 
-// ✅ Group related exports in one module
-// ✅ Use default export only for the "main" thing
-export default class App {}
-export const version = '1.0.0'
+// cjs/app.js:
+const { count, increment } = require("./counter.js");
+console.log(count);  // 0
+increment();          // increments the module's internal count, NOT the imported copy
+console.log(count);  // 0 — STALE! CJS copies the value at require() time.
 
-// ✅ Avoid circular dependencies — A imports B, B imports A
-// ✅ Use dynamic import for code splitting and lazy loading
+// ── Key differences ──
+// | Feature        | ESM                           | CommonJS                      |
+// |---------------|-------------------------------|-------------------------------|
+// | Loading       | Async (phases)                 | Sync (require blocks)          |
+// | Bindings      | Live (references)              | Copies (values at import time) |
+// | Hoisting      | Imports hoisted (TDZ)          | require() runs at call point   |
+// | `this`        | undefined (module scope)       | module.exports (empty object)  |
+// | Top-level     | No `this`, `arguments`, `require` | Has all three                 |
+// | Strict mode   | Always strict                  | Sloppy (unless "use strict")   |
+// | File ext      | .mjs or package.json type:module | .cjs or .js (default)        |
+// | Cycles        | Live (can work, complex)       | Copies (partial module object) |
+
+// ── ESM `this` is undefined (not module.exports) ──
+// ESM module:
+console.log(this);  // undefined (ESM top-level `this` is always undefined)
+// CommonJS module:
+// console.log(this);  // {} (module.exports — empty object, not the real exports)
+
+// ── ESM doesn't have `require` or `arguments` at top level ──
+// ESM:
+// require("./foo");        // ReferenceError: require is not defined
+// console.log(arguments);  // ReferenceError: arguments is not defined
+// To use require in ESM: import { createRequire } from "module";
+// const require = createRequire(import.meta.url);
 ```
 ::
+
+## Dynamic Import and Code Splitting
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Dynamic import: returns a Promise (loads module on demand) ──
+// Useful for code splitting (lazy loading), conditional loading, and SSR.
+
+// Static import (loads immediately, part of the module graph):
+// import heavyLib from "./heavy-lib.js";
+
+// Dynamic import (loads on demand — code splitting):
+const button = document.getElementById("load-chart");
+button.addEventListener("click", async () => {
+    // Only loads the chart library when the button is clicked:
+    const { default: Chart } = await import("./chart-lib.js");
+    new Chart(canvas, { type: "line", data: chartData });
+});
+
+// ── Conditional loading based on environment ──
+async function getStorage() {
+    if (typeof window !== "undefined") {
+        return await import("./browser-storage.js");  // browser (localStorage)
+    } else {
+        return await import("./node-storage.js");       // Node (fs)
+    }
+}
+
+// ── Loading multiple modules in parallel ──
+const [users, posts] = await Promise.all([
+    import("./api/users.js"),
+    import("./api/posts.js"),
+]);
+
+// ── import() returns a namespace object (like import * as) ──
+const module = await import("./math.js");
+console.log(module.default);  // default export
+console.log(module.add);     // named export
+```
+::
+
+## Circular Dependencies
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Circular dependency: A imports B, B imports A ──
+// ESM handles cycles with live bindings (but can be tricky):
+// a.js:
+import { b } from "./b.js";
+export const a = 1;
+export function useB() { return b; }  // function delays access to b (b is available at call time)
+
+// b.js:
+import { a } from "./a.js";
+export const b = 2;
+export function useA() { return a; }  // function delays access to a (available at call time)
+
+// app.js:
+import { a, useB } from "./a.js";
+console.log(a);    // 1 (a is fully evaluated)
+console.log(useB());  // 2 (b is available — the function runs after both modules are evaluated)
+// ⚠️ If b.js tried to use `a` at the top level (not in a function), it might get undefined
+// during the cycle (a isn't evaluated yet when b.js runs).
+
+// ── CommonJS circular dependency: partial exports ──
+// cjs/a.js:
+const { b } = require("./b.js");  // at this point, b.js hasn't finished executing
+module.exports.a = 1;             // a is set after require returns
+
+// cjs/b.js:
+const { a } = require("./a.js");  // a is undefined! (a.js hasn't set module.exports.a yet)
+module.exports.b = a + 1;         // NaN (undefined + 1)
+// CJS: require() returns the PARTIAL module.exports object (what's been set so far).
+// To avoid: defer access to functions (not top-level).
+
+// ── Best practice: avoid circular dependencies (refactor shared code to a third module) ──
+// If A and B both need each other, extract the shared logic to C:
+// a.js → imports from c.js
+// b.js → imports from c.js
+// No cycle.
+```
+::
+
+## Re-exports and Barrel Files
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Re-export: forward exports from another module ──
+
+// utils/index.js (barrel file — re-exports from multiple files):
+export { add, subtract } from "./math.js";      // named re-export
+export * as math from "./math.js";               // namespace re-export
+export { default as MathUtils } from "./math.js"; // rename default to named
+export { default } from "./default-thing.js";    // re-export default as default
+
+// ── Import from the barrel (single import point) ──
+// app.js:
+import { add, math, MathUtils } from "./utils/index.js";
+
+// ┚ Barrel files simplify imports but can prevent tree-shaking (bundler loads all re-exports)
+// For tree-shaking: import directly from the source module, not the barrel.
+
+// ── package.json exports (modern package entry points) ──
+// package.json:
+// {
+//   "exports": {
+//     ".": "./dist/index.js",              // main entry: import pkg from "pkg"
+//     "./utils": "./dist/utils.js",        // subpath: import { x } from "pkg/utils"
+//     "./package.json": "./package.json"   // allow importing package.json
+//   }
+// }
+// `exports` restricts what can be imported — only listed paths are public.
+// Older `main` field is the fallback if `exports` isn't set.
+```
+::
+
+## Production Pattern: Feature-Flagged Module Loading
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Load modules conditionally based on feature flags ──
+const featureFlags = {
+    newDashboard: true,
+    legacyCharts: false,
+};
+
+async function loadDashboard() {
+    if (featureFlags.newDashboard) {
+        // Dynamic import: only loads the new dashboard if the flag is on
+        const { renderDashboard } = await import("./new-dashboard.js");
+        return renderDashboard;
+    } else {
+        const { renderDashboard } = await import("./old-dashboard.js");
+        return renderDashboard;
+    }
+}
+
+// ── Progressive loading: load critical path first, then lazy-load ──
+async function bootstrap() {
+    // Critical path: load immediately (static imports at top of file)
+    // import { render } from "./core.js";
+
+    // Non-critical: load after first paint
+    await import("./analytics.js").then(({ init }) => init());
+    await import("./error-reporting.js").then(({ init }) => init());
+
+    // User-triggered: load on demand (button click, route change)
+    // await import("./heavy-feature.js") when user clicks the feature
+}
+```
 ::
 
 ## 💡 Tips & Tricks
 
-**Prefer named exports for tree-shaking** — Bundlers can eliminate unused named exports. Default exports can't be tree-shaken (bundler doesn't know what's unused).
+::code-wrapper{language="javascript"}
+```javascript
+// ── `import.meta` for module metadata (ESM only) ──
+console.log(import.meta.url);  // full URL of the current module
+// Node: file:///path/to/module.js
+// Browser: https://example.com/module.js
 
-**Aggregate exports with index.js** — `export * from './module'` in `index.js` gives consumers a single import path. Cleaner than `import from './module/file.js'`.
+// ── Top-level await (ES2022, ESM only) ──
+// In ESM, you can use await at the top level (no async wrapper needed):
+// const config = await fetch("/config.json").then(r => r.json());
+// export default config;
+// ⚠️ Top-level await blocks all modules that depend on this one (they wait for it to resolve).
 
-**Dynamic import for route splitting** — In SPA frameworks, lazy-load route modules: `const module = await import('./pages/About.js')`. Reduces initial bundle size.
+// ── `createRequire` for using CJS modules in ESM (Node) ──
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const cjsModule = require("./cjs-module.cjs");  // load a CommonJS module from ESM
 
-**Use "imports" in package.json** — `"#internal": "./src/internal.js"` lets consumers do `import { x } from '#internal'`. Better than relative paths like `../../../src`.
+// ── Tree-shaking: named exports enable static analysis ──
+// Bundlers (Vite, esbuild, Rollup) can remove unused exports (tree-shaking):
+import { used } from "./module.js";  // ✓ only `used` is bundled
+import unused from "./module.js";   // default import — bundler can't tree-shake (whole module loaded)
+// Named imports + ESM = tree-shakeable. CommonJS = not tree-shakeable (require is dynamic).
 
-**Check module.meta.url** — In ESM, `import.meta.url` is the current module's URL. Useful for dynamic paths: `const dir = new URL('.', import.meta.url).pathname`.
+// ── `import type` for TypeScript (compile-time only, erased at runtime) ──
+// import type { User, Config } from "./types.js";  // types only — erased by the bundler
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-**Circular dependencies partially work** — If A imports B and B imports A, one gets undefined values temporarily. It "works" but is fragile. Refactor to avoid.
+::code-wrapper{language="javascript"}
+```javascript
+// ── ESM imports are hoisted (and in TDZ until the module fully loads) ──
+// You can use imports before the import statement (they're hoisted):
+// console.log(add(1, 2));  // ✓ works (import is hoisted)
+// import { add } from "./math.js";
 
-**Default and named exports can't be mixed cleanly** — `export default x` and `export { y }` from same module is confusing. Pick one style per file.
+// ── Default import name is arbitrary (named import must match) ──
+// import foo from "./math.js";  // `foo` is whatever the default export is (name is arbitrary)
+// import { add } from "./math.js";  // `add` must match the exported name (or use `as`)
 
-**Module-level side effects** — Top-level code in modules runs when imported. If module runs expensive setup or mutates globals, every import triggers it. Be careful with side effects.
+// ── ESM file extension is required in the browser (not auto-resolved) ──
+// Browser: import "./foo.js"  ✓ (extension required)
+// Node: import "./foo" works (resolves .js, .mjs, /index.js) if package.json has type:module
+// Bundlers (Vite, webpack): extension optional (they resolve at build time)
 
-**import.meta is not available in CommonJS** — If you need to detect module type, `typeof import.meta` is "undefined" in CJS. Use `typeof require !== 'undefined'` instead.
+// ── Circular dependencies can cause undefined access ──
+// If B runs before A (due to a cycle), B's import of A may be undefined at top level.
+// Fix: defer access to functions (the cycle resolves by evaluation time).
 
-**Dynamic import strings can't be bundled** — `await import(userInput)` can't be pre-analyzed by bundlers. Use dynamic import sparingly or with explicit strings.
+// ── `module.exports` vs `export default` in CJS/ESM interop ──
+// CJS: module.exports = function() {}  → ESM import: import foo from "cjs-module"
+// CJS: module.exports = { fn: ... }     → ESM import: import { fn } from "cjs-module" (interop may vary)
+// ESM in CJS: requires dynamic import (require() can't load ESM synchronously)
 
-**Re-exports don't re-execute** — `export * from './module'` doesn't run `./module`'s side effects twice. But `import './module'; export * from './module'` does run it once (implicitly imported).
+// ── Top-level await blocks dependent modules ──
+// If module A uses top-level await, all modules that import A wait for it to resolve.
+// This can slow down the entire module graph — use sparingly.
 
-## 🧠 Spot the Bug
+// ── `import()` can't be used with variables in the specifier (for security) ──
+// const path = "./module.js";
+// import(path);  // ✓ dynamic import allows variables (but it's a dynamic spec)
+// import `${path}`;  // ✗ static import can't use variables (must be a string literal)
+```
+::
 
-What happens?
+## 🧠 Quick Quiz
+
+Why does this CommonJS code print `0` instead of `1`?
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// moduleA.js
-import { func } from './moduleB.js'
-console.log('A loaded')
-export const a = func()
+// counter.cjs:
+let count = 0;
+function increment() { count++; }
+module.exports = { count, increment };
 
-// moduleB.js
-import { a } from './moduleA.js'
-console.log('B loaded')
-export const func = () => 'result'
-
-// main.js
-import { a } from './moduleA.js'
-console.log(a)
+// app.cjs:
+const { count, increment } = require("./counter.cjs");
+increment();
+console.log(count);
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Logs: "B loaded", "A loaded", undefined
+`0`
 
-Here's why:
-- A imports B, which imports A
-- B loads first (cyclic dependency)
-- When B tries to import `a` from A, A isn't finished yet, so `a` is undefined
-- B finishes, A finishes, but `a` was already set to `func()` when func wasn't defined
+CommonJS copies the exported **values** at `require()` time, not references. When `module.exports = { count, increment }` executes, `count` is `0` — the export captures a **copy** of the value `0`. When `increment()` runs, it increments the module's internal `count` (now 1), but the imported `count` in `app.cjs` is still `0` (it was copied at import time and doesn't reflect the change).
 
-**The lesson**: Circular dependencies cause partial initialization. Refactor to avoid them.
+With ES Modules, `count` would be a **live binding** — the import would reflect the updated value (`1`).
+
+**Fix (CommonJS)**: export a getter or an object:
+
+```javascript
+// counter.cjs:
+module.exports = {
+    get count() { return count; },  // getter reads the current value
+    increment,
+};
+```
+
+**The lesson**: CommonJS exports are copies (values at import time). ESM exports are live bindings (references that reflect the exporter's current value). This is the fundamental difference between the two module systems.
 
 </details>
-
-## Key Takeaways
-
-- ES modules use `import`/`export` — static, hoisted, supports tree-shaking.
-- Named exports are preferred over default — better IDE support and refactoring.
-- Dynamic `import()` returns a promise — use for lazy loading and code splitting.
-- Set `"type": "module"` in `package.json` to use ESM in Node.js.
-- Circular dependencies work but are fragile — avoid them.

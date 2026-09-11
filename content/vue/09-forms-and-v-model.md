@@ -1,71 +1,101 @@
+---
+title: Vue 3 Engineering Reference — Forms & v-model
+description: v-model modifier internals, multi-field form validation, custom input components, debounced inputs, dynamic form generation, and the .number/.lazy/.trim modifier edge cases.
+---
+
 # 09 — Forms & v-model
 
-## `v-model` Modifiers
+## v-model Modifier Expansion — What the Compiler Generates
 
-Vue provides three built-in modifiers that adjust how `v-model` synchronizes:
-
-::code-wrapper{language="vue" filename="ProfileForm.vue"}
+::code-wrapper{language="vue" filename="ModifierInternals.vue"}
 ```vue
 <script setup>
 import { ref } from 'vue'
 
-const bio = ref('')
+const text = ref('')
 const age = ref(0)
-const username = ref('')
+const name = ref('')
 </script>
 
 <template>
-  <!-- .lazy: sync on `change` (blur/enter) instead of every `input` event -->
-  <textarea v-model.lazy="bio" placeholder="Bio (syncs on blur)" />
+  <!-- ── v-model="text" expands to: ──────────────────────── -->
+  <!-- :value="text" @input="text = $event.target.value" -->
+  <!-- Vue uses the vModelText directive, not just attr binding:
+       handles IME composition events, edge cases with type=number, etc. -->
+  <input v-model="text" />
 
-  <!-- .number: casts the input's string value to a Number automatically -->
+  <!-- ── .lazy: listen to 'change' (on blur) not 'input' (every keystroke) ── -->
+  <!-- Expands to: :value="text" @change="text = $event.target.value" -->
+  <!-- Reduces re-render frequency for expensive form validation -->
+  <input v-model.lazy="text" />
+
+  <!-- ── .number: cast input string to Number ─────────────── -->
+  <!-- If input is "42", v-model stores 42 (number), not "42" (string). -->
+  <!-- Edge: empty string → "" (NOT 0), invalid → original string unchanged. -->
+  <!-- Uses parseFloat internally; NaN results keep the original string. -->
   <input v-model.number="age" type="number" />
 
-  <!-- .trim: strips leading/trailing whitespace automatically -->
-  <input v-model.trim="username" placeholder="Username" />
+  <!-- ── .trim: strip leading/trailing whitespace ────────── -->
+  <!-- "  hello  " → "hello". Does NOT strip internal spaces. -->
+  <input v-model.trim="name" />
 
-  <!-- modifiers can be combined -->
-  <input v-model.lazy.trim="username" />
+  <!-- ── Chained modifiers: .lazy.number.trim — applied left to right ── -->
+  <input v-model.lazy.number.trim="age" />
 </template>
 ```
 ::
 
-### Why `.number` matters more than it looks
+## Custom Input Component — v-model Contract
 
-::code-wrapper{language="javascript"}
-```javascript
-// without .number: native <input type="number"> STILL gives you a STRING
-// through v-model unless you add the modifier
-const age = ref(0)
-// user types "25" → age.value === "25" (string), not 25 (number)
-
-// age.value + 1 → "251" (string concatenation), not 26 — a classic bug
-// when the value later flows into arithmetic, a Pinia store, or an API payload
-// expecting a numeric type
-```
-::
-
-This is a genuinely common production bug: a numeric-looking `<input>` doesn't automatically give you a JavaScript number through plain `v-model` — the DOM's `value` attribute is always a string, and `.number` is what tells Vue to attempt `parseFloat` on it (falling back to the raw string if parsing fails, e.g., for an empty input).
-
-## Building Custom Form Controls with `v-model`
-
-Chapter 06 introduced the `modelValue`/`update:modelValue` pattern. Real form components typically need to also support **modifiers** passed by the consumer, via a special `modelModifiers` prop:
-
-::code-wrapper{language="vue" filename="TrimmedInput.vue"}
+::code-wrapper{language="vue" filename="BaseInput.vue"}
 ```vue
 <script setup>
+import { computed } from 'vue'
+
+// ── defineModel (3.4+): declarative v-model without boilerplate ──
+// Auto-creates: modelValue prop + update:modelValue emit
+// Can be used directly in template as a writable ref.
+const model = defineModel<string>({
+  default: '',          // default value if parent doesn't pass v-model
+  required: false,
+})
+
+// ── Custom modifiers: modelModifiers prop ──────────────
+// Parent: <BaseInput v-model.capitalize="text" />
+// → modelModifiers = { capitalize: true }
+const { capitalize } = defineProps({
+  modelModifiers: { default: () => ({}) },
+})
+
+// ── Apply modifier on write ─────────────────────────────
+function onInput(e) {
+  let val = e.target.value
+  if (capitalize) val = val.charAt(0).toUpperCase() + val.slice(1)
+  model.value = val  // defineModel handles the emit automatically
+}
+</script>
+
+<template>
+  <input :value="model" @input="onInput" class="base-input" />
+</template>
+```
+
+::code-wrapper{language="vue" filename="BaseInputLegacy.vue"}
+```vue
+<script setup>
+// ── Pre-3.4: manual v-model contract ──────────────────
 const props = defineProps({
-  modelValue: String,
-  modelModifiers: { default: () => ({}) }
+  modelValue: { type: String, default: '' },
+  modelModifiers: { default: () => ({}) },
 })
 const emit = defineEmits(['update:modelValue'])
 
-function onInput(event) {
-  let value = event.target.value
+function onInput(e) {
+  let val = e.target.value
   if (props.modelModifiers.capitalize) {
-    value = value.charAt(0).toUpperCase() + value.slice(1)
+    val = val.charAt(0).toUpperCase() + val.slice(1)
   }
-  emit('update:modelValue', value)
+  emit('update:modelValue', val)
 }
 </script>
 
@@ -75,319 +105,312 @@ function onInput(event) {
 ```
 ::
 
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <!-- the custom "capitalize" modifier is entirely component-defined,
-       unlike built-in modifiers, and arrives via modelModifiers.capitalize -->
-  <TrimmedInput v-model.capitalize="name" />
-</template>
-```
-::
+## Production Form — Reactive Validation with Schema
 
-With `defineModel` (Vue 3.4+), this collapses considerably — modifiers become the second destructured element:
+::code-wrapper{language="typescript" filename="useFormValidation.ts"}
+```typescript
+import { reactive, computed, ref, type Ref } from 'vue'
 
-::code-wrapper{language="vue" filename="TrimmedInput.vue"}
-```vue
-<script setup>
-const [model, modifiers] = defineModel({
-  set(value) {
-    if (modifiers.capitalize) {
-      return value.charAt(0).toUpperCase() + value.slice(1)
+// ── Type-safe form validation composable ────────────────
+// Rules: each field has an array of validator functions.
+// Validator returns: true (valid) | string (error message)
+
+type Validator<T> = (value: T) => true | string
+
+export function useForm<T extends Record<string, any>>(
+  initial: T,
+  rules: { [K in keyof T]?: Validator<T[K]>[] }
+) {
+  const form = reactive({ ...initial })
+  const touched = reactive({} as Record<keyof T, boolean>)
+  const submitting = ref(false)
+
+  // ── Errors: computed — re-evaluates when form or touched change ──
+  const errors = computed(() => {
+    const result: Partial<Record<keyof T, string>> = {}
+    for (const key in rules) {
+      // Only validate fields the user has touched (UX: no errors on load)
+      if (!touched[key]) continue
+      for (const validator of rules[key] ?? []) {
+        const res = validator(form[key])
+        if (res !== true) {
+          result[key] = res
+          break  // first error wins — don't stack messages
+        }
+      }
     }
-    return value
-  }
-})
-</script>
+    return result
+  })
 
-<template>
-  <input v-model="model" />
-</template>
+  const isValid = computed(() => Object.keys(errors.value).length === 0)
+
+  function touch(key: keyof T) { touched[key] = true }
+  function touchAll() {
+    (Object.keys(form) as (keyof T)[]).forEach(k => touched[k] = true)
+  }
+
+  async function submit(handler: (form: T) => Promise<void>) {
+    touchAll()  // validate all fields on submit attempt
+    if (!isValid.value) return false
+    submitting.value = true
+    try {
+      await handler(form)
+      return true
+    } finally {
+      submitting.value = false
+    }
+  }
+
+  function reset() {
+    Object.assign(form, initial)
+    Object.keys(touched).forEach(k => touched[k] = false)
+  }
+
+  return { form, errors, isValid, submitting, touch, touchAll, submit, reset }
+}
+
+// ── Usage: ──────────────────────────────────────────────
+// const { form, errors, submit } = useForm(
+//   { email: '', password: '' },
+//   {
+//     email: [v => !!v || 'Required', v => /.+@.+/.test(v) || 'Invalid email'],
+//     password: [v => v.length >= 8 || 'Min 8 characters'],
+//   }
+// )
 ```
 ::
 
-## Form Validation Patterns
+## Dynamic Form Generation — Schema-Driven
 
-### Manual validation with computed error state
-
-::code-wrapper{language="vue" filename="SignupForm.vue"}
+::code-wrapper{language="vue" filename="DynamicForm.vue"}
 ```vue
 <script setup>
-import { ref, computed, reactive } from 'vue'
+import { ref, computed } from 'vue'
 
-const form = reactive({
-  email: '',
-  password: '',
-  confirmPassword: ''
+// ── Schema-driven form: render inputs from a config array ──
+const schema = ref([
+  { name: 'email', type: 'email', label: 'Email', required: true, placeholder: 'user@example.com' },
+  { name: 'age', type: 'number', label: 'Age', min: 18, max: 120 },
+  { name: 'bio', type: 'textarea', label: 'Bio', rows: 4 },
+  { name: 'role', type: 'select', label: 'Role', options: ['admin', 'user', 'guest'] },
+  { name: 'subscribe', type: 'checkbox', label: 'Subscribe to newsletter' },
+])
+
+const formData = ref({})
+
+// ── Initialize form data from schema defaults ──
+schema.value.forEach(field => {
+  formData.value[field.name] = field.type === 'checkbox' ? false : ''
 })
 
-const touched = reactive({
-  email: false,
-  password: false,
-  confirmPassword: false
-})
-
-const errors = computed(() => {
-  const e = {}
-  if (touched.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-    e.email = 'Enter a valid email address.'
-  }
-  if (touched.password && form.password.length < 8) {
-    e.password = 'Password must be at least 8 characters.'
-  }
-  if (touched.confirmPassword && form.confirmPassword !== form.password) {
-    e.confirmPassword = 'Passwords do not match.'
-  }
-  return e
-})
-
-const isValid = computed(() => Object.keys(errors.value).length === 0 && form.email && form.password)
-
-function markTouched(field) {
-  touched[field] = true
-}
-
-async function onSubmit() {
-  Object.keys(touched).forEach(key => { touched[key] = true })
-  if (!isValid.value) return
-  await submitToApi(form)
+// ── Computed: map schema type → component ──
+const fieldComponents = {
+  text: 'input',
+  email: 'input',
+  number: 'input',
+  textarea: 'textarea',
+  select: 'select',
+  checkbox: 'input',
 }
 </script>
 
 <template>
-  <form @submit.prevent="onSubmit">
-    <div>
-      <input v-model.trim="form.email" @blur="markTouched('email')" placeholder="Email" />
-      <span v-if="errors.email" class="error">{{ errors.email }}</span>
+  <form @submit.prevent>
+    <div v-for="field in schema" :key="field.name">
+      <label :for="field.name">{{ field.label }}</label>
+
+      <!-- Text/Email/Number inputs -->
+      <input
+        v-if="['text', 'email', 'number'].includes(field.type)"
+        :type="field.type"
+        v-model="formData[field.name]"
+        :placeholder="field.placeholder"
+        :required="field.required"
+      />
+
+      <!-- Textarea -->
+      <textarea
+        v-else-if="field.type === 'textarea'"
+        v-model="formData[field.name]"
+        :rows="field.rows || 3"
+      />
+
+      <!-- Select -->
+      <select v-else-if="field.type === 'select'" v-model="formData[field.name]">
+        <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
+      </select>
+
+      <!-- Checkbox -->
+      <input
+        v-else-if="field.type === 'checkbox'"
+        type="checkbox"
+        v-model="formData[field.name]"
+      />
     </div>
 
-    <div>
-      <input v-model="form.password" @blur="markTouched('password')" type="password" placeholder="Password" />
-      <span v-if="errors.password" class="error">{{ errors.password }}</span>
-    </div>
-
-    <div>
-      <input v-model="form.confirmPassword" @blur="markTouched('confirmPassword')" type="password" placeholder="Confirm password" />
-      <span v-if="errors.confirmPassword" class="error">{{ errors.confirmPassword }}</span>
-    </div>
-
-    <button type="submit" :disabled="!isValid">Sign Up</button>
+    <button type="submit">Submit</button>
   </form>
 </template>
 ```
 ::
 
-The `touched` object avoids showing every validation error immediately on page load, before the user has interacted with a field — a real UX consideration, not just extra code. Validation is expressed as a `computed`, so it recalculates automatically as `form` and `touched` change, with no manual re-validation calls needed.
+## Debounced Search Input — Custom Modifier
 
-### Async / server-side validation
-
-::code-wrapper{language="vue" filename="UsernameField.vue"}
+::code-wrapper{language="vue" filename="DebouncedInput.vue"}
 ```vue
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, customRef } from 'vue'
 
-const username = ref('')
-const isChecking = ref(false)
-const isAvailable = ref(null)
-
-let debounceTimer = null
-
-watch(username, (value) => {
-  clearTimeout(debounceTimer)
-  isAvailable.value = null
-
-  if (!value) return
-
-  debounceTimer = setTimeout(async () => {
-    isChecking.value = true
-    try {
-      const res = await fetch(`/api/check-username?u=${encodeURIComponent(value)}`)
-      const { available } = await res.json()
-      // guard against a stale response landing after the user kept typing
-      if (value === username.value) isAvailable.value = available
-    } finally {
-      isChecking.value = false
-    }
-  }, 400)
-})
-</script>
-
-<template>
-  <input v-model="username" placeholder="Choose a username" />
-  <span v-if="isChecking">Checking…</span>
-  <span v-else-if="isAvailable === true" class="ok">Available!</span>
-  <span v-else-if="isAvailable === false" class="error">Already taken.</span>
-</template>
-```
-::
-
-The `if (value === username.value)` guard is the same race-condition defense from chapter 04/12 — without it, a slow response for an earlier keystroke could resolve after a fast response for a later one and overwrite the correct, current availability state.
-
-## Multiple `v-model`s on a Complex Form Component
-
-::code-wrapper{language="vue" filename="AddressFields.vue"}
-```vue
-<script setup>
-defineProps({
-  street: String,
-  city: String,
-  zip: String
-})
-defineEmits(['update:street', 'update:city', 'update:zip'])
-</script>
-
-<template>
-  <input :value="street" @input="$emit('update:street', $event.target.value)" placeholder="Street" />
-  <input :value="city" @input="$emit('update:city', $event.target.value)" placeholder="City" />
-  <input :value="zip" @input="$emit('update:zip', $event.target.value)" placeholder="ZIP" />
-</template>
-```
-::
-
-::code-wrapper{language="vue"}
-```vue
-<script setup>
-import { reactive, toRefs } from 'vue'
-
-const address = reactive({ street: '', city: '', zip: '' })
-const { street, city, zip } = toRefs(address)
-</script>
-
-<template>
-  <AddressFields
-    v-model:street="street"
-    v-model:city="city"
-    v-model:zip="zip"
-  />
-</template>
-```
-::
-
-Note the `toRefs(address)` here — this is the exact same pattern from chapter 03: destructuring `address` directly (without `toRefs`) would disconnect `street`/`city`/`zip` from the parent's `address` object, silently breaking the multi-field two-way binding.
-
-## Checkbox and Radio Groups
-
-::code-wrapper{language="vue" filename="PreferencesForm.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-// v-model on a checkbox bound to an ARRAY automatically pushes/removes
-// the checkbox's `value` from that array as it's checked/unchecked
-const selectedInterests = ref([])
-
-// v-model on radios bound to the SAME ref automatically makes them
-// mutually exclusive
-const plan = ref('free')
-</script>
-
-<template>
-  <label><input type="checkbox" value="sports" v-model="selectedInterests" /> Sports</label>
-  <label><input type="checkbox" value="music" v-model="selectedInterests" /> Music</label>
-  <label><input type="checkbox" value="tech" v-model="selectedInterests" /> Tech</label>
-  <p>Selected: {{ selectedInterests.join(', ') }}</p>
-
-  <label><input type="radio" value="free" v-model="plan" /> Free</label>
-  <label><input type="radio" value="pro" v-model="plan" /> Pro</label>
-</template>
-```
-::
-
-## `<select>` with Object Values
-
-::code-wrapper{language="vue" filename="CountrySelect.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const countries = [
-  { code: 'US', name: 'United States' },
-  { code: 'CA', name: 'Canada' },
-  { code: 'IN', name: 'India' }
-]
-
-const selectedCountry = ref(countries[0])
-</script>
-
-<template>
-  <!-- :value (not value) is required to bind actual OBJECTS, -->
-  <!-- not just their string representation -->
-  <select v-model="selectedCountry">
-    <option v-for="c in countries" :key="c.code" :value="c">{{ c.name }}</option>
-  </select>
-
-  <p>You selected: {{ selectedCountry.name }} ({{ selectedCountry.code }})</p>
-</template>
-```
-::
-
-## Options API Equivalent
-
-::code-wrapper{language="vue"}
-```vue
-<script>
-export default {
-  data() {
-    return {
-      form: { email: '', password: '' },
-      touched: { email: false, password: false }
-    }
-  },
-  computed: {
-    errors() {
-      const e = {}
-      if (this.touched.email && !this.form.email.includes('@')) {
-        e.email = 'Invalid email'
-      }
-      return e
+// ── Debounced ref factory: delays updates until typing pauses ──
+function useDebouncedRef(initial, delay = 300) {
+  let value = initial
+  let timer
+  return customRef((track, trigger) => ({
+    get() { track(); return value },
+    set(newVal) {
+      clearTimeout(timer)
+      timer = setTimeout(() => { value = newVal; trigger() }, delay)
     },
-    isValid() {
-      return Object.keys(this.errors).length === 0
-    }
-  },
-  methods: {
-    onSubmit() {
-      if (!this.isValid) return
-      this.$emit('submit', { ...this.form })
-    }
-  }
+  }))
 }
+
+const search = useDebouncedRef('', 300)
+const results = ref([])
+
+// ── Watch fires 300ms after last keystroke, not on every keystroke ──
+watch(search, async (q) => {
+  if (!q) { results.value = []; return }
+  const res = await fetch(`/api/search?q=${q}`)
+  results.value = await res.json()
+})
 </script>
+
+<template>
+  <!-- Input updates immediately (user sees what they type),
+       but the ref (and watchers) only update 300ms after typing stops. -->
+  <input v-model="search" placeholder="Search…" />
+  <ul>
+    <li v-for="r in results" :key="r.id">{{ r.name }}</li>
+  </ul>
+</template>
+```
+::
+
+## Multiple v-model — Form Component Pattern
+
+::code-wrapper{language="vue" filename="RegistrationForm.vue"}
+```vue
+<script setup>
+import { computed } from 'vue'
+
+// ── Two named v-models: one for email, one for password ──
+// Parent: <RegistrationForm v-model:email="email" v-model:password="password" />
+const email = defineModel<string>('email')
+const password = defineModel<string>('password')
+
+// ── Computed validation on each model ──
+const emailError = computed(() => {
+  if (!email.value) return ''
+  return /.+@.+\..+/.test(email.value) ? '' : 'Invalid email'
+})
+
+const passwordError = computed(() => {
+  if (!password.value) return ''
+  return password.value.length >= 8 ? '' : 'Min 8 characters'
+})
+
+const isValid = computed(() =>
+  !emailError.value && !passwordError.value && email.value && password.value
+)
+</script>
+
+<template>
+  <div>
+    <input v-model="email" type="email" placeholder="Email" />
+    <span v-if="emailError" class="error">{{ emailError }}</span>
+
+    <input v-model="password" type="password" placeholder="Password" />
+    <span v-if="passwordError" class="error">{{ passwordError }}</span>
+
+    <button :disabled="!isValid">Register</button>
+  </div>
+</template>
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Debounce async validation (username/email availability checks) rather than firing a request on every keystroke — a plain `setTimeout` reset on every `watch` callback invocation is enough; reach for a library like `lodash.debounce` only if you need more advanced cancellation semantics.
-- **Debug** — If `v-model.number` doesn't seem to produce a number, check whether the field is actually empty or contains a non-numeric string — Vue's `.number` modifier falls back to the raw string when `parseFloat` would return `NaN`, silently, rather than coercing to `0` or throwing.
-- **Idiom** — For genuinely complex, multi-step, or schema-driven forms, reach for a dedicated library (`vee-validate`, `FormKit`) rather than hand-rolling validation state — the reactive-error-object pattern shown here scales fine to a handful of fields but becomes repetitive past that.
-- **Performance** — Guard every async validation/search callback with a "is this still the latest request" check (comparing against the current ref's value, or an incrementing request ID) — this is cheap insurance against race conditions that's easy to forget until it causes a confusing bug in production.
-- **Idiom** — `<select>` bound with `v-model` to an object (not a primitive) requires `:value` (a dynamic binding) on each `<option>`, never a plain `value="..."` attribute — plain attributes can only ever hold strings, which is fine for primitive `v-model` values but breaks object binding.
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. .number edge case: parseFloat("abc") → NaN, keeps original string ──
+// v-model.number on "abc" → ref stays "abc" (string), NOT NaN.
+// Vue checks: if parsed is NaN, uses the original input value.
+
+// ── 2. Checkbox v-model with true-value/false-value ──
+// <input type="checkbox" v-model="agree" true-value="yes" false-value="no" />
+// agree = "yes" when checked, "no" when unchecked (not true/false)
+
+// ── 3. Radio button v-model binds to the value attribute ──
+// <input type="radio" v-model="plan" value="pro" /> → plan = "pro" when selected
+
+// ── 4. .lazy on checkboxes/selects is a no-op ──
+// Checkboxes and selects fire 'change' natively, not 'input'.
+// .lazy only matters for text inputs and textareas.
+
+// ── 5. Form reset: use the form element's reset() method or reassign ──
+// formRef.value?.reset()  → resets to initial HTML defaults
+// Object.assign(formData, initialData)  → resets to reactive initial state
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Native `<input type="number">` still yields a string without `.number`** — This surprises almost everyone the first time; the DOM's underlying `value` property is always a string regardless of the `type` attribute, and Vue only casts it for you when you explicitly opt in with the `.number` modifier.
-- **`.lazy` changes correctness, not just timing, for anything that reads the value mid-typing** — A live character counter or live-search-as-you-type feature built on a `.lazy`-modified `v-model` simply won't update until blur/enter — `.lazy` is the wrong modifier for any UI that needs to react to every keystroke.
-- **Checkbox `v-model` behavior depends entirely on what type it's bound to** — Bound to a `Boolean` ref, a single checkbox toggles `true`/`false`; bound to an `Array` ref, the *same* directive instead pushes/splices the checkbox's `value` attribute into/out of that array. Reading Vue code without knowing which type the bound ref is makes checkbox behavior genuinely ambiguous at a glance.
-- **Custom `modelModifiers` are entirely your own component's invention — Vue doesn't validate or restrict them** — Unlike built-in modifiers (`.lazy`/`.number`/`.trim`) which are checked and applied by Vue's compiler, a custom modifier like `.capitalize` is just a key that happens to be `true` on the `modelModifiers` prop object — misspelling it on the consuming side (`v-model.captialize`) produces no error, no warning, and the modifier silently does nothing.
-- **Losing focus/cursor position by rebuilding the bound object on every keystroke** — Rebinding `v-model` to a freshly-created object reference on every input event (rather than mutating a stable object in place) can cause Vue to treat the input as "new" in certain edge cases involving `:key`, leading to lost focus or cursor position — keep the bound reactive source stable and mutate its properties, don't replace the whole object per keystroke.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. .number with type="number" vs type="text" ──
+// type="number": browser may return "" for invalid input, .number keeps ""
+// type="text" + .number: "42abc" → parseFloat("42abc") = 42 (partial parse!)
+// Always use type="number" with .number for proper browser validation.
+
+// ── 2. v-model on contenteditable elements is not supported ──
+// Use a manual binding: :textContent + @input handler.
+// Or use a library like vue-contenteditable.
+
+// ── 3. v-model + v-for: each item needs its own model ref ──
+// ❌ <input v-for="item in items" v-model="item" /> — binds to item reference
+// ✅ <input v-for="item in items" v-model="item.value" /> — binds to a property
+
+// ── 4. defineModel is writable — but parent owns the source ──
+// Writing to model.value emits update:modelValue → parent updates its ref.
+// The child's model.value reflects the parent's value after the round-trip.
+// In the same tick, model.value may show the old value until parent updates.
+
+// ── 5. .trim on number inputs strips whitespace but doesn't affect parsing ──
+// v-model.trim.number="age" → trims, then parses.
+// "  42  " → trim → "42" → number → 42. Works as expected.
+
+// ── 6. Custom component v-model: modelValue must match exactly ──
+// defineModel() → prop name is "modelValue", emit is "update:modelValue"
+// defineModel('foo') → prop name is "foo", emit is "update:foo"
+// Parent: v-model="x" → modelValue, v-model:foo="x" → foo
+```
+::
 
 ## 🧠 Spot the Bug
 
-A price input is supposed to let users type a number, then displays the value doubled elsewhere on the page. The doubled value looks wrong for any two-digit price.
+A number input always stores a string even though `.number` is applied.
 
-::code-wrapper{language="vue"}
+::code-wrapper{language="vue" filename="NumberBug.vue"}
 ```vue
 <script setup>
-import { ref, computed } from 'vue'
-
-const price = ref(0)
-const doubled = computed(() => price.value * 2)
+import { ref, watch } from 'vue'
+const age = ref(0)
+watch(age, (v) => console.log(typeof v, v))  // always logs "string"
 </script>
 
 <template>
-  <input v-model="price" type="number" />
-  <p>Doubled: {{ doubled }}</p>
+  <!-- Missing .number modifier — v-model stores the raw string -->
+  <input v-model="age" type="number" />
 </template>
 ```
 ::
@@ -395,33 +418,18 @@ const doubled = computed(() => price.value * 2)
 <details>
 <summary>Answer</summary>
 
-Without the `.number` modifier, `v-model` on this `<input type="number">` still assigns the raw string value from the DOM to `price.value` — typing `25` sets `price.value` to the string `"25"`, not the number `25`. Then `price.value * 2` happens to work correctly (`*` coerces strings to numbers in JavaScript), but the moment the code does anything with `+` instead of `*` — for example concatenating it into a display string, or summing it with another price — `"25" + "25"` produces `"2525"`, not `50`. The immediate symptom in this exact snippet is subtler: multi-digit prices "look wrong" once this value flows anywhere that expects a true number (an API payload requiring `type: number`, a comparison, or `toFixed()`, which throws on a string).
+`v-model` without `.number` stores the input's value as a string (`$event.target.value` is always a string). `type="number"` only controls the browser's input UI — it doesn't change what `v-model` stores.
 
-::code-wrapper{language="vue"}
+**Fix** — add the `.number` modifier:
+
+::code-wrapper{language="vue" filename="NumberFixed.vue"}
 ```vue
-<script setup>
-import { ref, computed } from 'vue'
-
-const price = ref(0)
-const doubled = computed(() => price.value * 2)
-</script>
-
 <template>
-  <input v-model.number="price" type="number" />
-  <p>Doubled: {{ doubled }}</p>
+  <input v-model.number="age" type="number" />
 </template>
 ```
 ::
 
-**The lesson**: `type="number"` is purely an HTML input affordance (numeric keyboard, spinner arrows, basic browser validation) — it does not change the JavaScript type `v-model` gives you. Always add `.number` when the bound value needs to behave as an actual number downstream.
+Now `age` is stored as a `number` (or `""` if empty, since `parseFloat("")` is `NaN` and Vue keeps the original string for that case). **The lesson**: `type="number"` controls the UI; `.number` controls the stored type. You need both for correct behavior.
 
 </details>
-
-## Key Takeaways
-
-- Built-in `v-model` modifiers — `.lazy` (sync on change, not input), `.number` (cast to Number), `.trim` (strip whitespace) — solve specific, common form needs without manual event handling.
-- `type="number"` doesn't make `v-model` produce a JavaScript number — `.number` is required for that regardless of the input's HTML type.
-- Custom components support `v-model` modifiers via the `modelModifiers` prop (or `defineModel`'s destructured modifiers in 3.4+) — entirely component-defined and unchecked by Vue.
-- Checkbox `v-model` behavior (boolean toggle vs. array push/splice) depends on the bound ref's type, not the directive itself.
-- `<select>`/checkbox/radio `v-model` bound to objects requires `:value` bindings on `<option>`s — plain `value="..."` attributes can only ever be strings.
-- Always debounce and guard async validation against race conditions — compare the resolved response against the field's current value before applying it.

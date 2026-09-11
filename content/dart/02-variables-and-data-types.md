@@ -1,276 +1,346 @@
-# 02 — Variables & Data Types
+---
+title: "Dart — Variables, Type System & Memory Semantics"
+description: "Deep-dive into Dart's static type system, const/final/late memory semantics, canonicalization, platform-dependent int precision, and nullable type algebra. Code-first engineering reference."
+---
 
-Dart is statically typed with type inference. Variables can be typed explicitly or inferred with `var`/`final`/`const`.
+# Dart — Variables, Type System & Memory Semantics
 
-## Declaring Variables
+## `var` / `final` / `const` / `late` — Allocation & Canonicalization
 
 ::code-wrapper{language="dart"}
 ```dart
-var name = 'Alice';          // type inferred (String)
-String city = 'NYC';         // explicit type
-final age = 30;              // runtime constant (int)
-const pi = 3.14159;          // compile-time constant (double)
-late String description;     // assigned later
+// ── var: type inferred at compile time, mutable reference ──
+var count = 0;           // inferred as int — the TYPE is fixed, the VALUE is mutable
+count = 42;              // ✓ same type, reassignment OK
+// count = 'hi';         // ✗ compile error: int expected — inference is not dynamic
+
+// ── final: single-assignment, value computed at RUNTIME ──
+final now = DateTime.now();  // ✓ evaluated at construction, locked thereafter
+// now = DateTime.now();     // ✗ throws: late initialization already happened
+
+// ── const: compile-time constant, CANONICALIZED across the program ──
+const pi = 3.14159;          // the compiler interns this — identical const expressions
+const pi2 = 3.14159;         // are the SAME object in memory (identical(pi, pi2) == true)
+const list = [1, 2, 3];      // deeply immutable, canonicalized — same instance everywhere
+// list.add(4);               // ✗ UnsupportedError: const lists are immutable
+
+// ── late: non-nullable, assigned before first read, or lazy initializer ──
+late final String config = _loadConfig();  // _loadConfig() runs ONLY on first read
+// Reading `config` before assignment throws LateInitializationError.
+// With an initializer (above), it's always safe — runs lazily, caches result.
+
+String _loadConfig() {
+  print('Config loaded');  // runs once, on first access
+  return 'production';
+}
 ```
 ::
-### `var` vs explicit type
 
-`var` infers the type from the initializer. Once inferred, the type is fixed — you can't assign a different type:
+### `const` Canonicalization — Memory Sharing
 
 ::code-wrapper{language="dart"}
 ```dart
-var x = 10;     // x is int
-x = 20;         // ✓
-// x = 'hi';    // ✗ type error: x is int
+// const objects with identical arguments are the SAME instance (canonicalized).
+// The compiler deduplicates them — zero allocation at runtime for repeated uses.
+const a = [1, 2, 3];
+const b = [1, 2, 3];
+print(identical(a, b));  // true — same object in memory (not just equal)
+
+// This extends to const constructors:
+class Color {
+  final int r, g, b;
+  const Color(this.r, this.g, this.b);
+}
+
+const red1 = Color(255, 0, 0);
+const red2 = Color(255, 0, 0);
+print(identical(red1, red2));  // true — canonicalized at compile time
+
+// Non-const: separate allocations, identity comparison is false.
+final red3 = Color(255, 0, 0);
+final red4 = Color(255, 0, 0);
+print(identical(red3, red4));  // false — distinct heap allocations
+print(red3 == red4);           // false (unless == is overridden)
 ```
 ::
-Use `var` for local variables with obvious types. Use explicit types for public APIs, unclear initializers, or when it improves readability.
 
-### `final` vs `const`
-
-- **`final`** — can be set only once, at runtime. Computed once.
-- **`const`** — a compile-time constant. The value must be known at compile time.
+### `final` vs `const` — The Deep Immutability Trap
 
 ::code-wrapper{language="dart"}
 ```dart
-final now = DateTime.now();   // ✓ runtime value
-// const now = DateTime.now(); // ✗ not a compile-time constant
-
-const defaultName = 'Guest';  // ✓ literal
-final greeting = 'Hello, $defaultName';  // ✓ (string interpolation of a const)
-```
-::
-`const` is deeper — if a `const` list/map contains `const` values, the whole structure is canonicalized (one instance shared). `final` only prevents reassignment, not deep mutation:
-
-::code-wrapper{language="dart"}
-```dart
+// ❌ Anti-pattern: assuming `final` makes collections immutable.
 final list = [1, 2, 3];
-list.add(4);       // ✓ final list is mutable
+list.add(4);       // ✓ `final` locks the REFERENCE, not the contents.
+list[0] = 99;      // ✓ mutation is allowed — `final` ≠ immutable.
+// list = [0];      // ✗ reassignment is blocked.
 
-const list2 = [1, 2, 3];   // const list (implicitly `const`)
-// list2.add(4);            // ✗ const lists are immutable
+// ✓ Correct: use `const` for compile-time immutable, or List.unmodifiable for runtime.
+const immutable = [1, 2, 3];     // deeply immutable, canonicalized
+// immutable.add(4);              // ✗ UnsupportedError
+
+final readonly = List.unmodifiable([1, 2, 3]);  // runtime immutability
+// readonly.add(4);               // ✗ UnsupportedError — view wrapper throws
+
+// List.unmodifiable is a VIEW — mutations to the source are visible:
+final source = [1, 2, 3];
+final view = List.unmodifiable(source);
+source.add(4);
+print(view);  // [1, 2, 3, 4] — the view reflects the source mutation!
+// For a true immutable copy: List.unmodifiable([...source])
 ```
 ::
-### `late`
 
-`late` declares a non-nullable variable that will be assigned later — before first use:
+## Built-in Types — Platform-Dependent Semantics
+
+### Numbers: `int`, `double`, `num`
 
 ::code-wrapper{language="dart"}
 ```dart
-late String description;
+// ── Native (VM/AOT): int is 64-bit signed, double is IEEE 754 64-bit ──
+// ── Web (dart2js/DDC): both are JS numbers (IEEE 754 doubles) ──
 
-void init() {
-	description = 'Initialized later';
+int max64 = 9223372036854775807;  // 2^63 - 1 on native
+max64 + 1;  // native: wraps to -9223372036854775808 (two's complement, SILENT)
+            // web: becomes 9223372036854775808.0 (a double, precision lost above 2^53)
+
+// The web precision trap:
+int big = 1 << 53;  // 9007199254740992
+print(big + 1 == big);  // native: false | web: true (double can't represent 2^53+1)
+
+// Use BigInt for arbitrary precision (works on all platforms):
+BigInt huge = BigInt.parse('9223372036854775807') + BigInt.one;
+print(huge);  // 9223372036854775808 — exact, no overflow
+
+// num is the supertype of int and double:
+num any = 10;     // can hold int or double
+any = 5.5;        // ✓
+// any.abs();     // ✓ num has abs()
+// any.toRadixString(16); // ✗ int-only method — requires `as int` or `is int` check
+```
+::
+
+### Integer Division & Modulo — Sign Semantics
+
+::code-wrapper{language="dart"}
+```dart
+// `/` ALWAYS returns double, even for int operands:
+print(7 / 2);    // 3.5 (double)
+print(4 / 2);    // 2.0 (double, NOT int 2)
+
+// `~/` is integer division (truncates toward ZERO, not floor):
+print(7 ~/ 2);    // 3
+print(-7 ~/ 2);   // -3 (truncates toward zero — NOT -4 like Python's floor division)
+
+// `%` follows the sign of the DIVIDEND (like C, unlike Python):
+print(7 % 3);     // 1
+print(-7 % 3);    // -1 (Dart: sign of dividend | Python: 2, sign of divisor)
+print(7 % -3);    // 1  (sign of dividend)
+
+// To get Python-style non-negative modulo:
+int pyMod(int a, int n) => ((a % n) + n) % n;
+print(pyMod(-7, 3));  // 2
+```
+::
+
+### Strings — Internals & Interpolation
+
+::code-wrapper{language="dart"}
+```dart
+// Dart strings are sequences of UTF-16 code units (NOT code points / graphemes).
+// A single emoji may be 2 code units (surrogate pair):
+var emoji = '🎉';  // U+1F389
+print(emoji.length);          // 2 — two UTF-16 code units
+print(emoji.runes.length);    // 1 — one Unicode code point
+print(emoji.codeUnits.length); // 2 — code units
+
+// ❌ Anti-pattern: indexing strings for "characters":
+var s = 'café';
+print(s[3]);  // 'é' — works here (1 code unit)
+var s2 = 'café🎉';
+print(s2[4]);  // garbage surrogate — NOT the emoji
+print(s2[5]);  // second half of surrogate pair — NOT a character
+
+// ✓ Correct: use runes for code points, or `characters` package for graphemes:
+for (var rune in s2.runes) {
+  print(String.fromCharCode(rune));  // c, a, f, é, 🎉
 }
 
-void main() {
-	init();
-	print(description);   // ✓ assigned before use
+// String interpolation calls toString() — override for readable output:
+class Point {
+  final double x, y;
+  const Point(this.x, this.y);
+  @override
+  String toString() => 'Point($x, $y)';  // without this: 'Instance of Point'
+}
+
+var p = Point(1, 2);
+print('Location: $p');           // 'Location: Point(1.0, 2.0)'
+print('Sum: ${p.x + p.y}');     // 'Sum: 3.0' — ${} for expressions
+```
+::
+
+## `Object` vs `dynamic` vs `Object?` — Type Safety Boundaries
+
+::code-wrapper{language="dart"}
+```dart
+// ── Object: non-nullable supertype of all non-null types ──
+// Static type checking is ON — you must cast to access methods.
+Object obj = 'hello';
+// obj.toUpperCase();  // ✗ compile error: Object has no toUpperCase
+(obj as String).toUpperCase();  // ✓ explicit cast — throws if wrong type
+if (obj is String) {
+  obj.toUpperCase();  // ✓ type promotion: obj is String in this block
+}
+
+// ── dynamic: disables ALL static type checking ──
+// Any method call compiles — checked at RUNTIME (NoSuchMethodError if missing).
+dynamic dyn = 'hello';
+dyn.toUpperCase();  // ✓ compiles, works at runtime
+dyn = 42;
+dyn.toUpperCase();  // ✓ compiles, throws NoSuchMethodError at runtime (int has no toUpperCase)
+dyn.nonExistent();  // ✓ compiles, throws at runtime
+
+// ── Object?: nullable supertype of ALL types (including Null) ──
+Object? maybe = null;  // ✓
+maybe = 'hello';       // ✓
+Object notNull = null; // ✗ compile error: Object is non-nullable
+
+// ❌ Anti-pattern: using `dynamic` for "I don't know the type."
+// It defeats the entire type system — bugs surface at runtime, not compile time.
+
+// ✓ Correct: use `Object` (non-null, type-safe, must cast) or `Object?` (nullable).
+// Use `dynamic` ONLY for JSON parsing interop or JS interop — never in APIs.
+```
+::
+
+## Type Conversion — Safe Parsing Patterns
+
+::code-wrapper{language="dart"}
+```dart
+// ❌ Anti-pattern: `parse` on untrusted input — throws FormatException.
+int parseUnsafe(String input) => int.parse(input);  // throws on 'abc'
+
+// ✓ Correct: `tryParse` returns null on failure — handle explicitly.
+int? parseSafe(String input) => int.tryParse(input);
+
+void handleAge(String input) {
+  final age = int.tryParse(input);
+  if (age == null || age < 0 || age > 150) {
+    throw ArgumentError('Invalid age: $input');
+  }
+  // ... use age
+}
+
+// double ↔ int conversions:
+print(3.7.toInt());    // 3 (truncates toward zero)
+print(-3.7.toInt());   // -3 (truncates toward zero, NOT floor)
+print(3.0.toInt());    // 3
+// print(3.7.toInt() == 3.7.floor());  // false for negatives: toInt=-3, floor=-4
+
+// toString with formatting:
+print(3.14159.toStringAsFixed(2));  // '3.14'
+print(255.toRadixString(16));       // 'ff'
+print(255.toRadixString(2));        // '11111111'
+```
+::
+
+## Records (Dart 3) — Value-Semantic Anonymous Types
+
+::code-wrapper{language="dart"}
+```dart
+// Records are immutable, value-equal, zero-allocation anonymous aggregates.
+// Fields are positional by default, named with a label.
+({String name, int age}) user = (name: 'Alice', age: 30);
+(int x, int y) point = (3, 4);
+
+// Value equality is automatic — no need to override == or hashCode:
+var a = (x: 1, y: 2);
+var b = (x: 1, y: 2);
+print(a == b);  // true — structural equality, built in
+print(identical(a, b));  // false — distinct instances, but equal
+
+// Destructuring with patterns:
+var (x, y) = point;  // x = 3, y = 4
+var (:name, :age) = user;  // name = 'Alice', age = 30
+
+// Use records instead of tiny one-off classes:
+({User user, List<Repo> repos}) fetchProfile(String username) async {
+  // ... no need to define a Profile class
+  return (user: u, repos: r);
 }
 ```
 ::
-`late` is useful for:
-- Fields that can't be initialized in the constructor but will be before use.
-- Expensive initializers that should run lazily (only when first read):
-
-::code-wrapper{language="dart"}
-```dart
-late final expensiveValue = computeExpensiveValue();   // runs only when first read
-```
-::
-Reading a `late` variable before it's assigned throws `LateInitializationError`.
-
-## Built-in Types
-
-### Numbers: `int`, `double`
-
-::code-wrapper{language="dart"}
-```dart
-int age = 30;
-double price = 19.99;
-num anyNumber = 10;    // num is the supertype of int and double
-anyNumber = 5.5;       // ✓
-```
-::
-`int` is 64-bit (arbitrary precision in web). `double` is IEEE 754 64-bit. `num` is the supertype. Integer literals can use `_` as a separator: `1_000_000`.
-
-### Strings
-
-::code-wrapper{language="dart"}
-```dart
-String name = 'Alice';
-String greeting = "Hello, $name!";          // interpolation
-String multi = '''Multi
-line
-string''';                                  // triple-quoted
-String raw = r'C:\Users\name';              // raw string (no escapes)
-```
-::
-Both `'...'` and `"..."` work (interchangeable). `$variable` or `${expression}` for interpolation. `r'...'` is raw (backslashes are literal). Triple quotes for multi-line.
-
-### Booleans
-
-::code-wrapper{language="dart"}
-```dart
-bool isReady = true;
-bool isEmpty = false;
-```
-::
-Dart uses **true booleans** for conditions — unlike JavaScript, `0`, `''`, `null`, `[]` are *not* falsy. Only `true` is truthy, only `false` is falsy.
-
-### Lists (arrays)
-
-::code-wrapper{language="dart"}
-```dart
-List<int> numbers = [1, 2, 3];
-var mixed = [1, 'two', 3.0];        // List<Object> (or List<dynamic>)
-var fruits = <String>['apple', 'banana'];
-var spread = [...fruits, 'cherry']; // spread
-```
-::
-Lists are ordered, growable (by default), 0-indexed. `<Type>` before the literal specifies the type. `...` spreads another list.
-
-### Sets
-
-::code-wrapper{language="dart"}
-```dart
-Set<String> colors = {'red', 'green', 'blue'};
-var numbers = <int>{1, 2, 3};
-```
-::
-Sets are unordered collections of unique items. `{}` alone is a `Map` (empty), not a Set — use `<Type>{}` or `Set()` for an empty Set.
-
-### Maps
-
-::code-wrapper{language="dart"}
-```dart
-Map<String, int> ages = {'Alice': 30, 'Bob': 25};
-var empty = <String, int>{};       // typed empty map
-var value = ages['Alice'];         // 30 (nullable: null if missing)
-ages['Charlie'] = 35;              // add/update
-```
-::
-Maps are key-value pairs. Keys are unique. Accessing a missing key returns `null` (hence the value type is nullable).
-
-### `null`
-
-Dart has **sound null safety** (since Dart 2.12). Types are non-nullable by default. A nullable type is marked with `?`:
-
-::code-wrapper{language="dart"}
-```dart
-String name = 'Alice';       // non-nullable, can't be null
-String? maybeName = null;    // nullable, can be null
-```
-::
-See chapter 09 for null safety in depth.
-
-### `dynamic` and `Object`
-
-- **`Object`** — the supertype of all non-null types. Type-safe but general.
-- **`dynamic`** — disables static type checking. Any operation is allowed at compile time (checked at runtime). Use sparingly — it defeats Dart's type safety.
-
-::code-wrapper{language="dart"}
-```dart
-Object x = 'hello';
-// x.toUpperCase();  // ✗ Object doesn't have toUpperCase
-(x as String).toUpperCase();   // ✓ cast
-
-dynamic y = 'hello';
-y.toUpperCase();    // ✓ (no static check; works at runtime)
-y = 10;
-y.foo();            // ✓ compiles, throws NoSuchMethodError at runtime
-```
-::
-Prefer `Object` over `dynamic` when you want a general type — `Object` keeps static checks (you must cast to use methods).
-
-## Type Conversion
-
-::code-wrapper{language="dart"}
-```dart
-// String → int/double
-int.parse('42');
-double.parse('3.14');
-int.tryParse('abc');    // null (no throw)
-
-// int/double → String
-42.toString();
-3.14.toStringAsFixed(2);   // '3.14'
-
-// int ↔ double
-3.toDouble();    // 3.0
-3.14.toInt();    // 3 (truncates)
-```
-::
-`tryParse` returns `null` on failure (instead of throwing) — use it for user input.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `var` for local variables with obvious types — `var name = 'Alice'` is clearer than `String name = 'Alice'` (the type is obvious from the literal). Use explicit types for public APIs and unclear initializers.
-- **Idiom**: use `final` for variables that won't be reassigned — `final` is a runtime constant (computed once). Use `const` for compile-time constants (literals, simple expressions). Prefer `const` when possible (canonicalized, optimized).
-- **Idiom**: use `late` for fields that can't be initialized in the constructor but will be before use — and for lazy initializers (`late final x = expensive();` runs only when first read). But read before assignment throws.
-- **Idiom**: prefer `Object` over `dynamic` — `Object` keeps static type checks (you must cast to use methods), while `dynamic` disables them (runtime errors). Use `dynamic` only for interoperability (JSON, JS) when necessary.
-- **Idiom**: use `tryParse` (not `parse`) for user input — `int.tryParse(input)` returns `null` on failure instead of throwing. Handle the `null` case explicitly.
+- **Performance**: `const` objects are canonicalized at compile time — using `const` in hot paths (Flutter widget trees, lookup tables) means zero allocation and zero GC pressure. Prefer `const` over `final` when the value is known at compile time.
+- **Idiom**: `late final x = expensive()` defers computation until first read — the initializer runs once and caches. Use for expensive fields that may never be accessed (e.g., a debug-only inspector).
+- **Idiom**: `Object` over `dynamic` for "any non-null value" — `Object` preserves static type checking (you must cast), while `dynamic` silently disables it. `dynamic` should only appear at JSON/JS interop boundaries.
+- **Portability**: use `BigInt` for integers above 2^53 that must work on web — `int` on web is a JS double and loses precision. On native, `int` is 64-bit and safe up to 2^63-1.
+- **Debug**: `print(obj)` calls `obj.toString()`. Always override `toString()` on domain objects — the default `'Instance of Foo'` is useless in logs and error messages.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Only `true`/`false` are boolean**: `if (0)`, `if ('')`, `if (null)` are compile errors (unlike JS). Only `if (bool)` is valid. Dart has no truthy/falsy coercion.
+- **Only `true`/`false` are boolean**: `if (0)`, `if ('')`, `if (null)`, `if ([])` are all compile errors. Dart has no truthy/falsy coercion (unlike JS). Only `if (bool)` is valid.
 - **`{}` is an empty `Map`, not a `Set`**: `var x = {}` infers `Map<dynamic, dynamic>`. Use `var x = <int>{}` or `Set<int>()` for an empty Set.
-- **`final` doesn't make collections immutable**: `final list = [1,2,3]; list.add(4)` works — `final` prevents reassigning `list`, not mutating it. Use `const` or `List.unmodifiable()` for immutable collections.
-- **`const` lists/maps are deeply immutable and canonicalized**: `const [1,2,3]` is the same instance everywhere. Mutating a `const` list throws. Use for fixed data.
-- **Reading a `late` variable before assignment throws**: `late int x; print(x);` throws `LateInitializationError`. Ensure `late` variables are assigned before first read.
-- **`const` requires compile-time-known values**: `const x = DateTime.now()` fails (runtime value). Use `final` for runtime constants.
-- **`int` on web is arbitrary precision, but `double` is 64-bit**: on the web (JS compilation), `int` is a JS number (double) — `int` values above 2^53 lose precision. On native, `int` is 64-bit.
-- **Integer division returns `int`**: `7 ~/ 2 = 3` (truncated). `7 / 2 = 3.5` (always double, even for int inputs).
-- **`num` is the supertype of `int` and `double`**: a `num` variable can hold either, but you can't call `int`-only methods without a cast.
-- **String interpolation with `Object` calls `toString()`**: `'value: $obj'` calls `obj.toString()`. Override `toString()` in your classes for readable output.
+- **`final` doesn't freeze collections**: `final list = [1,2,3]; list.add(4)` works — `final` locks the reference, not the contents. Use `const` or `List.unmodifiable([...source])` for true immutability.
+- **`List.unmodifiable` is a view**: it wraps the source list. Mutating the source is visible through the view. Use `List.unmodifiable([...source])` for an immutable copy.
+- **Reading a `late` variable before assignment throws**: `late int x; print(x);` → `LateInitializationError`. Use `late final x = initializer` to guarantee safe lazy initialization.
+- **`const` requires compile-time-known values**: `const x = DateTime.now()` fails. `final` accepts runtime values. `const` inside a `final` context is fine: `final x = const [1,2,3]`.
+- **`int` on web loses precision above 2^53**: `int.parse('9007199254740993')` on web gives `9007199254740992` (rounded double). Use `BigInt.parse` for exact large integers on web.
+- **String `.length` is UTF-16 code units, not characters**: `'🎉'.length` is `2` (surrogate pair). Use `.runes.length` for code points, or the `characters` package for grapheme clusters.
+- **Integer division `~/` truncates toward zero**: `-7 ~/ 2 = -3` (not -4). `%` follows the sign of the dividend: `-7 % 3 = -1` (not 2 like Python).
+- **`toString()` on `num`**: `3.0.toString()` is `'3.0'` (not `'3'`). Use `toInt().toString()` or `toStringAsFixed(0)` for `'3'`.
 
 ## 🧠 Spot the Bug
 
-A developer writes a function to check if a string is empty, but it doesn't compile:
+A developer caches configuration with `final`, expecting it to be immutable. Another part of the code mutates it:
 
 ::code-wrapper{language="dart"}
 ```dart
-void greet(String? name) {
-	if (name) {
-		print('Hello, $name');
-	} else {
-		print('Hello, stranger');
-	}
+class Config {
+  final Map<String, String> settings = {'env': 'prod', 'debug': 'false'};
+
+  void override(String key, String value) {
+    settings[key] = value;  // mutates the "final" map
+  }
+}
+
+void main() {
+  final config = Config();
+  config.override('env', 'dev');
+  print(config.settings['env']);  // 'dev' — the "final" map was mutated!
 }
 ```
 ::
 
-What's wrong?
+What's wrong and how to fix it?
 
 <details>
 <summary>Answer</summary>
 
-`if (name)` is invalid — Dart conditions must be `bool`, not `String?`. Unlike JavaScript, Dart doesn't coerce strings to booleans (no truthy/falsy). `name` is a `String?` (nullable string), and `if` requires a `bool`.
+`final` locks the reference (`settings` can't be reassigned), but the `Map` itself is mutable. `settings[key] = value` mutates the contents — the "final" map is changed. `final` is not deep immutability.
 
-The fix — compare explicitly:
-
-```dart
-void greet(String? name) {
-	if (name != null && name.isNotEmpty) {
-		print('Hello, $name');
-	} else {
-		print('Hello, stranger');
-	}
-}
-```
-::
-Or use null-aware operators:
+The fix — use `Map.unmodifiable` (runtime) or `const` (compile-time):
 
 ```dart
-void greet(String? name) {
-	print('Hello, ${name ?? 'stranger'}');
+class Config {
+  // Runtime immutable — throws on any mutation attempt.
+  final Map<String, String> settings = Map.unmodifiable({'env': 'prod', 'debug': 'false'});
+
+  void override(String key, String value) {
+    // settings[key] = value;  // ✗ UnsupportedError at runtime
+    throw UnsupportedError('Config is immutable — create a new instance to override.');
+  }
+}
+
+// Or compile-time immutable (if values are literals):
+class Config {
+  const Config();
+  static const Map<String, String> settings = {'env': 'prod', 'debug': 'false'};
 }
 ```
-::
-**The lesson**: Dart uses true booleans for conditions — no truthy/falsy coercion (unlike JS). `if (x)` requires `x` to be `bool`. Compare explicitly (`!= null`, `isNotEmpty`) or use null-aware operators (`??`).
+
+`final` = single-assignment reference. `const` = deeply immutable + canonicalized. `List/Map.unmodifiable` = runtime immutable view. Choose based on whether the value is known at compile time (`const`), constructed at runtime (`unmodifiable`), or genuinely mutable (`final` + mutable collection).
 
 </details>
-
-## Summary
-
-You can declare variables (`var`, explicit type, `final`, `const`, `late`), understand the built-in types (`int`, `double`, `num`, `String`, `bool`, `List`, `Set`, `Map`, `null`, `Object`, `dynamic`), convert types (`parse`/`tryParse`/`toString`/`toInt`/`toDouble`), and use Dart's sound null safety (`?` for nullable) — with the true-boolean and `final`-vs-`const` traps avoided. Next: operators and expressions.

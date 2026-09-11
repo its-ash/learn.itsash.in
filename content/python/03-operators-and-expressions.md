@@ -1,34 +1,78 @@
 # 03 — Operators & Expressions
 
-## Arithmetic Operators
+## Arithmetic — Floor Division and Modulo Are Not C-Style
 
 ::code-wrapper{language="python"}
 ```python
-print(7 + 3)     # 10
-print(7 - 3)     # 4
-print(7 * 3)     # 21
-print(7 / 3)     # 2.3333333333333335  — true division, ALWAYS returns float
-print(7 // 3)    # 2                    — floor division, truncates toward -inf
-print(7 % 3)     # 1                    — modulo
-print(7 ** 3)    # 343                  — exponentiation
-print(-7 // 3)   # -3  NOT -2!          — floors toward negative infinity
-print(-7 % 3)    # 2                    — result takes the sign of the divisor
+# Python's // and % follow MATHEMATICAL flooring, not C/Java truncation.
+# This matters in pagination, hashing, ring buffers, and modular arithmetic.
+
+# ── Truncation (C/Java/Rust) vs Flooring (Python) ──
+#   C:     -7 / 2  = -3   (truncates toward zero)
+#   Python: -7 // 2 = -4  (floors toward -∞)
+
+# Production: ring buffer index computation
+BUFFER_SIZE = 256
+
+def ring_index_c_style(offset):
+    """WRONG — C-style truncation produces negative indices for negative offsets."""
+    return int(offset / BUFFER_SIZE) % BUFFER_SIZE   # truncation, not flooring
+
+def ring_index_python(offset):
+    """CORRECT — Python's % always returns a value with the sign of the DIVISOR."""
+    return offset % BUFFER_SIZE   # always 0..255, even for negative offsets
+
+print(ring_index_c_style(-1))     # 255 — accidentally works here, but breaks at other values
+print(ring_index_python(-1))      # 255 — guaranteed correct: -1 % 256 = 255
+print(ring_index_python(-257))    # 255 — correct: -257 % 256 = 255
+
+# ── The divmod() builtin — quotient + remainder in one operation ──
+# More efficient than computing // and % separately (one division operation)
+quotient, remainder = divmod(-17, 5)
+print(quotient, remainder)        # -4, 3  — q*floors*, r takes sign of divisor
+# Verify: quotient * divisor + remainder == dividend
+assert quotient * 5 + remainder == -17
 ```
 ::
-
-### `//` floors, it does not truncate — the classic C-programmer trap
 
 ::code-wrapper{language="python"}
 ```python
-# A C/Java programmer expects integer division to truncate toward zero
-print(-7 // 2)     # -4  (floors toward -infinity: -3.5 -> -4)
-print(int(-7 / 2))  # -3  (truncates toward zero: -3.5 -> -3)
+# ── Production: parsing binary protocols with bitwise operators ──
+# TCP header flag extraction — real-world bit manipulation, not toy examples
 
-# These are DIFFERENT operations with different results for negative operands
+def parse_tcp_flags(flags_byte: int) -> dict:
+    """Extract TCP header flags from a single byte — bit masking in production code."""
+    return {
+        "FIN":  bool(flags_byte & 0x01),   # bit 0 — AND isolates single bit, bool() normalizes
+        "SYN":  bool(flags_byte & 0x02),   # bit 1
+        "RST":  bool(flags_byte & 0x04),   # bit 2
+        "PSH":  bool(flags_byte & 0x08),   # bit 3
+        "ACK":  bool(flags_byte & 0x10),   # bit 4
+        "URG":  bool(flags_byte & 0x20),   # bit 5
+        "ECE":  bool(flags_byte & 0x40),   # bit 6
+        "CWR":  bool(flags_byte & 0x80),   # bit 7
+    }
+
+# SYN+ACK = 0x02 | 0x10 = 0x12 = 18
+flags = 0x12
+parsed = parse_tcp_flags(flags)
+print(parsed)   # {'FIN': False, 'SYN': True, 'RST': False, 'PSH': False, 'ACK': True, ...}
+
+# ── Packed bitfield construction (e.g., for protocol headers) ──
+def build_tcp_flags(fin=False, syn=False, rst=False, psh=False, ack=False, urg=False):
+    """Pack boolean flags into a single byte using bit shifts and OR."""
+    flags = 0
+    flags |= (fin << 0)   # shift each flag to its bit position, OR into result
+    flags |= (syn << 1)
+    flags |= (rst << 2)
+    flags |= (psh << 3)
+    flags |= (ack << 4)
+    flags |= (urg << 5)
+    return flags
+
+print(build_tcp_flags(syn=True, ack=True))   # 18 = 0x12
 ```
 ::
-
-This matters in real code: pagination math, hashing, and modular arithmetic that assumes C-style truncation will silently produce off-by-one bugs on negative inputs in Python.
 
 ## Comparison Operators
 

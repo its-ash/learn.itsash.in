@@ -1,387 +1,355 @@
-# 09 — Concurrent Programming
+---
+title: Scala — Concurrency: Futures, ExecutionContext & Backpressure
+description: Production deep-dive into Scala's Future/Promise model, ExecutionContext tuning, backpressure, retry with exponential backoff, race conditions, and the JVM memory model implications for concurrent Scala code.
+---
 
-## Futures (Async Operations)
+# 09 — Concurrency: Futures, ExecutionContext & Backpressure
 
-`Future[T]` represents a value that may not be available yet:
+## `Future[T]` — The Async Computation Model
+
+::code-wrapper{language="scala"}
+```scala
+import scala.concurrent.{Future, Promise, ExecutionContext}
+import scala.concurrent.duration.*
+import scala.util.{Success, Failure}
+
+// Future[T] represents an async computation that will produce T or fail with Throwable.
+// A Future is either: Incomplete | Completed(Success(T)) | Completed(Failure(ex))
+// Once completed, it's IMMUTABLE — you can't change its result.
+
+// Future starts executing IMMEDIATELY upon construction (eager, not lazy)
+// on the provided ExecutionContext (thread pool).
+def fetchUser(id: Long)(using ec: ExecutionContext): Future[User] = Future {
+  httpClient.get(s"/users/$id").as[User]   // runs on ec's thread pool
+}
+
+// Transformations return NEW Futures — they don't mutate the original
+// map: runs after the source Future completes successfully
+val withName: Future[String] = fetchUser(42).map(_.name)
+
+// flatMap: sequencng — the returned Future determines the next async step
+val withPosts: Future[(User, List[Post])] = fetchUser(42).flatMap { user =>
+  fetchPosts(user.id).map(posts => (user, posts))  // only starts after fetchUser succeeds
+}
+
+// for-comprehension is sugar for flatMap/map — sequential, not parallel
+val pipeline: Future[String] =
+  for
+    user  <- fetchUser(42)                // starts immediately
+    posts <- fetchPosts(user.id)          // starts AFTER fetchUser completes
+    top   <- fetchTopPost(posts)          // starts AFTER fetchPosts completes
+  yield top.title
+// Each step waits for the previous — total time = sum of all steps
+```
+::
+
+## Parallel vs Sequential — `zip` vs `flatMap`
+
+::code-wrapper{language="scala"}
+```scala
+// ❌ ANTI-PATTERN: sequential when you want parallel
+for
+  users <- fetchUsers()                    // 100ms
+  stats <- fetchStats()                    // 100ms — doesn't start until fetchUsers done
+yield (users, stats)
+// Total: 200ms (sequential)
+
+// ✅ CORRECT: start both immediately, wait for both
+val users = fetchUsers()                    // starts NOW
+val stats = fetchStats()                    // starts NOW (parallel with users)
+val combined: Future[(List[User], Stats)] = users.zip(stats)
+// Total: ~100ms (parallel, limited by slowest)
+
+// zip vs zipPar:
+//   zip: completes when both complete; if one fails, the result fails
+//   In Scala stdlib, Future.zip already runs both in parallel (both are already started)
+
+// Future.sequence — N parallel futures → one Future of List
+val futures: List[Future[User]] = userIds.map(fetchUser)  // all start immediately
+val allUsers: Future[List[User]] = Future.sequence(futures)  // completes when all complete
+
+// ❌ ANTI-PATTERN: sequence on a HUGE list → overwhelming downstream service
+// 10,000 parallel fetches → connection pool exhaustion → timeouts
+// ✅ CORRECT: use batching or a semaphore to limit concurrency
+def fetchBatched(ids: List[Long], batchSize: Int = 50): Future[List[User]] =
+  ids.grouped(batchSize).toList            // List[List[Long]] of 50 each
+    .foldLeft(Future.successful(List.empty[User])) { (acc, batch) =>
+      acc.flatMap(done => Future.sequence(batch.map(fetchUser)).map(done ++ _))
+    }
+```
+::
+
+## `Promise[T]` — Manual Future Completion
+
+::code-wrapper{language="scala"}
+```scala
+// Promise is the write-side of a Future. Future is the read-side.
+// A Promise can be completed exactly once — success or failure.
+
+// Use case: bridge callback-based APIs to Future-based code
+def fromCallback[A](register: (A => Unit, Throwable => Unit) => Unit): Future[A] =
+  val p = Promise[A]()
+  register(
+    value => p.success(value),             // complete the promise with a value
+    error => p.failure(error)              // complete the promise with an exception
+  )
+  p.future                                  // the read-side Future
+
+// Use case: timeout race
+def withTimeout[T](f: Future[T], timeout: FiniteDuration)(using ec: ExecutionContext): Future[T] =
+  val p = Promise[T]()
+  f.onComplete(p.complete)                  // complete p with f's result (success or failure)
+  ec.execute(() =>                          // schedule timeout on the same EC
+    Thread.sleep(timeout.toMillis)
+    p.tryFailure(new TimeoutException(s"timed out after $timeout"))
+  )
+  p.future
+
+// trySuccess / tryFailure: returns Boolean — true if this call completed the promise
+// success / failure: throws if already completed (shouldn't happen, but defensive)
+```
+::
+
+## ExecutionContext — Thread Pool Tuning
+
+::code-wrapper{language="scala"}
+```scala
+import java.util.concurrent.{Executors, ThreadPoolExecutor, TimeUnit}
+import scala.concurrent.ExecutionContext
+
+// ❌ ANTI-PATTERN: using ExecutionContext.global for blocking I/O
+// global is a ForkJoinPool with parallelism = CPU cores.
+// Blocking calls (Thread.sleep, JDBC, HTTP) consume threads — pool starvation.
+implicit val global: ExecutionContext = ExecutionContext.global
+Future { Thread.sleep(5000); 42 }  // occupies a thread for 5s — with 8 cores, 8 of these = deadlock
+
+// ✅ CORRECT: separate ECs for CPU-bound vs blocking I/O
+val cpuEC: ExecutionContext = ExecutionContext.global   // for CPU-bound (map, filter, compute)
+
+val ioEC: ExecutionContext = ExecutionContext.fromExecutor(
+  Executors.newFixedThreadPool(50)  // 50 threads for I/O — higher than CPU count
+  // Each thread can block on I/O without starving CPU-bound work
+)
+
+// Use the right EC for the right work:
+Future { parseHugeJson(data) }(cpuEC)       // CPU-bound → use cpuEC
+Future { jdbc.query("SELECT ...") }(ioEC)   // blocking I/O → use ioEC
+
+// blocking { } — tells the EC this code will block, provision extra threads
+// ONLY works with ExecutionContext.global (ForkJoinPool manages spare threads)
+import scala.concurrent.blocking
+Future {
+  blocking {
+    Thread.sleep(5000)                    // FJP creates a spare thread to compensate
+  }
+  42
+}(global)
+```
+::
+
+## Error Handling — `recover` / `recoverWith` / `fallbackTo`
+
+::code-wrapper{language="scala"}
+```scala
+// recover: transform a failure into a success (catch + fallback value)
+val withDefault: Future[Int] = riskyFuture.recover {
+  case _: TimeoutException => 0            // timeout → default to 0
+  case _: ConnectionRefused => -1          // connection refused → -1
+  // other exceptions propagate as Failure
+}
+
+// recoverWith: transform a failure into a new Future (retry/fallback computation)
+val withRetry: Future[String] = fetch(url).recoverWith {
+  case _: TimeoutException => fetch(fallbackUrl)  // try different URL on timeout
+}
+
+// fallbackTo: try another Future if the first fails
+val withFallback = primary.fetch().fallbackTo(secondary.fetch())
+// ⚠️ fallbackTo swallows the original exception — you lose error diagnostics
+
+// ❌ ANTI-PATTERN: using try/catch inside a Future
+Future {
+  try riskyOp()
+  catch case e: Exception => default       // catches ALL exceptions including fatal ones!
+}
+// ✅ CORRECT: use recover — only catches non-fatal, composable
+riskyFuture.recover { case _: NonFatal => default }
+```
+::
+
+## Retry with Exponential Backoff — Production Pattern
 
 ::code-wrapper{language="scala"}
 ```scala
 import scala.concurrent.{Future, ExecutionContext}
-import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+import scala.util.{Success, Failure, Random}
 
-// Create a future
-val future: Future[Int] = Future {
-  Thread.sleep(1000)          // simulate work
-  42
-}
+// Production-grade retry: exponential backoff + jitter + max retries + circuit breaking
+def retryWithBackoff[T](
+  operation: () => Future[T],
+  maxRetries: Int = 3,
+  initialDelay: FiniteDuration = 100.millis,
+  maxDelay: FiniteDuration = 10.seconds,
+  jitter: Double = 0.2                     // ±20% jitter to avoid thundering herd
+)(using ec: ExecutionContext): Future[T] =
 
-// Transform with map
-val doubled: Future[Int] = future.map(_ * 2)
+  def backoff(attempt: Int): FiniteDuration =
+    val base = initialDelay * math.pow(2, attempt - 1).toLong  // 100ms, 200ms, 400ms...
+    val capped = base.min(maxDelay)
+    val jittered = capped * (1.0 + (Random.nextDouble() * 2 - 1) * jitter)
+    jittered.asInstanceOf[FiniteDuration]
 
-// Chain operations with flatMap
-val result: Future[String] = future.flatMap { value =>
-  Future { s"Result: $value" }
-}
-
-// Handle completion
-future.onComplete {
-  case scala.util.Success(value) => println(s"Success: $value")
-  case scala.util.Failure(ex) => println(s"Failed: ${ex.getMessage}")
-}
-
-// Block and wait (use sparingly)
-import scala.concurrent.Await
-import scala.concurrent.duration._
-
-val value = Await.result(future, 2.seconds)  // blocks thread
-println(value)                               // 42
-```
-::
-
-## For-Comprehensions with Futures
-
-Cleaner syntax for chaining futures:
-
-::code-wrapper{language="scala"}
-```scala
-val f1 = Future { 1 }
-val f2 = Future { 2 }
-val f3 = Future { 3 }
-
-// Chained operations
-val result = for {
-  a <- f1
-  b <- f2
-  c <- f3
-} yield a + b + c              // Future[Int] (value = 6)
-
-// Equivalent to:
-f1.flatMap { a =>
-  f2.flatMap { b =>
-    f3.map { c =>
-      a + b + c
+  def attempt(n: Int): Future[T] =
+    operation().recoverWith {
+      case ex if n < maxRetries =>
+        val delay = backoff(n)
+        Future.sleep(delay).flatMap(_ => attempt(n + 1))  // schedule retry after delay
+      case ex =>
+        Future.failed(ex)                  // exhausted retries → propagate original error
     }
-  }
-}
+
+  attempt(1)
+
+// Usage:
+retryWithBackoff(() => httpClient.post(url, payload), maxRetries = 5)
+  .map(response => println(s"Success: $response"))
+  .recover { case ex => println(s"All retries exhausted: $ex") }
 ```
 ::
 
-## Future Combinators
+## Shared Mutable State — Race Conditions & Atomics
 
 ::code-wrapper{language="scala"}
 ```scala
-val f1 = Future { 1 }
-val f2 = Future { 2 }
-val f3 = Future { 3 }
+import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
+import java.util.concurrent.ConcurrentHashMap
 
-// Combine multiple futures
-val all = Future.sequence(List(f1, f2, f3))  // Future[List[Int]]
-
-val traversed = Future.traverse(List(1, 2, 3)) { x =>
-  Future { x * 2 }
-}                              // Future[List[Int]] = Future(List(2, 4, 6))
-
-// Race: first to complete wins
-val first = Future.firstCompletedOf(List(f1, f2))
-
-// Zip: combine two futures
-val zipped = f1.zip(f2)        // Future[(Int, Int)] = Future((1, 2))
-
-// Handle errors
-val faultTolerant = f1.recover {
-  case _: TimeoutException => 0
-  case ex => throw ex
-}
-
-// Fallback
-val withFallback = f1.fallbackTo(Future { 999 })
-```
-::
-
-## Promise (Settable Future)
-
-`Promise` lets you manually complete a `Future`:
-
-::code-wrapper{language="scala"}
-```scala
-val promise = scala.concurrent.Promise[Int]()
-val future = promise.future
-
-// Complete the promise
-promise.success(42)
-
-// Or fail
-promise.failure(new Exception("error"))
-
-// Or try (returns Boolean success)
-promise.trySuccess(42)
-
-// Usage
-val f = Future {
-  // do async work
-  42
-}
-
-f.onComplete { result =>
-  promise.complete(result)
-}
-```
-::
-
-## Threads
-
-Scala runs on the JVM, so you can use Java threads:
-
-::code-wrapper{language="scala"}
-```scala
-// Create thread
-val thread = new Thread {
-  override def run(): Unit = {
-    println("Running in thread")
-    Thread.sleep(1000)
-    println("Done")
-  }
-}
-
-thread.start()
-thread.join()                   // wait for thread to finish
-
-// Or with function
-val t = new Thread(() => {
-  println("Hello from thread")
-})
-t.start()
-```
-::
-
-## Synchronized Collections
-
-Manually synchronize access:
-
-::code-wrapper{language="scala"}
-```scala
+// ❌ ANTI-PATTERN: shared var in Futures — data race
 var counter = 0
-val lock = new AnyRef
+val futures = (1 to 1000).map(_ => Future { counter += 1 })
+Future.sequence(futures).map(_ => counter)  // → some number < 1000 (lost updates!)
+// counter += 1 is read-modify-write: 3 instructions, non-atomic, interleaved across threads
 
-def increment(): Unit = lock.synchronized {
-  counter += 1                  // thread-safe
+// ✅ CORRECT: AtomicInteger for counter-like state
+val atomicCounter = new AtomicLong(0)
+val futures2 = (1 to 1000).map(_ => Future { atomicCounter.incrementAndGet() })
+Future.sequence(futures2).map(_ => atomicCounter.get())  // → 1000 (guaranteed)
+
+// ✅ CORRECT: CAS (compare-and-swap) for conditional updates
+val state = new AtomicReference[String]("initial")
+Future {
+  var success = false
+  while !success do
+    val current = state.get()
+    val updated = transform(current)
+    success = state.compareAndSet(current, updated)  // atomic: only sets if still == current
 }
 
-// Or use AtomicInteger
-import java.util.concurrent.atomic.AtomicInteger
+// ✅ CORRECT: ConcurrentHashMap for shared maps (lock-free reads, striped writes)
+val cache = new ConcurrentHashMap[String, Array[Byte]]()
+cache.put("key", data)                     // thread-safe
+cache.computeIfAbsent("key", k => fetch(k)) // atomic compute — fetch only if missing
 
-val atomic = new AtomicInteger(0)
-atomic.incrementAndGet()        // thread-safe
-atomic.get()                    // 1
+// ✅ CORRECT: for Scala-native concurrent collections
+val concurrentMap = scala.collection.concurrent.TrieMap.empty[String, Int]
+concurrentMap("key") = 42                  // lock-free, thread-safe
 ```
 ::
 
-## Shared State Problems
-
-Data races and concurrency issues:
-
-::code-wrapper{language="scala"}
-```scala
-// Dangerous: shared mutable state
-var counter = 0
-
-for (_ <- 1 to 100) {
-  Future { counter += 1 }       // race condition!
-}
-
-// Thread.sleep(1000)
-// println(counter)             // likely < 100
-
-// Solution: synchronize or use atomic
-val atomic = new java.util.concurrent.atomic.AtomicInteger(0)
-for (_ <- 1 to 100) {
-  Future { atomic.incrementAndGet() }
-}
-```
-::
-
-## Execution Context
-
-Controls where futures run:
-
-::code-wrapper{language="scala"}
-```scala
-import scala.concurrent.ExecutionContext
-
-// Global context (default thread pool)
-implicit val ec: ExecutionContext = ExecutionContext.global
-
-val f = Future { 42 }           // runs on thread pool
-
-// Custom context
-val customEC = ExecutionContext.fromExecutor(
-  java.util.concurrent.Executors.newFixedThreadPool(4)
-)
-
-val f2 = Future { 42 }(customEC)  // runs on custom pool
-```
-::
-
-## Blocking Operations
-
-Mark blocking calls for better scheduling:
-
-::code-wrapper{language="scala"}
-```scala
-import scala.concurrent.blocking
-
-val future = Future {
-  blocking {                    // informs ExecutionContext of blocking
-    Thread.sleep(1000)
-    "result"
-  }
-}
-```
-::
-
-The `blocking` call lets the ExecutionContext provision extra threads to prevent starvation.
-
-## Try (Error Handling)
-
-`Try[T]` is like `Future` but synchronous:
+## `Try[T]` — Synchronous Error Handling
 
 ::code-wrapper{language="scala"}
 ```scala
 import scala.util.{Try, Success, Failure}
 
-val attempt: Try[Int] = Try {
-  10 / 2
+// Try is the synchronous analog of Future — wraps a computation that may throw.
+// Same API as Future: map, flatMap, filter, recover, fold
+
+val result: Try[Int] = Try {
+  "42".toInt                              // Success(42)
+}
+val failed: Try[Int] = Try {
+  "abc".toInt                             // Failure(NumberFormatException)
 }
 
-attempt match {
-  case Success(v) => println(v)
-  case Failure(ex) => println(s"Error: ${ex.getMessage}")
-}
+// Chaining with for-comprehension — same as Future/Option
+val pipeline: Try[Int] =
+  for
+    n <- Try("100".toInt)
+    d <- Try("4".toInt)
+    if d != 0                              // guard → throws if false? No, returns Failure
+  yield n / d
 
-// Transform
-attempt.map(_ * 2)              // Try[Int]
-attempt.flatMap(v => Try(100 / v))
+// fold — handle both cases in one call
+val message: String = pipeline.fold(
+  ex => s"Error: ${ex.getMessage}",
+  value => s"Result: $value"
+)
 
-// Recover
-attempt.recover { case _: ArithmeticException => 0 }
+// toOption / toEither — convert to other error types
+val asOption: Option[Int] = result.toOption
+val asEither: Either[Throwable, Int] = result.toEither
 
-// Get value with default
-attempt.getOrElse(0)
-```
-::
-
-## Practical Patterns
-
-### Timeout
-
-::code-wrapper{language="scala"}
-```scala
-import scala.concurrent._, duration._
-
-def withTimeout[T](future: Future[T], timeout: Duration): Future[T] = {
-  val promise = Promise[T]()
-  future.onComplete(promise.complete)
-  
-  new Thread(() => {
-    Thread.sleep(timeout.toMillis)
-    promise.tryFailure(new TimeoutException())
-  }).start()
-  
-  promise.future
-}
-
-val f = Future { Thread.sleep(5000); 42 }
-Await.result(withTimeout(f, 1.second), 2.seconds)  // throws TimeoutException
-```
-::
-
-### Retry with exponential backoff
-
-::code-wrapper{language="scala"}
-```scala
-def retry[T](fn: () => Future[T], maxRetries: Int = 3, delayMs: Long = 100): Future[T] = {
-  fn().recoverWith { case ex =>
-    if (maxRetries > 0) {
-      Thread.sleep(delayMs)
-      retry(fn, maxRetries - 1, delayMs * 2)
-    } else {
-      Future.failed(ex)
-    }
-  }
-}
-
-retry(() => Future { riskyOperation() })
+// ❌ ANTI-PATTERN: using Try for expected control flow
+// Try is for wrapping truly exceptional code (JDBC, parsing). For expected errors,
+// use Either from the start — it's explicit, not exception-based.
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Use for-comprehensions for readable async code**: Much cleaner than nested flatMaps.
-
-**Always provide implicit ExecutionContext**: Don't rely on default global.
-
-**Use `onComplete` or `map` for side effects**: Avoid `Await.result()` unless you must block.
-
-**Combine futures with `Future.sequence`**: Cleaner than manual zipping.
-
-**Use `Try` for synchronous error handling**: `Future` for async.
-
-## ⚠️ Edge Cases & Gotchas
-
-**Futures don't timeout by default**: Use `Await.result()` with timeout or implement custom timeout logic.
-
-**Blocking on futures can deadlock**: If all threads are blocked, new work has nowhere to run.
-
-**Shared mutable state is dangerous**: Always synchronize or use atomic operations.
-
-**`Await.result()` is blocking**: Use sparingly; it defeats async benefits. Better: transform with `map`/`flatMap`.
-
-**Exception handling is different**: `recover` for `Try`, `onComplete` or `recoverWith` for `Future`.
-
-**Thread pool exhaustion**: If all threads are blocked waiting for other async operations, deadlock occurs.
-
-## 🧠 Spot the Bug
-
-What does this do?
+**`Future.successful` / `Future.failed` for already-completed values**: No thread pool dispatch — the Future is already complete. Use when you need to return a `Future` from a value you already have.
 
 ::code-wrapper{language="scala"}
 ```scala
-var result = 0
+def findUser(id: Long): Future[Option[User]] =
+  if id < 0 then Future.successful(None)    // no async needed — immediate completion
+  else db.find(id)                          // actual async DB call
+```
+::
 
-Future {
-  Thread.sleep(100)
-  result = 42
-}
+**`Future.unit` and `Future.never`**: `Future.unit` is a pre-completed `Future[Unit]`. `Future.never` (Cats) is a Future that never completes — useful for races where you want the other branch to always win.
 
-println(result)          // prints immediately
+**`zip` is parallel, `flatMap` is sequential**: This is the fundamental distinction. Use `zip` when operations are independent, `flatMap` when each depends on the previous result.
 
-Thread.sleep(200)
-println(result)          // prints after delay
+## ⚠️ Edge Cases & Gotchas
+
+**`Future` is eager**: Construction immediately schedules execution. `Future { ... }` starts NOW, not when you `map` or `await`. If you need laziness, use `Cats Effect IO` or `ZIO`.
+
+**`onComplete` returns `Unit`**: It's a side-effect callback — you can't chain from it. Use `map`/`flatMap`/`recover` for composable transformations.
+
+**`Await.result` blocks the current thread**: If called on a thread that the Future's EC uses, you get thread starvation or deadlock. Never `Await` inside a `Future`.
+
+**Exception in `Future` are wrapped**: A `throw` inside a `Future` doesn't propagate to the calling thread — it completes the Future as `Failure(ex)`. You must handle it via `recover` or `onComplete`.
+
+**`Promise.complete` is idempotent? No — it's once-only**: Calling `success` twice throws `IllegalStateException`. Use `trySuccess` / `tryFailure` for best-effort completion (returns false if already complete).
+
+## 🧠 Quick Quiz
+
+What's wrong with this code, and what happens at runtime?
+
+::code-wrapper{language="scala"}
+```scala
+implicit val ec: ExecutionContext = ExecutionContext.global
+
+val f1 = Future { Thread.sleep(10000); "done" }   // blocks for 10s
+val f2 = Future { 42 }                             // should be instant
+
+f2.map(_ * 2).foreach(println)                     // when does this print?
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Prints `0` (immediately), then prints `42` (after delay).
+It might print `84` immediately, OR it might be delayed up to 10 seconds. Here's why:
 
-Here's why:
-- `Future { ... }` runs asynchronously
-- First `println(result)` runs before future completes (result still 0)
-- After 200ms delay, future has finished, so result is 42
+`ExecutionContext.global` is a `ForkJoinPool` with parallelism equal to the number of CPU cores (e.g., 8). If all 8 threads are occupied by blocking operations (like `Thread.sleep`), then `f2` — despite being instant — has no thread to run on. It sits in the pool's queue until a thread frees up.
 
-**The lesson**: `Future` is non-blocking. Use `map`, `flatMap`, or `Await` if you need synchronization.
+With just `f1` blocking one thread, `f2` runs immediately on another. But if you have 8+ blocking futures, the pool is exhausted and even trivial work is delayed.
 
+**Fix**: Use `blocking { Thread.sleep(10000) }` to let the ForkJoinPool provision a spare thread, OR use a dedicated `ioEC` (fixed thread pool with many threads) for blocking work.
+
+This is the #1 concurrency bug in Scala codebases: **blocking on the global EC**.
 </details>
-
-## Key Takeaways
-
-- `Future[T]` represents async computation.
-- Transform with `.map()`, `.flatMap()`, `.recover()`.
-- `for` comprehensions for readable async code.
-- Use `Promise` to manually complete futures.
-- `Try[T]` for sync error handling.
-- `Await.result()` blocks (use sparingly).
-- Synchronize shared mutable state or use atomic operations.
-- Provide implicit `ExecutionContext` for thread pool.
-- `blocking {}` informs ExecutionContext of blocking calls.

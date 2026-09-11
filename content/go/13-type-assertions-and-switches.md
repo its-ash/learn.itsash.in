@@ -1,168 +1,264 @@
+---
+title: "13 — Type Assertions & Type Switches"
+description: "Comma-ok assertions, type switch dispatch, interface-to-interface capability checks, JSON float64 traps, and panic-safe patterns."
+---
+
 # 13 — Type Assertions & Type Switches
 
-To use a value held in an interface, you need to get the concrete type back. Go provides type assertions and type switches for this.
-
-## Type Assertion
+## Type Assertion — Panicking vs Comma-Ok
 
 ::code-wrapper{language="go"}
 ```go
-var i interface{} = "hello"
+// Type assertion extracts the concrete type from an interface.
+// Two forms: panicking (unsafe) and comma-ok (safe).
 
-s := i.(string)      // asserts i holds a string; panics if not
-fmt.Println(s)       // hello
+func assertionDemo() {
+	var i any = "hello"
 
-// n := i.(int)      // PANIC: interface conversion: interface {} is string, not int
-``
-::
+	// ❌ Panicking form — panics if the type doesn't match:
+	s := i.(string)    // s = "hello" — ok
+	// n := i.(int)     // PANIC: interface conversion: interface {} is string, not int
 
-A type assertion `i.(T)` claims `i`'s dynamic type is `T`. If it's not, the program **panics**.
+	// ✅ Comma-ok form — never panics, returns (zero, false) on mismatch:
+	s, ok := i.(string)  // s = "hello", ok = true
+	n, ok := i.(int)     // n = 0, ok = false — no panic
 
-## Comma-Ok Form
-
-::code-wrapper{language="go"}
-```go
-var i interface{} = "hello"
-
-s, ok := i.(string)   // ok = true, s = "hello"
-n, ok := i.(int)      // ok = false, n = 0 (zero value) — no panic
-
-if s, ok := i.(string); ok {
-	fmt.Println("string:", s)
-} else {
-	fmt.Println("not a string")
-}
-``
-::
-
-The comma-ok form is the safe way — it never panics, returning `(zeroValue, false)` on a mismatch. Use this whenever the type isn't guaranteed.
-
-## Type Switch
-
-::code-wrapper{language="go"}
-```go
-func describe(i interface{}) {
-	switch v := i.(type) {
-	case string:
-		fmt.Println("string of length", len(v))
-	case int:
-		fmt.Println("int:", v)
-	case []int:
-		fmt.Println("int slice:", v)
-	case nil:
-		fmt.Println("nil")
-	default:
-		fmt.Printf("unknown type %T: %v\n", v, v)
+	// Idiomatic: use comma-ok in an if-init:
+	if s, ok := i.(string); ok {
+		fmt.Println("string of length", len(s))
+	} else {
+		fmt.Println("not a string")
 	}
 }
 
-describe("hi")      // string of length 2
-describe(42)        // int: 42
-describe(nil)       // nil
-``
-::
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ When to use the panicking form:                                      │
+// │   Only when a mismatch indicates a programming error (a violated     │
+// │   invariant). Example: you KNOW the interface holds a *Config        │
+// │   because you put it there — `cfg := i.(*Config)` panics if your    │
+// │   assumption is wrong, which is a bug you want to catch.             │
+// │                                                                      │
+// │ When to use comma-ok:                                                │
+// │   Whenever the type isn't guaranteed — external input, JSON decode, │
+// │   optional capabilities. This is the default in production code.     │
+// └──────────────────────────────────────────────────────────────────────┘
+```
 
-`switch v := i.(type)` — `v` has the asserted type in each case. This is the idiomatic way to dispatch on an interface's dynamic type.
-
-### Multiple types in a case
+## Type Switch — Multi-Type Dispatch
 
 ::code-wrapper{language="go"}
 ```go
-switch v := i.(type) {
-case int, int64, uint:
-	fmt.Println("integer:", v)   // v has type interface{} here (multiple types)
-case string:
-	fmt.Println("string:", v)    // v is string
+// The type switch dispatches on the dynamic type of an interface.
+// Each case binds the variable to the asserted type.
+
+func describe(i any) string {
+	switch v := i.(type) {
+	case nil:
+		return "nil"
+	case int:
+		return fmt.Sprintf("int: %d", v)        // v is int
+	case string:
+		return fmt.Sprintf("string: %q", v)    // v is string
+	case []byte:
+		return fmt.Sprintf("bytes: %x", v)      // v is []byte
+	case error:
+		return v.Error()                         // v is error interface
+	default:
+		return fmt.Sprintf("unknown %T: %v", v, v)
+	}
 }
-``
-::
 
-When multiple types share a case, `v` is `interface{}` (the original type), since it could be any of them.
+// ─── Multiple types in one case ───
+func numericType(i any) {
+	switch v := i.(type) {
+	case int, int8, int16, int32, int64:
+		// ⚠️ v is `any` here (not int or int64) — could be any of them
+		// Must type-assert again to use as a specific type:
+		fmt.Printf("integer: %v\n", v)
+	case float32, float64:
+		fmt.Printf("float: %v\n", v)
+	}
+}
 
-## Assertion to an Interface
+// ─── Type switch with init statement ───
+func switchWithInit(i any) {
+	switch v := i.(type); v {
+	case int:
+		_ = v
+	}
+}
+```
 
-You can assert to another interface, not just a concrete type:
+## Interface-to-Interface Assertion — Capability Checks
 
 ::code-wrapper{language="go"}
 ```go
-var r io.Reader = strings.NewReader("hello")
-ra, ok := r.(io.ReaderAt)   // does r also satisfy io.ReaderAt?
-// strings.Reader doesn't, so ok = false
-``
-::
+// You can assert that an interface value satisfies ANOTHER interface.
+// This is "capability checking" — does this type also implement X?
 
-This checks whether the dynamic type satisfies a *different* interface — useful for optional capabilities.
+func capabilityCheck() {
+	var r io.Reader = strings.NewReader("hello")
 
-## 💡 Tips & Tricks
+	// Does r also satisfy io.Writer? (strings.Reader does NOT)
+	if w, ok := r.(io.Writer); ok {
+		w.Write([]byte("..."))  // never reached
+	}
 
-- **Idiom**: use the comma-ok form (`v, ok := i.(T)`) whenever the type isn't guaranteed — the single-value form (`v := i.(T)`) panics on mismatch, which is almost never what you want in production code. Reserve the panicking form for cases where a mismatch is a genuine programming error (a violated invariant).
-- **Idiom**: use a type switch (`switch v := i.(type)`) for multi-type dispatch — it's clearer and safer than a chain of `if v, ok := i.(T); ok` checks. Each case binds `v` to the asserted type, so you can use it directly.
-- **Idiom**: prefer type switches over long assertion chains — `switch v := i.(type) { case int: ...; case string: ... }` is more readable than `if v, ok := i.(int); ok { ... } else if v, ok := i.(string); ok { ... }`.
-- **Idiom**: assert to interfaces, not just concrete types — `if ra, ok := r.(io.ReaderAt); ok` checks an optional capability. This is how the stdlib does feature-checking (e.g., `io.Writer` vs `io.WriterAt`).
-- **Debug**: `i.(T)` panicking with "interface conversion: interface {} is X, not T" means the dynamic type isn't `T` — use comma-ok to handle the mismatch gracefully, or fix the logic that put the wrong type in the interface.
+	// Does r satisfy io.ReaderAt? (strings.Reader DOES)
+	if ra, ok := r.(io.ReaderAt); ok {
+		buf := make([]byte, 3)
+		ra.ReadAt(buf, 1)  // reads "ell"
+		fmt.Println(string(buf))  // "ell"
+	}
+}
+
+// ─── Production pattern: optional capabilities ───
+func writeAll(w io.Writer, data []byte) error {
+	// If w supports io.Closer, close it after writing:
+	if c, ok := w.(io.Closer); ok {
+		defer c.Close()
+	}
+	_, err := w.Write(data)
+	return err
+}
+
+// The stdlib does this: http.Response.Body is an io.ReadCloser, but
+// some wrappers only implement io.Reader. Code checks for io.Closer
+// before calling Close to avoid panics.
+```
+
+## The JSON float64 Trap
+
+::code-wrapper{language="go"}
+```go
+// encoding/json decodes numbers as float64 by default.
+// Type-asserting to int panics — the dynamic type is float64.
+
+func jsonTrap() {
+	var data any
+	json.Unmarshal([]byte(`{"count": 42, "price": 9.99}`), &data)
+
+	m := data.(map[string]any)
+	// count := m["count"].(int)  // PANIC: interface is float64, not int
+
+	// ✅ Assert to float64, then convert:
+	count := int(m["count"].(float64))  // 42
+	price := m["price"].(float64)      // 9.99
+
+	// ✅ Or use comma-ok to handle safely:
+	if f, ok := m["count"].(float64); ok {
+		count := int(f)
+		_ = count
+	}
+}
+
+// ─── Better: use UseNumber for json.Number (string-backed) ───
+func jsonUseNumber() {
+	dec := json.NewDecoder(strings.NewReader(`{"count": 42}`))
+	dec.UseNumber()  // numbers become json.Number (a string)
+	var data any
+	dec.Decode(&data)
+	m := data.(map[string]any)
+	n, _ := m["count"].(json.Number).Int64()  // parse as int64
+	fmt.Println(n)  // 42
+}
+
+// ─── Best: unmarshal into a typed struct ───
+type Product struct {
+	Count int     `json:"count"`
+	Price float64 `json:"price"`
+}
+func jsonStruct() {
+	var p Product
+	json.Unmarshal([]byte(`{"count": 42, "price": 9.99}`), &p)
+	fmt.Println(p.Count)  // 42 (int, not float64)
+}
+```
+
+## Production Pattern — Custom Unmarshaler
+
+::code-wrapper{language="go"}
+```go
+// When JSON has a polymorphic field (different types per key), implement
+// json.Unmarshaler to handle the type dispatch cleanly.
+
+type FlexibleValue struct {
+	StrVal   string
+	IntVal   int64
+	FloatVal float64
+	BoolVal  bool
+	IsNull   bool
+}
+
+func (f *FlexibleValue) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if string(data) == "null" {
+		f.IsNull = true
+		return nil
+	}
+	if data[0] == '"' {
+		return json.Unmarshal(data, &f.StrVal)
+	}
+	if data[0] == 't' || data[0] == 'f' {
+		return json.Unmarshal(data, &f.BoolVal)
+	}
+	// Try int first, then float:
+	if i, err := strconv.ParseInt(string(data), 10, 64); err == nil {
+		f.IntVal = i
+		return nil
+	}
+	return json.Unmarshal(data, &f.FloatVal)
+}
+
+// This avoids the float64-for-everything problem — you control the
+// type inference instead of relying on json's default behavior.
+```
 
 ## ⚠️ Edge Cases & Gotchas
 
 - **`i.(T)` panics on mismatch**: the single-value form. Use comma-ok unless a mismatch is a bug.
-- **Assertion to an unrelated type panics**: `i.(T)` where `i`'s dynamic type isn't `T` (and isn't assignable to `T`) panics, even if `T` is an interface the type doesn't satisfy.
-- **`v` in a multi-type case is `interface{}`**: `case int, string: ... v ...` — `v` is `any`, not `int` or `string` (it could be either). Type-assert again inside the case if needed.
-- **Assertion to a pointer type**: `i.(*Dog)` — works if `i` holds a `*Dog`. `i.(Dog)` fails if `i` holds a `*Dog` (pointer is not the value type).
-- **Type switch with `nil` case**: `case nil:` matches a nil interface (not an interface wrapping a nil pointer — see chapter 12). Handle `nil` explicitly to avoid panicking in other cases.
-- **`default` is required for unknown types**: without a `default`, an unrecognized type falls through silently. Add `default:` for safety (even if it just panics or logs).
-- **Type assertions don't work on non-interface types**: `var x int = 5; x.(int)` is a compile error — assertions are for interface values. Use a regular type conversion for concrete types.
+- **Multi-type case `v` is `any`**: `case int, string: ... v ...` — `v` is `any`, not `int` or `string`. Assert again inside the case.
+- **Assertion to pointer type**: `i.(*Dog)` works if `i` holds a `*Dog`. `i.(Dog)` fails if `i` holds `*Dog` (pointer ≠ value type).
+- **`case nil` matches nil interface**: `case nil:` matches `(type=nil, value=nil)`, NOT an interface wrapping a nil pointer. Handle both.
+- **`default` is required for unknown types**: without `default`, an unrecognized type falls through silently. Add `default:` for safety.
+- **Type assertions don't work on non-interface types**: `var x int = 5; x.(int)` is a compile error. Assertions are for interface values only.
+- **JSON numbers are float64**: `json.Unmarshal` into `any` makes all numbers `float64`. Asserting to `int` panics. Use `UseNumber` or typed structs.
+- **Assertion to an interface the type doesn't satisfy**: `i.(io.Writer)` where `i`'s type doesn't have `Write` → `ok = false` (comma-ok) or panic (single-value).
 
-## 🧠 Spot the Bug
-
-A developer processes a JSON-decoded value and gets a panic:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-var data interface{}
-json.Unmarshal([]byte(`{"count": 42}`), &data)
-
-m := data.(map[string]interface{})
-count := m["count"].(int)   // PANIC: interface conversion: interface {} is float64, not int
+func process(i any) {
+	switch v := i.(type) {
+	case nil:
+		fmt.Println("nil")
+	case int, string:
+		fmt.Println("int or string:", v)
+	case string:
+		fmt.Println("string:", v)
+	}
+}
+process("hello")
 ```
+
+What's printed?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`encoding/json` decodes JSON numbers as `float64` (the default), not `int`. So `m["count"]` holds a `float64` (42.0), and `m["count"].(int)` panics because the dynamic type is `float64`, not `int`.
-
-The fix — assert to `float64` and convert, or use `json.Decoder` with `UseNumber()`, or unmarshal into a typed struct:
-
-```go
-// Option 1: assert to float64, then convert
-count := int(m["count"].(float64))
-
-// Option 2: comma-ok to handle the mismatch safely
-if f, ok := m["count"].(float64); ok {
-	count := int(f)
-}
-
-// Option 3: UseNumber — numbers become json.Number (string-backed)
-dec := json.NewDecoder(bytes.NewReader([]byte(`{"count": 42}`)))
-dec.UseNumber()
-var data interface{}
-dec.Decode(&data)
-m := data.(map[string]interface{})
-n, _ := m["count"].(json.Number).Int64()   // parse as int64
-
-// Option 4: unmarshal into a struct (best for known schemas)
-type Data struct{ Count int }
-var d Data
-json.Unmarshal([]byte(`{"count": 42}`), &d)
-// d.Count == 42
 ```
-::
-Option 4 (typed struct) is the idiomatic way for known schemas — it avoids the `interface{}`/type-assertion dance entirely. Use `interface{}` only for dynamic/unknown schemas.
+int or string: hello
+```
 
-**The lesson**: `json.Unmarshal` into `interface{}` makes numbers `float64` (not `int`). Type-asserting to `int` panics. Assert to `float64` and convert, use `UseNumber`, or unmarshal into a struct.
+The `case int, string:` matches FIRST (it comes before `case string:`). In a type switch, the FIRST matching case wins — cases are checked top to bottom. The `case string:` below is unreachable (shadowed).
+
+`v` in the `case int, string:` block is `any` (since it could be either), so `fmt.Println("int or string:", v)` prints the value with default formatting: `hello`.
+
+**The lesson**: type switch cases are checked in order. If a multi-type case comes before a specific case for one of those types, the specific case is unreachable. Put specific cases first, or remove the overlap. `go vet` and linters can flag unreachable cases.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now use type assertions (panicking and comma-ok forms), type switches (with per-case typed `v`), assert to interfaces (capability checks), and handle JSON's `float64`-for-numbers behavior. Next: generics.
+→ [14 — Generics](/go/14-generics) — type parameters, constraints, `cmp.Ordered`, `~T` underlying-type matching, and the `slices`/`maps` packages.

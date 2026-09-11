@@ -1,480 +1,292 @@
 # 30 — Design Patterns & Idiomatic Rust
 
-Rust isn't OOP, but it has idioms for abstraction, polymorphism, and reuse. Here are the patterns every pro Rust developer should know.
+Design patterns in Rust are not a translation of the Gang of Four catalog into a new syntax — half of that catalog (Strategy, Visitor, Command) is trivially subsumed by traits and closures, and the other half (Singleton, most of the inheritance-based patterns) is actively hostile to how Rust's ownership model wants you to structure state. The patterns that survive and matter in Rust exist because they encode a compile-time guarantee — a builder that can't produce an invalid config, a typestate that can't call `publish()` before `review()`, an RAII wrapper that can't leak a handle — and the senior-level skill is recognizing *when the compile-time guarantee is worth the added ceremony*, not applying every pattern reflexively.
 
-## 1. Builder Pattern
+This chapter treats each pattern as an engineering trade-off with a specific failure mode it closes, a cost it imposes, and a point past which it stops paying for itself.
 
-For complex construction with many optional parameters:
+## Under-the-Hood Mechanics
+
+### Builder — ceremony lives in the type system, costs nothing at runtime
 
 ::code-wrapper{language="rust"}
 ```rust
-pub struct Server {
-    host: String,
-    port: u16,
-    tls: bool,
-    max_conn: usize,
+// Plain builder: zero-cost — each self -> Self is a move, usually inlined away.
+pub struct ServerBuilder { host: Option<String>, port: Option<u16> }
+impl ServerBuilder {
+    pub fn host(mut self, h: impl Into<String>) -> Self { self.host = Some(h.into()); self }
+    pub fn port(mut self, p: u16) -> Self { self.port = Some(p); self }
+}
+let s = ServerBuilder { host: None, port: None }.host("x").port(80);
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Typestate builder: "which fields are set" becomes a distinct compiled TYPE,
+// not a runtime flag — build() literally doesn't exist for the incomplete state.
+pub struct MissingHost;
+pub struct WithHost(String);
+pub struct ServerBuilder<H> { host: H, port: Option<u16> }
+
+impl ServerBuilder<MissingHost> {
+    pub fn host(self, h: impl Into<String>) -> ServerBuilder<WithHost> {
+        ServerBuilder { host: WithHost(h.into()), port: self.port }
+    }
+}
+impl ServerBuilder<WithHost> {
+    pub fn build(self) -> String { self.host.0 } // only callable once host is set
+}
+// ServerBuilder::<MissingHost> { .. }.build(); // COMPILE ERROR: no such method
+```
+::
+
+### Typestate — each state is a monomorphized type, not a runtime tag
+
+::code-wrapper{language="rust"}
+```rust
+use std::marker::PhantomData;
+pub struct Draft; pub struct Reviewed; pub struct Published;
+pub struct Article<S> { content: String, _state: PhantomData<S> }
+
+impl Article<Draft> {
+    fn review(self) -> Article<Reviewed> {
+        Article { content: self.content, _state: PhantomData } // move, not mutation
+    }
+}
+impl Article<Reviewed> {
+    fn publish(self) -> Article<Published> {
+        Article { content: self.content, _state: PhantomData }
+    }
+}
+// Article::<Draft> { .. }.publish(); // COMPILE ERROR — no publish() on Article<Draft>
+```
+::
+
+`Article<Draft>` and `Article<Reviewed>` are unrelated compiled types after monomorphization — no enum tag, nothing to branch on. Each transition consumes `self` and returns a new binding; a typestate machine can't be mutated in place through `&mut self`.
+
+### RAII — `Drop` calls are compiled into every exit path, not scanned at runtime
+
+::code-wrapper{language="rust"}
+```rust
+struct FileGuard(std::fs::File);
+impl Drop for FileGuard {
+    fn drop(&mut self) { println!("closing file"); } // runs on every exit
 }
 
-pub struct ServerBuilder {
-    host: Option<String>,
-    port: Option<u16>,
-    tls: Option<bool>,
-    max_conn: Option<usize>,
+fn read_config() -> Result<String, std::io::Error> {
+    let _guard = FileGuard(std::fs::File::open("cfg.toml")?);
+    // normal return, early `?`, or panic unwind — drop() still runs.
+    Ok(String::new())
 }
+```
+::
+
+No scanning, no GC pause — drop call sites are baked into the function's control-flow graph at compile time.
+
+### `dyn Trait` collections — heterogeneity via one runtime indirection
+
+::code-wrapper{language="rust"}
+```rust
+trait Command { fn execute(&self); }
+struct Save; impl Command for Save { fn execute(&self) { println!("save"); } }
+struct Rollback; impl Command for Rollback { fn execute(&self) { println!("rollback"); } }
+
+// Vec<T> needs one concrete T — Vec<Box<dyn Command>> allows genuinely different types.
+let commands: Vec<Box<dyn Command>> = vec![Box::new(Save), Box::new(Rollback)];
+for c in &commands {
+    c.execute(); // fat pointer {data_ptr, vtable_ptr}, one indirect call per invocation
+}
+```
+::
+
+### Extension traits — compiler-resolved injection, not monkey-patching
+
+::code-wrapper{language="rust"}
+```rust
+// Orphan rule forbids `impl Display for str` directly — so define your own trait instead.
+trait StrExt { fn shout(&self) -> String; }
+impl StrExt for str {
+    fn shout(&self) -> String { self.to_uppercase() + "!" }
+}
+
+fn demo() {
+    println!("{}", "hi".shout()); // only resolves where `StrExt` is in scope (`use`d)
+}
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+::code-wrapper{language="rust"}
+```rust
+// Builder: fine for 3-4 independent fields — skip the ceremony.
+#[derive(Default)]
+struct Config { retries: u32, timeout_ms: u32 }
+let cfg = Config { retries: 3, ..Default::default() };
+
+// Reach for typestate only once fields have a validity RELATIONSHIP
+// (e.g. TLS requires a cert path) — otherwise it's boilerplate for nothing.
+```
+::
+
+| Pattern | Runtime cost | Real cost paid elsewhere |
+|---|---|---|
+| Typestate builder | Zero | One `impl` block per state; N-state protocols get boilerplate-heavy |
+| `Box<dyn Trait>` | 1 allocation + 1 vtable call per use | Lost inlining — shows as a flat, wide flamegraph, not an "allocation" line |
+| RAII (`Drop`) | Direct, non-virtual call | Type can't also be `Copy` — sometimes forces an explicit `.clone()` |
+| Extension trait | Zero at call site | Discoverability — invisible unless the trait is `use`d |
+| `Cow<'a, T>` | One branch per access | Worth it only when "no transformation needed" is the common case |
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: the `Option<T>`-field builder deferring required-field errors to runtime, silently, for months
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG (for anything with a genuinely required field) — compiles and
+// "works" for every call site that happens to remember to call .host()
+pub struct ServerBuilder { host: Option<String>, port: Option<u16> }
 
 impl ServerBuilder {
-    pub fn new() -> Self {
-        ServerBuilder { host: None, port: None, tls: None, max_conn: None }
-    }
-    pub fn host(mut self, host: impl Into<String>) -> Self { self.host = Some(host.into()); self }
-    pub fn port(mut self, port: u16) -> Self { self.port = Some(port); self }
-    pub fn tls(mut self, tls: bool) -> Self { self.tls = Some(tls); self }
-    pub fn max_conn(mut self, m: usize) -> Self { self.max_conn = Some(m); self }
     pub fn build(self) -> Result<Server, String> {
         Ok(Server {
             host: self.host.ok_or("host required")?,
             port: self.port.unwrap_or(80),
-            tls: self.tls.unwrap_or(false),
-            max_conn: self.max_conn.unwrap_or(100),
         })
     }
 }
-
-let s = ServerBuilder::new().host("localhost").tls(true).build()?;
 ```
 ::
 
-For less boilerplate, use the `derive_builder` or `typed_builder` crates.
-
-### Typestate Builder
+Fine when every field has a sensible default. The incident generator is a `host` with **no** sensible default: `ServerBuilder::new().build()` compiles cleanly and only fails the first time it *runs* without `.host(...)` — possibly in a rarely-exercised fallback path, long after any test would have caught it.
 
 ::code-wrapper{language="rust"}
 ```rust
+// RIGHT — typestate builder makes the missing-required-field case
+// impossible to construct, not just impossible to construct *correctly*
 pub struct MissingHost;
 pub struct WithHost(String);
 
-pub struct ServerBuilder<H> { host: H, /* ... */ }
+pub struct ServerBuilder<H> { host: H, port: Option<u16> }
 
 impl ServerBuilder<MissingHost> {
-    pub fn new() -> Self { ServerBuilder { host: MissingHost } }
-    pub fn host(self, h: String) -> ServerBuilder<WithHost> { ServerBuilder { host: WithHost(h) } }
+    pub fn new() -> Self { ServerBuilder { host: MissingHost, port: None } }
+    pub fn host(self, h: impl Into<String>) -> ServerBuilder<WithHost> {
+        ServerBuilder { host: WithHost(h.into()), port: self.port }
+    }
 }
 impl ServerBuilder<WithHost> {
-    pub fn build(self) -> Server { /* ... */ }
-}
-```
-::
-
-Compile-time enforcement: you can't `build()` without setting `host`. The `bon` crate provides this ergonomically.
-
-## 2. Newtype Pattern
-
-::code-wrapper{language="rust"}
-```rust
-pub struct UserId(pub u64);
-pub struct Email(pub String);
-
-impl Email {
-    pub fn new(s: String) -> Result<Self, &'static str> {
-        if s.contains('@') { Ok(Email(s)) } else { Err("invalid") }
+    pub fn build(self) -> Server {
+        Server { host: self.host.0, port: self.port.unwrap_or(80) }
     }
 }
+// ServerBuilder::<MissingHost>::new().build() — does not compile: no such method
 ```
 ::
 
-- Zero-cost type distinction.
-- Constructor can validate invariants.
-- Implement `From`/`Display`/`Debug`/`Deref` as appropriate (don't over-implement).
+No runtime path ships without `.host(...)` — there is no compiled code representing that possibility.
 
-## 3. Typestate Pattern
-
-Encode state machines in types:
+### Anti-pattern: `Deref`-based "inheritance" that silently changes method resolution
 
 ::code-wrapper{language="rust"}
 ```rust
-pub struct Draft; pub struct Reviewed; pub struct Published;
+struct Connection;
+impl Connection { fn send(&self, msg: &[u8]) { /* raw send */ } }
 
-pub struct Article<S> { content: String, _state: PhantomData<S> }
-
-impl Article<Draft> {
-    pub fn new(content: String) -> Self { Article { content, _state: PhantomData } }
-    pub fn review(self) -> Article<Reviewed> { Article { content: self.content, _state: PhantomData } }
+struct RetryingConnection(Connection);
+impl std::ops::Deref for RetryingConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection { &self.0 }
 }
-impl Article<Reviewed> {
-    pub fn publish(self) -> Article<Published> { Article { content: self.content, _state: PhantomData } }
-}
-impl<S> Article<S> {
-    pub fn content(&self) -> &str { &self.content }
-}
+// Today: retrying_conn.send(...) resolves through Deref to Connection::send.
 ```
 ::
 
-Calling `publish` on `Draft` is a compile-time error. Methods only exist in valid states.
-
-## 4. Strategy via Traits
-
 ::code-wrapper{language="rust"}
 ```rust
-pub trait Compressor { fn compress(&self, data: &[u8]) -> Vec<u8>; }
-
-pub struct Gzip; pub struct Lz4;
-
-impl Compressor for Gzip { fn compress(&self, data: &[u8]) -> Vec<u8> { /* ... */ Vec::new() } }
-impl Compressor for Lz4  { fn compress(&self, data: &[u8]) -> Vec<u8> { /* ... */ Vec::new() } }
-
-pub fn archive<C: Compressor>(compressor: &C, files: &[File]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for f in files { out.extend(compressor.compress(&f.data)); }
-    out
-}
-```
-::
-
-Static dispatch via generics, or dynamic via `Box<dyn Compressor>`.
-
-## 5. Visitor Pattern
-
-### Why it exists and when to use it
-
-The visitor pattern **separates traversal logic from the data structure**: instead of putting methods on every variant (which bloats the enum as you add operations), you define one `Visitor` trait with a method per variant, and each `accept` method dispatches to the right visitor method. This is valuable when you have a **fixed data structure** (the enum rarely changes) but **many operations** over it (serialize, pretty-print, type-check, optimize) — each operation is a `Visitor` impl, and adding one doesn't touch the enum. It works via **double dispatch**: the value calls `visitor.visit_X`, and the visitor is type-specific. You reach for it in AST/compiler code, `serde`-style deserializers, and any "many operations over a fixed shape" scenario. Prefer a plain `match` when you have few operations — the visitor pattern adds indirection that's only worth it past a handful of operations.
-
-For traversing heterogeneous structures:
-
-::code-wrapper{language="rust"}
-```rust
-pub trait Visitor {
-    fn visit_string(&mut self, s: &str);
-    fn visit_number(&mut self, n: f64);
-    fn visit_array(&mut self, elems: &[Value]);
-}
-
-pub enum Value { Str(String), Num(f64), Arr(Vec<Value>) }
-
-impl Value {
-    pub fn accept(&self, v: &mut impl Visitor) {
-        match self {
-            Value::Str(s) => v.visit_string(s),
-            Value::Num(n) => v.visit_number(*n),
-            Value::Arr(a) => v.visit_array(a),
-        }
+// Someone later adds retry logic under the SAME method name:
+impl RetryingConnection {
+    fn send(&self, msg: &[u8]) {
+        /* retry logic */
+        self.0.send(msg);
     }
 }
+// Every existing retrying_conn.send(...) call site now silently resolves
+// to THIS inherent method instead of the old Deref-forwarded one —
+// no warning, because inherent methods always win over Deref-forwarded ones.
 ```
 ::
 
-Common in `serde` deserializers and AST traversal.
+**The fix**: reserve `Deref` for genuine smart-pointer semantics (`Box`, `Rc`, a newtype meant to be indistinguishable from its inner type). For composition with distinct behavior, use explicit delegation — collisions then surface as compiler errors, not silent redirection.
 
-## 6. Command Pattern
-
-### Why it exists and when to reach for it
-
-The command pattern **encapsulates an action as a value** — you turn a function call into a first-class object you can store, queue, serialize, undo, and replay. This is the foundation of undo/redo (each command records how to reverse itself), task queues (commands pile up and run later), and macro recording (record the command stream, replay it). You reach for it when you need to **treat actions as data**: a `Vec<Box<dyn Command>>` is a queue of deferred work; an `UndoStack` of commands is an undo system. The tradeoff: it's more ceremony than a plain function call, so reach for it only when the value-as-action property is genuinely useful (queuing, undo, replay) — not as a default way to call things.
+### Anti-pattern: a public field defeating a smart constructor's entire purpose
 
 ::code-wrapper{language="rust"}
 ```rust
-pub trait Command { fn execute(&self, ctx: &mut Context); }
-
-pub struct Save { pub path: String }
-impl Command for Save { fn execute(&self, ctx: &mut Context) { /* ... */ } }
-
-pub struct Print { pub text: String }
-impl Command for Print { fn execute(&self, ctx: &mut Context) { /* ... */ } }
-
-let cmds: Vec<Box<dyn Command>> = vec![
-    Box::new(Save { path: "x".into() }),
-    Box::new(Print { text: "hi".into() }),
-];
-for c in cmds { c.execute(&mut ctx); }
-```
-::
-::
-
-## 7. RAII — Resource Acquisition Is Initialization
-
-The most Rust-idiomatic pattern. Resources are tied to types; `Drop` cleans up:
-
-::code-wrapper{language="rust"}
-```rust
-pub struct File { handle: RawFd }
-impl File {
-    pub fn open(path: &str) -> std::io::Result<Self> {
-        let fd = unsafe { libc::open(...) };
-        Ok(File { handle: fd })
-    }
+// WRONG — pub field means Percent::new()'s validation is optional, not enforced.
+pub struct Percent(pub u8);
+impl Percent {
+    pub fn new(p: u8) -> Option<Self> { if p <= 100 { Some(Percent(p)) } else { None } }
 }
-impl Drop for File {
-    fn drop(&mut self) { unsafe { libc::close(self.handle); } }
+
+fn main() {
+    assert!(Percent::new(150).is_none()); // validated path: rejects it
+    let bypass = Percent(150);            // tuple-struct literal: bypasses validation entirely
+    println!("{}", bypass.0);             // prints 150 — "impossible" value exists anyway
 }
 ```
 ::
 
-No leak, no double-close, no use-after-close — all enforced by the compiler.
-
-## 8. Iterator Pattern
-
-### Why it's idiomatic in Rust
-
-Rust's iterator pattern is **lazy** (no work until consumed), **zero-cost** (adapters inline to tight loops), and **composable** (chains like `.filter().map().take()` build a single fused iterator). This is idiomatic because it cleanly **separates traversal from consumption**: you describe *what* to iterate over (the chain), then *how* to consume it (`collect`, `sum`, `for`). `next()` is **pull-based** — the consumer asks for the next item, and the iterator computes it on demand, so infinite iterators and short-circuiting work naturally. You reach for custom `impl Iterator` when no composition of existing adapters expresses your iteration (stateful generation, external sources); otherwise, **prefer composing existing adapters** over a hand-written `next()` — they're zero-cost and battle-tested.
-
-Lazy, composable:
-
 ::code-wrapper{language="rust"}
 ```rust
-let v: Vec<i32> = (1..100)
-    .filter(|x| x % 2 == 0)
-    .map(|x| x * x)
-    .take(10)
-    .collect();
-```
-::
-
-Custom iterators implement `Iterator::next`. `collect` builds any `FromIterator`.
-
-## 9. Smart-Constructor Pattern
-
-::code-wrapper{language="rust"}
-```rust
+// RIGHT — private field means new() is the ONLY way in.
 pub struct Percent(u8);
 impl Percent {
-    pub fn new(p: u8) -> Option<Self> {
-        if p <= 100 { Some(Percent(p)) } else { None }
-    }
+    pub fn new(p: u8) -> Option<Self> { if p <= 100 { Some(Percent(p)) } else { None } }
+    pub fn get(&self) -> u8 { self.0 }
 }
+// Percent(150) from outside the module: COMPILE ERROR — field is private
 ```
 ::
 
-Never expose the inner; force construction through validation.
-
-## 10. Extension Trait
-
-Add methods to external types (with a wrapper):
+### Anti-pattern: `Box<dyn Trait>` adopted by default in a hot dispatch path, never revisited
 
 ::code-wrapper{language="rust"}
 ```rust
-pub trait StrExt { fn shout(&self) -> String; }
-impl StrExt for str { fn shout(&self) -> String { format!("{}!!!", self.to_uppercase()) } }
-use crate::StrExt;
-"hi".shout();
-```
-::
-
-You can't implement an external trait for an external type (orphan rule), but you *can* implement your own trait for any type.
-
-## 11. Handle / RAII Wrapper around Foreign Types
-
-### Why this pattern is valuable
-
-When you integrate a C library (or any "foreign" resource — a database connection, a file descriptor, a GPU buffer), the C API gives you a **raw handle** (`*mut sqlite3`, an integer fd) with manual lifecycle rules: you must call `close`/`free` exactly once, and use-after-free is UB. Wrapping the handle in a Rust struct with a `Drop` impl **turns this manual lifecycle into compiler-enforced RAII**: Rust's ownership and `Drop` guarantee the handle is closed exactly once (when the wrapper drops), can't be used after (the wrapper is moved/consumed), and propagates correctly through `?`/early returns. You reach for this whenever you integrate a foreign resource — it's the bridge between "manual C lifecycle" and "Rust's automatic safety."
-
-::code-wrapper{language="rust"}
-```rust
-pub struct Database(*mut bindings::sqlite3);
-impl Drop for Database { fn drop(&mut self) { unsafe { bindings::close(self.0) } } }
-```
-::
-
-## 12. `From`/`Into` for Conversions
-
-::code-wrapper{language="rust"}
-```rust
-impl From<RawData> for Processed { fn from(r: RawData) -> Self { /* ... */ } }
-let p: Processed = raw.into();
-```
-::
-
-Idiomatic conversion path. Implement `From`, never `Into` directly.
-
-## 13. `AsRef`/`AsMut` for Flexible Borrowing
-
-::code-wrapper{language="rust"}
-```rust
-pub fn open<P: AsRef<Path>>(path: P) { let p = path.as_ref(); /* ... */ }
-open("file.txt"); open(Path::new("f")); open(String::from("f"));
-```
-::
-
-## 14. Error-Conversion via `?`
-
-::code-wrapper{language="rust"}
-```rust
-pub fn run() -> Result<(), AppError> {
-    let n: i32 = "x".parse()?;     // uses From<ParseIntError> for AppError
-    Ok(())
+// Started as flexible plugin architecture, never revisited as the service
+// scaled into a genuine hot path (tens of thousands of req/sec).
+trait Handler { fn handle(&self, req: &Request); }
+fn route(handlers: &[Box<dyn Handler>], req: &Request) {
+    for h in handlers { h.handle(req); } // vtable call, no inlining, per request
 }
+// Fix once the handler set is closed at compile time: enum or generic dispatch,
+// trading runtime flexibility for full inlining — an architecture change, not a tuning knob.
 ```
 ::
 
-`thiserror`'s `#[from]` generates the `From` impl automatically.
-
-## 15. Trait Composition via Supertraits
+## Architectural Application
 
 ::code-wrapper{language="rust"}
 ```rust
-pub trait Service: Send + Sync + Debug {
-    fn call(&self, req: Request) -> Response;
-}
+// Builder choice: severity of an invalid state decides the variant.
+// CLI/internal config, cheap to get wrong -> plain builder + ok_or("required")?.
+// Library boundary, expensive to get wrong (e.g. server accepts unencrypted
+// connections by default) -> typestate builder.
+
+// RAII as default for anything with a foreign lifecycle:
+struct DbConn(std::net::TcpStream);
+impl Drop for DbConn { fn drop(&mut self) { /* close cleanly, always */ } }
+// No leaks, no double-frees, no use-after-close — compile-time property,
+// not a code-review discipline everyone has to remember.
+
+// Dependency injection via generic trait bound — compile-time-verified
+// test/production separation, no runtime DI container needed:
+trait Clock { fn now(&self) -> u64; }
+struct Service<C: Clock> { clock: C }
 ```
 ::
 
-A supertrait bound requires all subtraits. Implementations must provide all.
-
-## 16. Default Trait for Defaults
-
-::code-wrapper{language="rust"}
-```rust
-#[derive(Default)]
-pub struct Config { pub host: String, pub port: u16 }
-let c = Config { port: 8080, ..Default::default() };
-```
-::
-
-## 17. Phantom Type Parameters
-
-::code-wrapper{language="rust"}
-```rust
-pub struct Id<T>(u64, PhantomData<T>);
-pub struct User; pub struct Post;
-type UserId = Id<User>; type PostId = Id<Post>;
-```
-::
-
-Same numeric value, distinct types — prevents mixing IDs.
-
-## 18. CRTP (Disabled in safe Rust)
-
-You can't easily do "compile-time virtual" the way C++ does. The closest is a trait with an associated type for `Self`-like dispatch, or `dyn` for runtime. The typestate pattern covers many use cases.
-
-## 19. Tagged Unions via Enums
-
-The Rust-native "tagged union" — see the Enums chapter.
-
-## 20. Dependency Injection via Traits
-
-::code-wrapper{language="rust"}
-```rust
-pub trait Clock { fn now(&self) -> Instant; }
-pub struct RealClock; impl Clock for RealClock { fn now(&self) -> Instant { Instant::now() } }
-pub struct MockClock(Instant); impl Clock for MockClock { fn now(&self) -> Instant { self.0 } }
-
-pub struct Service<C: Clock> { clock: C }
-```
-::
-
-Tests inject `MockClock`; production uses `RealClock`. No global mutable state needed.
-
-## 21. Avoid Global Mutable State
-
-Use dependency injection, or `OnceLock` for genuinely global immutable data. Mutable globals are a smell — wrap in `Arc<Mutex<T>>` if needed.
-
-## 22. Use `?` Liberally
-
-Idiomatic error propagation. Avoid deeply nested `match` when `?` works.
-
-## 23. Use Iterators Over Loops
-
-::code-wrapper{language="rust"}
-```rust
-// Idiomatic
-let sum: i32 = v.iter().map(|x| x * 2).sum();
-
-// Less idiomatic
-let mut sum = 0;
-for x in &v { sum += x * 2; }
-```
-::
-
-The iterator form is equally fast (zero-cost) and more declarative.
-
-## 24. Avoid `unwrap` in Public Code
-
-In tests, `unwrap` is fine. In production APIs, use `?`, return `Result`, or `expect("invariant message")` if you really can't fail.
-
-## 25. Documentation Comments
-
-::code-wrapper{language="rust"}
-```rust
-/// Adds two numbers.
-///
-/// # Panics
-/// Panics if overflow occurs (debug builds).
-///
-/// # Examples
-/// ```
-/// use my::add;
-/// assert_eq!(add(2, 2), 4);
-/// ```
-pub fn add(a: i32, b: i32) -> i32 { a + b }
-```
-::
-
-- `///` for items, `//!` for crates/modules.
-- Sections: `# Panics`, `# Errors`, `# Examples`, `# Safety`, `# Arguments`.
-
-## 26. Naming Conventions
-
-- `snake_case` for functions, variables, modules.
-- `CamelCase` for types/traits/enum variants.
-- `SCREAMING_SNAKE_CASE` for constants and statics.
-- Lifetime params: `'a`, `'b`, `'src`, `'arena`.
-
-## 27. Error vs Option Heuristic
-
-### Why the distinction and how to decide
-
-`Option` and `Result` encode different things: `Option` encodes **total absence** (a key not in a map, an optional config field) — there's no "why," it's just not there. `Result` encodes **a recoverable failure with a cause** (a parse that hit bad input, an I/O that errored) — the `Err` carries information about *what went wrong*. Reach for `Option` when "nothing" is a normal, expected state (the user might not have set that config); reach for `Result` when the operation *tried* and *failed*, and the caller might want to log/retry/recover based on the error. The judgment call: if the caller would ask "why?", use `Result`; if the caller only cares "is it there?", use `Option`. Using `Result` for mere absence forces every caller to handle an "error" that's really just "no value," which is noise.
-
-- `Option` for "absent" (looking up a key, optional config).
-- `Result` for "operation failed" (parse, IO, network).
-
-## 28. When to Box vs Generic
-
-- Generic: monomorphization is acceptable (caller can static-dispatch).
-- `Box<dyn>`: heterogeneous collections, runtime polymorphism, smaller binary.
-
-## 29. `Cow` for Borrowed-or-Owned
-
-::code-wrapper{language="rust"}
-```rust
-pub fn normalize(s: &str) -> Cow<str> {
-    if s.chars().any(|c| c.is_uppercase()) {
-        Cow::Owned(s.to_lowercase())
-    } else {
-        Cow::Borrowed(s)
-    }
-}
-```
-::
-
-Avoids cloning when no transformation is needed.
-
-## 30. Avoid Premature Abstraction
-
-Don't define traits until you have a second implementation. Don't reach for `dyn` until you need runtime polymorphism. Don't introduce generics until you have a second type. "Rule of three" — abstract when you see repetition.
-
-## Common Anti-Patterns
-
-- **Implementing `Deref` for non-smart-pointer types**: misleading. Use explicit methods.
-- **Overusing `Box<dyn Trait>`**: kills performance and inlining; prefer generics.
-- **`unwrap` everywhere**: panics on edge cases. Use `?`.
-- **Returning `String` everywhere**: returns ownership unnecessarily; consider `Cow` or `&'static str`.
-- **God objects**: huge structs with all state. Split by responsibility.
-- **Inheriting via `Deref` chains**: doesn't work like OOP inheritance; produces confusing method resolution.
-- **`unsafe` to silence borrow errors**: the borrow checker is right; restructure.
-- **Trait objects for performance-critical code**: vtable dispatch is slow; genericize.
-- **`Vec<Vec<T>>` for matrices**: cache-unfriendly; use a flat `Vec<T>` with row-major indexing.
-- **Mutable globals**: makes testing and reasoning hard. Inject dependencies.
-
-## Idioms Cheat Sheet
-
-- `if let` over `match` for single-arm.
-- `?` over nested `match`.
-- `Rc::clone(&rc)` over `rc.clone()` (clarity).
-- `.iter()` over `for i in 0..v.len()`.
-- `format!` over manual string concatenation.
-- `write!`/`writeln!` over `format!` when writing to a buffer.
-- `matches!` for one-arm boolean checks.
-- `let-else` for early-return validation.
-- `Cow` for borrowed-or-owned APIs.
+Reserve `Box<dyn Trait>` for genuine architectural boundaries — plugin systems, config-driven middleware — and prefer generics/enums everywhere else, especially anything hot-path. Treat "abstract on the third occurrence, not the first" (the rule of three) as an enforceable team norm against premature `trait`/generic/`dyn` introduction.
 
 ## 💡 Tips & Tricks
 
@@ -532,6 +344,6 @@ Prints `150` — a value the type was supposed to make impossible to construct.
 
 ## Summary
 
-Builder for complex construction. Newtype for type safety. Typestate for compile-time state machines. Traits for polymorphism (static via generics, dynamic via `dyn`). RAII for resources. `From`/`AsRef`/`?` for conversions. Iterators over loops. Avoid `unwrap`, globals, and over-abstraction. Document with `///`. Use idiomatic naming and patterns.
+Rust's design patterns earn their place by encoding a runtime failure mode as a compile-time impossibility — a typestate builder that can't produce an incomplete config, an RAII wrapper that can't leak or double-free, a smart constructor whose privacy is what makes it a constructor at all rather than a suggestion. Each comes with a real cost: builder ceremony scales with field interdependence, `dyn Trait` trades inlining for heterogeneity and a smaller binary, `Deref`-based composition risks silent method-resolution shadowing. The senior-level judgment is choosing the pattern whose compile-time guarantee is worth its ceremony for a *specific* call site — not applying the full catalog reflexively, and not skipping RAII/typestate where the failure mode they close is genuinely expensive in production.
 
-Next: Performance, profiling, and optimization.
+Next: Performance, profiling, and optimization — measuring whether these architectural choices actually cost what you think they do.

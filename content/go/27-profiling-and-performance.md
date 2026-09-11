@@ -1,132 +1,163 @@
+---
+title: "27 — Profiling & Performance"
+description: "pprof CPU/heap/goroutine profiling, escape analysis, allocation reduction, strings.Builder, sync.Pool, and benchmark-driven optimization."
+---
+
 # 27 — Profiling & Performance
 
-Go has excellent profiling built in via `pprof` and the `testing` package's benchmarks. This chapter covers finding and fixing performance issues.
+## The Optimization Workflow
 
-## Benchmarks (recap)
+::code-wrapper{language="text"}
+```text
+1. MEASURE — never optimize without profiling. "Premature optimization is the root of all evil."
+2. PROFILE — find the bottleneck (CPU, memory, goroutine, lock contention).
+3. OPTIMIZE — the top consumer first. A function at 1% of CPU isn't worth optimizing.
+4. BENCHMARK — measure before and after with benchstat. If no improvement, revert.
+5. REPEAT — the next bottleneck is now visible.
 
-::code-wrapper{language="bash"}
-```bash
-go test -bench=. -benchmem -count=5
-# BenchmarkX-8   1000000   1234 ns/op   456 B/op   3 allocs/op
+Key principle: ALLOCATIONS are the #1 performance problem in Go.
+  - Heap allocations trigger GC (stop-the-world pauses, concurrent scan).
+  - Stack allocations are free (no GC, no allocation overhead).
+  - Reducing allocs/op often improves performance more than micro-optimizing CPU.
 ```
-::
-
-- `ns/op` — time per operation.
-- `B/op` — bytes allocated per operation.
-- `allocs/op` — number of heap allocations per operation.
-
-**Allocations are the key metric** — heap allocations trigger GC pressure. Reducing `allocs/op` often improves performance more than micro-optimizing the CPU work.
 
 ## `pprof` — CPU and Heap Profiling
 
-### In tests
-
 ::code-wrapper{language="bash"}
 ```bash
-# CPU profile
-go test -bench=. -cpuprofile=cpu.out
-
-# Heap profile
-go test -bench=. -memprofile=mem.out
-
-# Analyze
+# ─── CPU profile from a benchmark ───
+go test -bench=BenchmarkX -cpuprofile=cpu.out
 go tool pprof cpu.out
-(pprof) top
-(pprof) list FunctionName
-(pprof) web   # graphviz visualization
+(pprof) top              # top functions by cumulative time
+(pprof) top10 -cum       # top 10 by cumulative (inclusive of callees)
+(pprof) list FuncName    # annotated source — time per line
+(pprof) web              # graphviz call graph
+(pprof) weblist FuncName # annotated source in browser
 
-# Web UI
+# ─── Heap profile ───
+go test -bench=BenchmarkX -memprofile=mem.out
+go tool pprof mem.out
+(pprof) top              # top allocating functions
+
+# ─── Web UI (Go 1.24+: integrated pprof UI) ───
 go tool pprof -http=:8080 cpu.out
+# Opens a browser with flame graphs, source view, and call graph.
 ```
-::
-### In a running server
 
-Import `net/http/pprof` and serve `/debug/pprof/`:
+### `pprof` in a Running Server
 
 ::code-wrapper{language="go"}
 ```go
-import _ "net/http/pprof"
+// import _ "net/http/pprof"  // registers /debug/pprof/ on the default mux
 
+// Serve pprof on a separate port (don't expose to the public):
 go func() {
 	log.Println(http.ListenAndServe("localhost:6060", nil))
 }()
+
+// Then profile the live server:
+// go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30  # 30s CPU
+// go tool pprof http://localhost:6060/debug/pprof/heap                 # heap allocations
+// go tool pprof http://localhost:6060/debug/pprof/goroutine           # goroutine stacks
+// go tool pprof http://localhost:6060/debug/pprof/block                # blocking (needs runtime.SetBlockProfileRate)
+// go tool pprof http://localhost:6060/debug/pprof/mutex                # mutex contention
 ```
-::
-Then profile the live server:
 
-::code-wrapper{language="bash"}
-```bash
-go tool pprof http://localhost:6060/debug/pprof/profile   # 30s CPU profile
-go tool pprof http://localhost:6060/debug/pprof/heap      # heap allocations
-go tool pprof http://localhost:6060/debug/pprof/goroutine # goroutine stacks
-```
-::
-## Reading a CPU Profile
-
-`go tool pprof cpu.out`:
-- `top` — functions by cumulative time.
-- `top10 -cum` — top 10 by cumulative (inclusive of callees).
-- `list FuncName` — annotated source showing time per line.
-- `web` — graphviz call graph (needs graphviz installed).
-- `weblist FuncName` — annotated source in a browser.
-
-Focus on the top cumulative consumers — optimizing a function that's 1% of CPU is wasted effort.
-
-## Reducing Allocations
-
-### Use `strings.Builder` instead of `+`
+## Escape Analysis — The Allocation Decision
 
 ::code-wrapper{language="go"}
 ```go
-// ❌ O(n²) allocations
-s := ""
-for _, w := range words {
-	s += w
+// The compiler decides stack vs heap via escape analysis.
+// See the decisions:
+//   go build -gcflags='-m' ./...        # summary
+//   go build -gcflags='-m -m' ./...     # verbose (explains WHY)
+
+// ─── Stack-allocated (no escape) ───
+func noEscape() int {
+	x := 42       // does not escape — stays on stack, free
+	return x
 }
 
-// ✅ O(n)
-var b strings.Builder
-for _, w := range words {
-	b.WriteString(w)
+// ─── Heap-allocated (escapes — address returned) ───
+func escapes() *int {
+	x := 42       // escapes to heap — &x leaves the function
+	return &x      // GC manages x's lifetime
 }
-s := b.String()
+
+// ─── Interface boxing causes escape ───
+func interfaceEscape() {
+	x := 42
+	var i any = x  // x escapes — interface stores (type, *x)
+	fmt.Println(i)
+}
+
+// ─── The fmt.Println escape (common in hot paths) ───
+func fmtEscape() {
+	for i := 0; i < 1000000; i++ {
+		fmt.Println(i)  // ⚠️ i escapes to heap — fmt takes ...any
+	}
+}
+// Fix: use strconv (no interface):
+func noFmtEscape() {
+	for i := 0; i < 1000000; i++ {
+		_ = strconv.Itoa(i)  // i stays on stack
+	}
+}
 ```
-::
-### Preallocate slices and maps
+
+## Allocation Reduction — The Top Patterns
+
+### 1. `strings.Builder` instead of `+`
 
 ::code-wrapper{language="go"}
 ```go
-// ❌ grows via reallocation
-s := []int{}
-for i := 0; i < 1000; i++ {
-	s = append(s, i)
+// ❌ O(n²) — each + allocates a new string:
+func badConcat(words []string) string {
+	s := ""
+	for _, w := range words {
+		s += w  // allocates new string each iteration
+	}
+	return s
 }
 
-// ✅ one allocation
-s := make([]int, 0, 1000)
-for i := 0; i < 1000; i++ {
-	s = append(s, i)
+// ✅ O(n) — amortized:
+func goodConcat(words []string) string {
+	var b strings.Builder
+	b.Grow(64)  // pre-grow (estimate total size to avoid reallocation)
+	for _, w := range words {
+		b.WriteString(w)
+	}
+	return b.String()  // single allocation for the final string
 }
-
-m := make(map[string]int, 1000)   // hint, not limit
 ```
-::
-### Avoid `[]byte`↔`string` conversions
+
+### 2. Pre-allocate slices and maps
 
 ::code-wrapper{language="go"}
 ```go
-// Each conversion allocates a copy
-s := string(bytes)
-b := []byte(s)
+// ❌ Grows via reallocation (log(n) reallocs):
+func badCollect(items []int) []int {
+	var s []int  // starts nil, grows via append
+	for _, item := range items {
+		s = append(s, transform(item))
+	}
+	return s
+}
 
-// For comparisons, use bytes.Equal/Compare (no conversion)
-bytes.Equal(a, b)
+// ✅ One allocation:
+func goodCollect(items []int) []int {
+	s := make([]int, 0, len(items))  // pre-allocate capacity
+	for _, item := range items {
+		s = append(s, transform(item))  // stays within cap — no realloc
+	}
+	return s
+}
 
-// For contains, use strings.Contains (works on string directly)
-strings.Contains(s, substr)
+// Same for maps:
+m := make(map[string]int, 1000)  // pre-allocate buckets — avoids incremental rehashing
 ```
-::
-### Use `sync.Pool` for reusable buffers
+
+### 3. `sync.Pool` for reusable objects
 
 ::code-wrapper{language="go"}
 ```go
@@ -134,153 +165,216 @@ var bufPool = sync.Pool{
 	New: func() any { return new(bytes.Buffer) },
 }
 
-buf := bufPool.Get().(*bytes.Buffer)
-defer bufPool.Put(buf)
-buf.Reset()
-// use buf
+func process(data []byte) string {
+	buf := bufPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()       // ⚠️ reset before returning to pool
+		bufPool.Put(buf)
+	}()
+	buf.Write(data)
+	return buf.String()
+}
+// Reduces allocations in hot paths — buffers are reused instead of allocated.
 ```
-::
-Reuse allocation-heavy objects (buffers, temp structs) across calls to reduce GC pressure.
 
-### Pass large structs by pointer
+### 4. Avoid `[]byte` ↔ `string` conversions
 
 ::code-wrapper{language="go"}
 ```go
-// ❌ copies the whole struct on every call
-func process(u User) { ... }
+// ❌ Each conversion allocates a copy:
+func badContains(s string, sub string) bool {
+	return bytes.Contains([]byte(s), []byte(sub))  // 2 allocations
+}
 
-// ✅ passes a pointer (8 bytes)
-func process(u *User) { ... }
+// ✅ Use the matching package (no conversion):
+func goodContains(s string, sub string) bool {
+	return strings.Contains(s, sub)  // 0 allocations
+}
+
+// ✅ For zero-copy (Go 1.20+, advanced — only for read-only):
+// import "unsafe"
+// b := unsafe.Slice(unsafe.StringData(s), len(s))  // []byte sharing s's memory
+// ⚠️ Never modify b — corrupts the read-only string table.
 ```
-::
-But don't over-pointer small structs — the indirection can cost more than the copy.
 
-## Escape Analysis
+### 5. Pass large structs by pointer
 
-The compiler decides stack vs. heap allocation via **escape analysis**. Stack allocations are free (no GC); heap allocations cost. See the decisions:
+::code-wrapper{language="go"}
+```go
+// ❌ Copies the whole struct on every call:
+func processBig(b BigStruct) error {  // ~200 bytes copied
+	_ = b
+	return nil
+}
 
-::code-wrapper{language="bash"}
-```bash
-go build -gcflags="-m" main.go
-# "moved to heap: x" — x is heap-allocated (its address escapes)
-# "x does not escape" — x is stack-allocated
+// ✅ Pointer — no copy:
+func processBigGood(b *BigStruct) error {  // 8 bytes (pointer)
+	_ = b
+	return nil
+}
+
+// ⚠️ For small structs (≤ 64 bytes), the value copy is cheaper than
+// the pointer indirection. Benchmark to decide.
 ```
-::
-Common causes of escaping:
-- Returning a pointer to a local variable (escapes — necessary).
-- Storing a pointer in an interface (escapes — the compiler can't know the size).
-- Passing a pointer to a function that stores it (escapes).
-- Large stack frames (the compiler may heap-allocate to avoid stack growth).
 
-## The Race Detector
+## Benchmarking Allocation Reduction
 
-::code-wrapper{language="bash"}
-```bash
-go test -race ./...
-go run -race .
-go build -race -o myapp
+::code-wrapper{language="go"}
+```go
+package main
+
+import "testing"
+
+func BenchmarkBadConcat(b *testing.B) {
+	b.ReportAllocs()
+	words := []string{"a", "b", "c", "d", "e"}
+	for n := 0; n < b.N; n++ {
+		s := ""
+		for _, w := range words {
+			s += w
+		}
+		_ = s
+	}
+}
+// Result: ~5 allocs/op, ~80 B/op
+
+func BenchmarkGoodConcat(b *testing.B) {
+	b.ReportAllocs()
+	words := []string{"a", "b", "c", "d", "e"}
+	for n := 0; n < b.N; n++ {
+		var b strings.Builder
+		for _, w := range words {
+			b.WriteString(w)
+		}
+		_ = b.String()
+	}
+}
+// Result: 1 alloc/op, ~32 B/op — 5x fewer allocations
 ```
-::
-The race detector finds data races (concurrent reads/writes without synchronization) at runtime. It has overhead (10-100x) — use in testing and CI, not production. A race detected by `-race` is a real bug; fix it before shipping.
 
-## Goroutine Leaks (profiling)
+## Inlining — When the Compiler Optimizes
 
-::code-wrapper{language="bash"}
-```bash
-go tool pprof http://localhost:6060/debug/pprof/goroutine
-(pprof) top
+::code-wrapper{language="go"}
+```go
+// The Go inliner copies small function bodies into the call site,
+// eliminating the function call overhead.
+
+// ✅ Small, leaf functions are inlined automatically:
+func max(a, b int) int {
+	if a > b { return a }
+	return b
+}
+// The compiler inlines this — no function call at runtime.
+
+// ❌ Functions with complex bodies are NOT inlined:
+func complex(n int) int {
+	for i := 0; i < n; i++ {  // loops prevent inlining
+		n += i
+	}
+	return n
+}
+
+// Check inlining decisions:
+// go build -gcflags='-m' ./...
+// Output:
+//   ./main.go:5:6: can inline max
+//   ./main.go:10:6: cannot inline complex: function too complex
+
+// ⚠️ Defer with a function value prevents inlining:
+// func f() { defer fmt.Println("done") }  // fmt.Println is a value — no inline
+// func f() { defer func() { fmt.Println("done") }() }  // anonymous — may inline
+
+// Force inlining (advanced — rarely needed):
+//go:inline
+func hotPath(x int) int { return x * 2 }
 ```
-::
-The goroutine profile shows the stack traces of all live goroutines. A growing number of stuck goroutines (blocked on a channel, a lock, an infinite loop) is a leak.
 
-## Memory Leaks (heap profiling)
+## Memory Leaks — Detection
 
-::code-wrapper{language="bash"}
-```bash
-go tool pprof http://localhost:6060/debug/pprof/heap
-(pprof) top
+::code-wrapper{language="go"}
+```go
+// Go has a GC, but memory leaks still happen:
+//   - Goroutine leaks (blocked goroutines holding references)
+//   - Growing maps/slices never freed
+//   - Closures capturing large variables
+
+// Detect with pprof heap over time:
+// 1. Take a heap snapshot:
+curl http://localhost:6060/debug/pprof/heap > heap1.out
+// 2. Wait (or send load):
+sleep 60
+// 3. Take another snapshot:
+curl http://localhost:6060/debug/pprof/heap > heap2.out
+// 4. Compare:
+go tool pprof -base=heap1.out heap2.out
+(pprof) top  # shows what grew between snapshots
+
+// ─── Common leak: growing map ───
+type Cache struct {
+	mu    sync.Mutex
+	items map[string]*Item  // never deleted → grows forever
+}
+// Fix: add TTL-based eviction or a max size with LRU.
 ```
-::
-The heap profile shows allocations. Use `alloc_space` (total) vs `inuse_space` (current) to distinguish "allocates a lot" (GC pressure) from "holds a lot" (leak):
-
-::code-wrapper{language="bash"}
-```bash
-go tool pprof -alloc_space http://localhost:6060/debug/pprof/heap   # total allocations
-go tool pprof -inuse_space http://localhost:6060/debug/pprof/heap   # currently held
-```
-::
-## Optimization Process
-
-1. **Benchmark first** — establish a baseline with `go test -bench=. -benchmem`.
-2. **Profile** — find the hotspot with `pprof` (CPU or heap).
-3. **Optimize the hotspot** — reduce allocations, improve the algorithm.
-4. **Re-benchmark** — confirm the improvement; check you didn't regress elsewhere.
-5. **Repeat** — the next hotspot is now somewhere else.
-
-Don't optimize without a profile — intuition about Go performance is often wrong (e.g., "pointers are always faster" is false for small structs).
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: profile before optimizing — run `go tool pprof` on a CPU or heap profile and find the actual hotspot. Intuition about Go performance is often wrong (escape analysis, inlining, GC interactions are non-obvious). Optimizing a non-hotspot is wasted effort.
-- **Idiom**: reduce allocations first — `allocs/op` is the key metric for most Go programs (heap allocations trigger GC pressure). `strings.Builder`, pre-sized `make([]T, 0, n)`, `sync.Pool`, and avoiding `[]byte`↔`string` conversions are the standard allocation reducers, often yielding more than CPU micro-optimization.
-- **Idiom**: use `go build -gcflags="-m"` to see escape analysis — it prints "moved to heap: x" (escapes, heap-allocated, GC'd) vs "x does not escape" (stack-allocated, free). This tells you whether your "optimization" (e.g., passing a pointer) actually avoided an allocation or forced one.
-- **Idiom**: run `go test -race` in CI — the race detector finds data races (concurrent reads/writes without synchronization) that are nearly impossible to find by inspection. It has overhead (use in testing, not production), but a race it finds is a real bug.
-- **Idiom**: benchmark with `-count=5` (or more) and look at variance — a single benchmark run is noisy (GC, scheduler, system load). Multiple runs let you distinguish real improvements from noise. `benchstat` compares two sets of benchmark results statistically.
+- **Performance**: `allocs/op` is the key benchmark metric — heap allocations trigger GC. Reducing allocations (pre-allocate, `strings.Builder`, `sync.Pool`) often improves performance more than micro-optimizing CPU.
+- **Idiom**: use `strings.Builder` with `Grow(total)` for string concatenation — `s += w` in a loop is O(n²); `Builder` is O(n). Pre-grow with the estimated total size to avoid reallocations.
+- **Idiom**: pre-allocate slices and maps when you know the size — `make([]T, 0, n)` and `make(map[K]V, n)` avoid incremental growth/rehashing.
+- **Idiom**: use `sync.Pool` for short-lived, allocation-heavy objects (buffers, temp structs) — reset before Put. Don't store long-lived state (pool objects can be reclaimed between GCs).
+- **Performance**: `go build -gcflags='-m'` shows escape analysis — tells you which variables escape to the heap. In hot paths, eliminating escapes (keeping values on the stack) is the #1 allocation-reduction technique.
+- **Performance**: avoid `fmt` in hot paths — `fmt.Println` takes `...any`, causing every argument to escape to the heap (interface boxing). Use `strconv` or direct writes.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Premature optimization**: profile first — optimizing without a profile often targets the wrong code. "The bottleneck is where you think it isn't."
-- **Escape analysis can surprise**: returning `&x` forces `x` to the heap (necessary), but so does storing `&x` in an interface (the compiler can't know the concrete size). Assigning to an interface can be a hidden allocation.
-- **Pointer vs value for small structs**: passing a small struct by value (copy) can be faster than a pointer (indirection + escape). Don't assume pointers are faster — benchmark.
-- **`pprof` samples, doesn't trace**: CPU profiles sample at 100Hz by default — short-lived events may be missed. For exact tracing, use `go tool trace` (execution tracer).
-- **Heap profile needs `runtime.MemProfileRate`**: by default, the heap profile samples 1 in 524288 allocations. For more detail, set `runtime.MemProfileRate = 1` (every allocation — expensive).
-- **Race detector overhead**: `-race` slows the program 10-100x and uses more memory. Don't run it in production. It catches races that actually execute — a race that doesn't fire in tests isn't detected.
-- **Goroutine leaks show as memory growth**: a leaked goroutine holds its stack and any captured variables. The heap profile shows the captured allocations; the goroutine profile shows the stuck goroutines.
-- **`sync.Pool` isn't a cache**: pooled objects can be reclaimed at any time (between GCs). Don't use it for stateful objects that must persist. Reset objects before `Put`.
-- **Benchmark dead-code elimination**: if the benchmark's result is unused, the compiler may optimize it away, showing 0 ns/op. Assign to a package-level sink var.
-- **`runtime.GOMAXPROCS` and CPU-bound benchmarks**: benchmarks run with GOMAXPROCS = NumCPU. For single-threaded benchmarks, set `runtime.GOMAXPROCS(1)` to avoid parallelism skewing results.
+- **Premature optimization**: always profile first. A function at 1% of CPU isn't worth optimizing — the top consumer is. `pprof` shows you where to focus.
+- **`fmt.Println` causes escapes**: `fmt.Println(x)` boxes `x` into `any` → heap allocation. In hot paths, use `strconv.Itoa` or `os.Stdout.Write`.
+- **`[]byte(s)` allocates**: string ↔ `[]byte` conversion copies the data (strings are immutable). Use `strings`/`bytes` package functions that work on the native type.
+- **Defer prevents inlining**: a function with `defer` may not be inlined (the defer overhead must be set up). In ultra-hot paths, avoid defer.
+- **`runtime.GC()` doesn't help in production**: manually triggering GC adds pauses. Let the concurrent GC run — tune with `GOGC` (default 100 = GC when heap doubles).
+- **`GOGC=50` reduces memory but increases CPU**: the GC runs more often (when heap grows 50% instead of 100%). Trade memory for CPU. Use `GOMEMLIMIT` (Go 1.19+) for a hard memory cap instead.
+- **`pprof` overhead**: profiling adds ~2x overhead. Run it in production briefly (30s), not continuously. Use `runtime.SetCPUProfileRate` for fine control.
+- **`runtime.SetBlockProfileRate(n)`**: enables blocking profile — records goroutine blocking (channel, mutex, syscall). n=1 samples every blocking event (expensive); n=10000 samples every 10µs.
+- **Inlining has limits**: functions with loops, switches, or too many statements aren't inlined. The threshold is tunable via `-gcflags='-l=4'` (higher = more aggressive).
 
-## 🧠 Spot the Bug
-
-A developer optimizes a hot function by passing a pointer instead of a value, but the benchmark shows *worse* performance:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-type Point struct{ X, Y, Z float64 }   // 24 bytes
+func A(b *bytes.Buffer) {
+	b.WriteString("hello")
+}
 
-// Before: value receiver
-func (p Point) Dist() float64 { ... }
-
-// After: pointer receiver (hypothesis: avoid copy)
-func (p *Point) Dist() float64 { ... }
+func B() string {
+	var b bytes.Buffer
+	A(&b)
+	return b.String()
+}
 ```
+
+Does `b` in `B()` escape to the heap?
 ::
-
-What likely happened?
-
 <details>
 <summary>Answer</summary>
 
-For a small struct (24 bytes — 3 float64), passing by value (copying 24 bytes) is often **faster** than passing a pointer (8 bytes) because:
-1. The value is passed in registers / on the stack (no heap allocation, no GC).
-2. A pointer-receiver method on a value (`p.Dist()` where `p` is a `Point`, not `*Point`) forces the compiler to take `&p` — and if `p` is in an interface or the address escapes, `p` escapes to the heap (an allocation + GC pressure).
-3. Pointer indirection (dereferencing `p.X`, `p.Y`) is a memory access; a value copy is a register move (faster on modern CPUs).
+**Yes**, `b` escapes to the heap.
 
-So the "optimization" (pointer receiver) introduced an escape (heap allocation) where the value receiver kept `p` on the stack — the benchmark got worse due to the allocation, not the copy.
+`A(&b)` passes `&b` to another function. The compiler can't prove that `A` doesn't store the pointer somewhere (in a global, a channel, a struct that outlives `B`). To be safe, escape analysis moves `b` to the heap.
 
-The fix — measure and choose based on the benchmark. For small structs, value receivers are often faster (no escape, no indirection). For large structs or when the method mutates, pointer receivers are appropriate (chapter 11). Don't assume pointers are faster; benchmark both.
-
-```go
-// Revert to value receiver for small structs
-func (p Point) Dist() float64 { ... }
+Verify:
+```bash
+go build -gcflags='-m' main.go
+# ./main.go:5:6: moved to heap: b
+# ./main.go:6:7: &b escapes to heap
 ```
-::
-And run `go build -gcflags="-m"` to confirm `p` doesn't escape.
 
-**The lesson**: for small structs, value receivers avoid escape (heap allocation) and indirection, often outperforming pointer receivers. Don't assume pointers are faster — benchmark and check escape analysis. Pointers win for large structs (avoid copy) or mutation; values win for small, read-only structs.
+If `A` were inlined (small enough), the compiler might see that `&b` doesn't escape and keep `b` on the stack. But `bytes.Buffer.WriteString` is a method call that the compiler may not inline, so the escape analysis is conservative.
+
+In hot paths, if you know the buffer doesn't escape, you can use `sync.Pool` to reuse heap-allocated buffers (the pool manages the heap allocation, amortized across calls).
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now benchmark (`-benchmem`, `-count`), profile with `pprof` (CPU, heap, goroutine), reduce allocations (`strings.Builder`, pre-sized `make`, `sync.Pool`, avoiding conversions), understand escape analysis (`-gcflags="-m"`), use the race detector, and follow the profile-optimize-rebenchmark process — without falling for the pointer-is-always-faster myth. Next: exercises and projects.
+→ [28 — Exercises & Project Ideas](/go/28-exercises-and-projects) — from beginner to pro, covering every chapter.

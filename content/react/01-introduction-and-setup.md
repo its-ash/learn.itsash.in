@@ -1,282 +1,322 @@
+---
+title: "01 — Introduction & Setup"
+description: "React's declarative rendering model, virtual DOM diffing, project scaffolding with Vite, Strict Mode behavior, and the JSX-to-JS compilation pipeline. Code-first reference for mid-to-senior React engineers."
+---
+
 # 01 — Introduction & Setup
 
-## What Is React?
+## What React Actually Is
 
-React is a **declarative, component-based JavaScript library** for building user interfaces, created and maintained by Meta. It is not a framework — it has no built-in router, no built-in data-fetching layer, no built-in state-management solution. React's entire job is one thing: **keep the UI in sync with your data**.
-
-Key characteristics:
-
-- **Declarative** — you describe *what* the UI should look like for a given state; React figures out *how* to update the DOM to match.
-- **Component-based** — UIs are composed of small, reusable, self-contained pieces (components) that each manage their own markup, logic, and (optionally) styling.
-- **Virtual DOM diffing** — React keeps an in-memory representation of the UI and computes the minimal set of real DOM mutations needed on every update.
-- **Unidirectional data flow** — data flows down through props; events flow up through callbacks. This makes state changes traceable.
-- **Just JavaScript** — components are functions. Logic reuse happens through normal JS composition (functions, hooks) rather than framework-specific templating DSLs.
-
-### Why Declarative Matters
-
-Compare imperative DOM manipulation to React's declarative model:
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="react_core_model.js"}
 ```javascript
-// Imperative — you manage every mutation by hand
-const list = document.getElementById('list')
-function addItem(text) {
-  const li = document.createElement('li')
-  li.textContent = text
-  list.appendChild(li)
-}
-function removeItem(index) {
-  list.removeChild(list.children[index])
-}
-// Every state change requires you to remember which DOM calls to make,
-// in which order, and to keep them in sync with your actual data.
+// React = a declarative, component-based UI library. Not a framework.
+// No router, no data layer, no state manager. ONE job: keep the UI in sync
+// with your data via virtual DOM diffing and unidirectional data flow.
+
+// THE MENTAL MODEL:
+//   state → render → virtual DOM → diff → commit to real DOM
+//
+// You describe WHAT the UI should look like for a given state.
+// React figures out HOW to transition the real DOM to match.
+// You NEVER write: document.createElement, element.appendChild, etc.
+
+// Components are plain functions. Props are arguments. JSX is syntax sugar.
+// Logic reuse is JS composition (hooks, custom hooks), not template DSLs.
+
+// DECLARATIVE vs IMPERATIVE:
+// Imperative (jQuery): find element → update text → add class → attach listener
+// Declarative (React): set state → React re-renders → DOM is updated automatically
 ```
 ::
 
-::code-wrapper{language="javascript"}
+## Mounting: createRoot and Concurrent Rendering
+
+::code-wrapper{language="javascript" filename="mounting.js"}
 ```javascript
-// Declarative — describe the result, React computes the mutations
-function ItemList({ items }) {
-  return (
-    <ul>
-      {items.map(item => <li key={item.id}>{item.text}</li>)}
-    </ul>
-  )
-}
-// You never touch the DOM. You just return what the UI should look like
-// for the current `items` array. React diffs old vs new and patches the DOM.
+import { createRoot } from 'react-dom/client'
+import App from './App'
+
+// React 18+: createRoot enables concurrent features (automatic batching,
+// transitions, Suspense for data fetching). The legacy ReactDOM.render is deprecated.
+const root = createRoot(document.getElementById('root'))
+root.render(<App />)
+
+// createRoot returns a root object with:
+//   root.render(jsx)     — re-render (usually called once; React handles the rest)
+//   root.unmount()       — tear down the entire tree, clean up all effects
+
+// If you're hydrating SSR markup:
+// import { hydrateRoot } from 'react-dom/client'
+// const root = hydrateRoot(document.getElementById('root'), <App />)
+// — must match the server-rendered HTML exactly or React warns.
 ```
 ::
 
-## A Brief History
+## Project Scaffolding: Vite
 
-| Year | Event |
-|---|---|
-| 2011 | React originates internally at Facebook (Jordan Walke), first used on Facebook's news feed. |
-| 2013 | Open-sourced at JSConf US. Widely mocked at first for mixing markup into JS. |
-| 2015 | React Native ships, bringing the component model to mobile. |
-| 2016 | React 15 — stable, widespread adoption begins. |
-| 2017 | React 16 ("Fiber") — a full rewrite of the reconciler enabling async rendering, error boundaries, fragments, portals. |
-| 2019 | React 16.8 — **Hooks** ship. This is the single biggest API shift in React's history; function components become first-class. |
-| 2020 | React 17 — no new features, focused on making upgrades easier ("stepping stone" release), changed event delegation target. |
-| 2022 | React 18 — automatic batching everywhere, concurrent rendering APIs (`startTransition`, `useDeferredValue`), the new `createRoot` API, Suspense improvements. |
-| 2024+ | React Server Components mature via frameworks (Next.js App Router), the `use` hook, React Compiler (automatic memoization) enters early adoption. |
-
-This curriculum teaches **modern React**: function components and Hooks are the primary and near-exclusive way you'll write React day to day. Class components get one dedicated mention later (error boundaries, chapter 16) because that is the one API surface Hooks have not replaced — and a brief legacy note here, because you *will* encounter class components in older codebases.
-
-## Virtual DOM: The Core Concept
-
-The **virtual DOM (VDOM)** is a plain JavaScript object tree that mirrors the shape of the real DOM. When state changes:
-
-1. React re-runs your component function(s), producing a new tree of React elements (a lightweight description — `{ type: 'li', props: { children: 'Milk' } }` — not real DOM nodes).
-2. React **diffs** the new tree against the previous tree ("reconciliation," covered in depth in chapter 13).
-3. React computes the minimal set of real DOM operations needed and applies them in a single batch.
-
-This matters because direct DOM manipulation is slow relative to JS object comparisons, and because it lets you *think* in terms of "what should this look like" rather than "what sequence of mutations gets me there." The VDOM is an implementation detail — you rarely interact with it directly — but understanding that **render (calling your function) is not the same as commit (touching the real DOM)** is essential for reasoning about performance and effects later in this course.
-
-::code-wrapper{language="javascript"}
-```javascript
-// A JSX element compiles down to a call like this (simplified):
-const element = <h1 className="title">Hello</h1>
-
-// becomes:
-const element = React.createElement('h1', { className: 'title' }, 'Hello')
-
-// which produces a plain object (a "React element"), NOT a DOM node:
-// {
-//   type: 'h1',
-//   props: { className: 'title', children: 'Hello' }
-// }
-```
-::
-
-## Scaffolding a Project: Vite (Recommended)
-
-[Vite](https://vitejs.dev) is the modern standard for starting React projects — it uses native ES modules in development (near-instant startup, instant hot module replacement) and Rollup for optimized production builds. Create React App (CRA) is **deprecated** as of 2023 and should not be used for new projects; it is mentioned here only because you will see it in older tutorials and codebases.
-
-::code-wrapper{language="bash"}
+::code-wrapper{language="bash" filename="scaffold.sh"}
 ```bash
-# Scaffold a new React + JavaScript project
+# Vite is the standard for new React projects (CRA is deprecated).
+# Fast dev server (esbuild), optimized build (Rollup), HMR out of the box.
+
 npm create vite@latest my-app -- --template react
+cd my-app && npm install && npm run dev
 
-# Or with TypeScript (recommended for anything beyond a toy project — see chapter 23)
+# For TypeScript:
 npm create vite@latest my-app -- --template react-ts
-
-cd my-app
-npm install
-npm run dev
 ```
 ::
 
-::code-wrapper{language="bash"}
-```bash
-my-app/
-├── index.html          # entry HTML — Vite injects the bundled script here
-├── package.json
-├── vite.config.js
-├── src/
-│   ├── main.jsx         # entry point — mounts <App /> into the DOM
-│   ├── App.jsx          # root component
-│   ├── App.css
-│   └── index.css
-└── public/              # static assets served as-is
+::code-wrapper{language="json" filename="package.json"}
+```json
+{
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "vite": "^6.0.0"
+  }
+}
 ```
 ::
 
-### The Entry Point
+::code-wrapper{language="javascript" filename="vite.config.js"}
+```javascript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
-::code-wrapper{language="javascript" filename="src/main.jsx"}
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 3000,
+    open: true,  // auto-open browser on dev start
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: true,  // production sourcemaps for debugging
+  },
+})
+```
+::
+
+## Production Project Structure
+
+::code-wrapper{language="text" filename="project_structure.txt"}
+```
+src/
+├── main.jsx               # entry — createRoot().render(<App/>)
+├── App.jsx                # root component, router setup
+├── components/
+│   ├── ui/                # generic reusable: Button, Input, Modal
+│   └── features/          # domain-specific: ProductCard, UserMenu
+├── hooks/                 # custom hooks: useDebounce, useFetch, useAuth
+├── context/               # context providers: AuthContext, ThemeContext
+├── lib/                   # third-party config: api client, analytics
+├── utils/                 # pure helpers: formatDate, parseQuery
+├── assets/                # images, fonts, icons (if not in public/)
+└── styles/                # global CSS, theme variables
+```
+::
+
+## Strict Mode: What It Catches
+
+::code-wrapper{language="javascript" filename="strict_mode.js"}
 ```javascript
 import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import App from './App.jsx'
-import './index.css'
 
-createRoot(document.getElementById('root')).render(
+// StrictMode renders components TWICE in development (not production).
+// It also re-runs effects (mount → unmount → mount) to surface bugs.
+// This is intentional — it catches:
+//   1. Impure renders (side effects in render body)
+//   2. Missing effect cleanups
+//   3. Stale state from mutations
+// The double-invoke is DEV ONLY — production renders once.
+
+createRoot(rootEl).render(
   <StrictMode>
     <App />
-  </StrictMode>,
+  </StrictMode>
 )
+
+// EXAMPLE of what StrictMode catches:
+function BuggyComponent() {
+  const [count, setCount] = useState(0)
+  // ANTI-PATTERN: side effect in render body
+  console.log('rendering')  // runs TWICE per state change in StrictMode
+  document.title = `Count: ${count}`  // mutation during render — SHOULD be in useEffect
+  return <button onClick={() => setCount(c => c + 1)}>{count}</button>
+}
+// StrictMode makes the double-render visible so you catch the impurity in dev,
+// not in production where it causes subtle state desync.
 ```
 ::
 
-`createRoot` is the React 18 API for mounting an app (it replaced `ReactDOM.render` from React 17 and earlier — the old API still works but does not enable concurrent features). `<StrictMode>` is a development-only wrapper that intentionally double-invokes component bodies, effects, and some lifecycle methods to help you find impure rendering and missing effect cleanup — it does nothing in production builds.
+## JSX → JavaScript Compilation
 
-### Framework Alternative: Next.js
-
-For production applications that need routing, server rendering, or React Server Components out of the box, most teams reach for a framework rather than bare Vite + React Router. Next.js is covered conceptually in chapter 22; for this curriculum, Vite keeps the focus on React itself without a framework's opinions layered on top.
-
-::code-wrapper{language="bash"}
-```bash
-npx create-next-app@latest my-next-app
-```
-::
-
-## JSX: A First Look
-
-JSX ("JavaScript XML") is a syntax extension that lets you write markup-like syntax directly in JavaScript. It is **not** a template language — it compiles to nested `React.createElement()` calls (or, with the modern JSX transform, calls to `jsx`/`jsxs` from `react/jsx-runtime`) via Babel or the TypeScript compiler. It is not valid JavaScript on its own and always requires a build step.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="jsx_compilation.js"}
 ```javascript
-function Greeting({ name }) {
-  const hour = new Date().getHours()
-  const isMorning = hour < 12
+// JSX is NOT HTML — it's syntax sugar for React.createElement calls.
+// Babel/SWC transforms it at build time.
 
-  return (
-    <div className="greeting">
-      <h1>{isMorning ? 'Good morning' : 'Good afternoon'}, {name}!</h1>
-      <p>You have {isMorning ? 3 : 7} unread messages.</p>
-    </div>
-  )
-}
+// WHAT YOU WRITE:
+const element = <h1 className="title">Hello, {name}</h1>
+
+// WHAT THE COMPILER PRODUCES:
+const element = React.createElement('h1', { className: 'title' }, 'Hello, ', name)
+
+// WHICH IS A PLAIN OBJECT:
+// {
+//   type: 'h1',
+//   props: { className: 'title', children: ['Hello, ', name] },
+//   key: null,
+//   ref: null,
+//   $$typeof: Symbol.for('react.element')  // security: prevents XSS via injection
+// }
+
+// THE $$typeof SYMBOL is React's XSS defense — if a malicious script injects
+// a JSON object that looks like a React element, it won't have the valid Symbol
+// and React will refuse to render it. Symbols can't be serialized in JSON.
 ```
 ::
 
-Chapter 2 covers JSX rules in full depth (expressions vs. statements, conditional rendering, lists, fragments). For now, the essential mental model: **JSX is sugar for function calls that build a tree of plain objects.**
+## Anti-Pattern: Direct DOM Manipulation
 
-## React DevTools
-
-The [React Developer Tools](https://react.dev/learn/react-developer-tools) browser extension (Chrome, Firefox, Edge) adds two panels to your browser's DevTools:
-
-| Panel | Purpose |
-|---|---|
-| **Components** | Inspect the component tree, view/edit props and state live, see which component owns a given piece of state, jump to source. |
-| **Profiler** | Record a render session, see which components rendered, how long each took, and *why* each rendered (props changed, state changed, parent re-rendered, context changed). |
-
-::code-wrapper{language="bash"}
-```bash
-# The extension augments window.__REACT_DEVTOOLS_GLOBAL_HOOK__,
-# which React itself checks for and reports render data to.
-# No install step in your app code is required for a standard web app —
-# just install the browser extension and open DevTools on a page running React.
-```
-::
-
-### Best Practice: Name Your Components
-
-React DevTools displays function names in the component tree. Anonymous or poorly named components make debugging painful in a large tree.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="anti_pattern_dom.js"}
 ```javascript
-// Bad — DevTools shows "Anonymous" or a generic name
-export default function ({ items }) {
-  return <ul>{items.map(i => <li key={i.id}>{i.text}</li>)}</ul>
+// ANTI-PATTERN: mixing imperative DOM manipulation with React
+function BadInput() {
+  const ref = useRef()
+  useEffect(() => {
+    // DON'T do this — React already manages this DOM node
+    ref.current.style.color = 'red'
+    ref.current.setAttribute('data-custom', 'true')
+  }, [])
+  return <input ref={ref} />
+  // If React re-renders and replaces this node, your manual attributes are lost.
+  // The DOM is React's output — don't fight it from the outside.
 }
 
-// Good — DevTools shows "ItemList", trivially searchable in a tree of 200 components
-export default function ItemList({ items }) {
-  return <ul>{items.map(i => <li key={i.id}>{i.text}</li>)}</ul>
+// PRODUCTION: let React manage the DOM, use state for dynamic values
+function GoodInput({ isValid }) {
+  return <input style={{ color: isValid ? 'inherit' : 'red' }} data-custom={isValid} />
 }
-```
-::
-
-## Setting Up a Real Project Layout
-
-A production-shaped starting structure (grows into this over the course of the curriculum):
-
-::code-wrapper{language="bash"}
-```bash
-src/
-├── main.jsx
-├── App.jsx
-├── components/       # shared, reusable, "dumb" UI components
-│   ├── Button.jsx
-│   └── Spinner.jsx
-├── features/         # feature-scoped components + logic, one folder per domain
-│   └── user-profile/
-│       ├── UserProfile.jsx
-│       └── useUserProfile.js
-├── hooks/            # cross-cutting custom hooks
-│   └── useDebounce.js
-├── lib/              # API clients, utilities, constants
-│   └── apiClient.js
-└── routes/           # route-level components (see chapter 19)
+// React reconciles style and attributes — no manual DOM touches needed.
+// Use refs ONLY for: focus management, scroll position, measuring layout,
+// integrating with non-React libraries (Chapter 8).
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Debug** — Install React DevTools *before* you need it. Debugging a re-render storm without the Profiler's "why did this render" flame graph means guessing; with it, you get a direct answer per component per commit.
-- **Performance** — `npm create vite@latest` is dramatically faster than CRA's webpack-based dev server on large apps because Vite serves unbundled ES modules in dev and only bundles for production — hot reload stays near-instant no matter how large `node_modules` grows.
-- **Idiom** — Name every component you export, even quick ones. `export default function() {}` is legal JSX but sabotages your future self in the DevTools component tree and in stack traces.
-- **Debug** — `<StrictMode>` double-invoking your component body and effects in development is not a bug in your app — it's React deliberately surfacing impure renders and un-cleaned-up effects before they become production bugs. If double-logging in the console surprises you, that's the point.
-- **Portability** — `create-react-app` is deprecated; do not start new projects with it. If you inherit a CRA codebase, migrating to Vite is usually a same-day task since both use standard ES modules and JSX.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Always use createRoot (React 18+), never ReactDOM.render — it's
+// deprecated and doesn't support concurrent features, automatic batching,
+// or transitions.
+
+// [Debug] If your app renders twice on every state update in dev, check
+// StrictMode first — it's intentional, not a bug. It disappears in production.
+
+// [Performance] Vite's dev server uses esbuild (Go-based) — orders of magnitude
+// faster than Babel for JSX transformation. Only the production build uses
+// Rollup for tree-shaking and code-splitting.
+
+// [Idiom] Keep main.jsx minimal — just createRoot + render + global providers.
+// All routing, layout, and logic belongs in App.jsx or child components.
+
+// [Safety] The $$typeof Symbol.for('react.element') check is React's built-in
+// XSS defense. Never bypass it by manually constructing element objects —
+// always use JSX or React.createElement.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`<StrictMode>` runs effects twice in development only** — mount → effect → cleanup → effect, all synchronously, before you see anything on screen. This is invisible in production builds. If your `useEffect` cleanup isn't idempotent (e.g., it doesn't properly cancel a subscription), StrictMode will expose the bug loudly in dev while production silently ships it.
-- **JSX requires a build step, always** — there is no way to run JSX directly in a browser or Node.js without transpilation (Babel, SWC, TypeScript, or esbuild). Pasting a `.jsx` file into a plain `<script>` tag throws a syntax error.
-- **`createRoot` vs `ReactDOM.render`** — mixing the React 17 `ReactDOM.render(<App />, el)` API with React 18's concurrent features silently opts you *out* of automatic batching and concurrent rendering; React logs a warning, but the app keeps running in legacy mode with no other visible symptom.
-- **Vite's `import.meta.env`, not `process.env`** — code copied from a CRA project referencing `process.env.REACT_APP_*` will be `undefined` in Vite; Vite exposes env vars as `import.meta.env.VITE_*` (note the different prefix requirement, too).
-- **The virtual DOM is not "faster than the DOM" in isolation** — direct, hand-tuned imperative DOM code can always be faster than diffing. The VDOM's actual value is developer ergonomics at scale (declarative code that's easy to reason about) plus batched, minimal-diff updates — not raw single-operation speed.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] StrictMode double-invokes effects (mount → unmount → mount) in dev.
+// If your effect creates a WebSocket connection without cleanup, you'll get
+// TWO connections in dev. Always implement cleanup in useEffect.
+
+// [Gotcha] createRoot can only be called ONCE per DOM element. Calling
+// root.render() multiple times is fine (it updates), but creating two roots
+// on the same element throws. To update, reuse the root object.
+
+// [Gotcha] ReactDOM.render (legacy) and createRoot have different batching
+// behavior — legacy doesn't batch outside React event handlers; createRoot
+// (React 18+) batches EVERYTHING (timeouts, promises, native events).
+
+// [Gotcha] If you see "Target container is not a DOM element" — your script
+// is running before the DOM is ready. Ensure the script tag has defer, or
+// your entry point runs after the #root element exists in the document.
+
+// [Gotcha] Hydration mismatch warnings occur when server-rendered HTML differs
+// from what React expects on the client. Common causes: timestamps, Math.random(),
+// browser-only APIs in the initial render, or different data between server and client.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A teammate scaffolded a new feature and is confused why their console shows each `console.log` twice in development, but only once when they deploy.
+A developer's component shows a value in the DOM that doesn't update when state changes:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
-function AnalyticsPing({ eventName }) {
-  console.log('Firing analytics event:', eventName)
-  return null
+function Counter() {
+  const [count, setCount] = useState(0)
+  document.title = `Count: ${count}`  // ← side effect in render body
+  return <button onClick={() => setCount(c => c + 1)}>Count: {count}</button>
 }
 ```
 ::
 
+The button text updates, but `document.title` sometimes lags or shows the wrong value. Why?
+
 <details>
 <summary>Answer</summary>
 
-This isn't a bug in the code — it's `<StrictMode>` intentionally invoking the component function body twice per render in development to help surface side effects that don't belong during rendering (calling `console.log`, mutating external state, or firing network requests directly in the function body, rather than inside `useEffect`). In production builds, StrictMode's extra invocation is stripped out, so it only logs once.
+`document.title = ...` runs in the render body, not in a `useEffect`. React may render a component multiple times before committing to the DOM (especially in StrictMode, which double-invokes render). The render phase must be **pure** — no side effects, no mutations. Side effects belong in `useEffect`, which runs *after* the DOM commit:
 
-**The lesson**: rendering (calling your component function) must be a pure calculation of JSX from props/state — side effects like logging or network calls belong in event handlers or `useEffect`, not in the component body itself.
+```javascript
+function Counter() {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    document.title = `Count: ${count}`
+  }, [count])  // runs after commit, only when count changes
+  return <button onClick={() => setCount(c => c + 1)}>Count: {count}</button>
+}
+```
+
+In StrictMode (dev), the render body runs twice per update — the `document.title` gets set twice with potentially stale values from an abandoned render. In production it usually works by accident, but the render phase is not guaranteed to be a 1:1 mapping to commits. Move side effects to `useEffect`.
 
 </details>
 
 ## Key Takeaways
 
-- React is a UI library, not a framework — it renders views declaratively and leaves routing, data fetching, and state architecture to you or add-on libraries.
-- JSX compiles to function calls that build plain-object element trees; it always requires a build step.
-- The virtual DOM lets React diff old vs. new UI trees and apply minimal real DOM patches — its value is ergonomics and batching, not raw speed.
-- Use Vite (`npm create vite@latest -- --template react` or `react-ts`) to scaffold new projects; CRA is deprecated.
-- `createRoot` (React 18) is the modern mount API; install React DevTools immediately for component inspection and render profiling.
-- Hooks and function components are the modern default; class components survive only as a legacy-literacy topic (error boundaries excepted).
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. React = declarative UI library. You describe WHAT the UI looks like for
+//    a given state; React diffs the virtual DOM and commits minimal real-DOM changes.
+//    Never imperatively manipulate DOM that React manages.
+
+// 2. createRoot (React 18+) enables concurrent features, automatic batching,
+//    and transitions. Legacy ReactDOM.render is deprecated — don't use it.
+
+// 3. Vite is the standard scaffold (CRA is deprecated). esbuild for dev speed,
+//    Rollup for production builds. npm create vite@latest my-app -- --template react
+
+// 4. StrictMode renders twice and re-runs effects in DEV to catch impure renders
+//    and missing cleanups. This is intentional — it vanishes in production.
+
+// 5. JSX compiles to React.createElement() calls → plain objects with
+//    $$typeof: Symbol.for('react.element') as XSS defense. Never construct
+//    element objects manually — always use JSX or createElement.
+```
+::

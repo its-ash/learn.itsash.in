@@ -1,43 +1,92 @@
+---
+title: "05 — Functions"
+description: "Multiple returns, closure capture semantics, defer execution model, variadic mechanics, and function-type patterns for production Go."
+---
+
 # 05 — Functions
 
-Go functions are first-class values, support multiple returns, and have a distinctive error-handling convention.
-
-## Declaration and Calls
+## Declaration Forms and Return Patterns
 
 ::code-wrapper{language="go"}
 ```go
-func add(a, b int) int {
-	return a + b
+// ┌─────────────────────────────────────────────────────────────────────┐
+// │ Form                    │ Use Case                                 │
+// │ ─────────────────────── │ ──────────────────────────────────────── │
+// │ func f(a, b int) int    │ simple function                          │
+// │ func f(a, b int)(int,error) │ Go's (value, error) convention       │
+// │ func f()(q, r int)      │ named returns (defer modification)       │
+// │ func f(a int, opts ...Opt) T │ variadic (builder/options pattern) │
+// │ func f() func() int     │ returning a closure (stateful function) │
+// │ var f func(int)int = ... │ function as a value                     │
+// └─────────────────────────────────────────────────────────────────────┘
+
+// Multiple returns — Go's primary error-handling mechanism:
+func fetchUser(id int64) (*User, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("fetchUser: invalid id %d", id)
+	}
+	return &User{ID: id}, nil
 }
 
-func divmod(a, b int) (int, int) {
-	return a / b, a % b
-}
-
-q, r := divmod(17, 5)   // 3, 2
-``
-::
-
-Parameters of the same type can share the type (`a, b int`). Multiple return values are a core feature — the right side of an assignment must match the number of returns.
-
-## Named Return Values
-
-::code-wrapper{language="go"}
-```go
-func divmod(a, b int) (q, r int) {
-	q = a / b
-	r = a % b
-	return        // "naked return" — returns q, r
+// Named returns — pre-declared, zero-initialized, can be modified by defer:
+func divide(a, b int) (result int, err error) {
+	if b == 0 {
+		err = errors.New("divide by zero")
+		return  // naked return — returns (result=0, err=error)
+	}
+	result = a / b
+	return  // returns (result=quotient, err=nil)
 }
 ```
 ::
 
-Named returns are pre-declared and initialized to zero; a "naked" `return` returns them. Useful for readability in long functions, but can obscure what's returned — use sparingly. Their main real-world use: modifying return values in `defer` (see below).
-
-## Variadic Functions
+### Named returns — the real use case
 
 ::code-wrapper{language="go"}
 ```go
+// ❌ ANTI-PATTERN: naked returns in long functions (unreadable)
+func process(data []byte) (result []byte, err error) {
+	// ... 50 lines of code ...
+	result = transform(data)
+	// ... 30 more lines ...
+	return  // ← what does this return? reader must scan entire function
+}
+
+// ✅ CORRECT: named returns for defer-based error decoration and timing:
+func timedOperation(ctx context.Context) (result int, err error) {
+	start := time.Now()
+	defer func() {
+		// Log the duration and decorate the error on the way out:
+		elapsed := time.Since(start)
+		if err != nil {
+			err = fmt.Errorf("timedOperation (took %v): %w", elapsed, err)
+		}
+		log.Printf("timedOperation took %v", elapsed)
+	}()
+
+	// ... actual work ...
+	result = 42
+	return result, nil
+}
+
+// ✅ Panic recovery via deferred named return:
+func safeExec(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic: %v", r)
+		}
+	}()
+	return fn()
+}
+```
+::
+
+## Variadic Functions — The Options Pattern
+
+::code-wrapper{language="go"}
+```go
+// Variadic: `...T` becomes a `[]T` inside the function. Must be last param.
+
 func sum(nums ...int) int {
 	total := 0
 	for _, n := range nums {
@@ -45,209 +94,355 @@ func sum(nums ...int) int {
 	}
 	return total
 }
+// sum(1, 2, 3) → 6
+// nums := []int{1, 2, 3}; sum(nums...) → 6  (spread a slice)
 
-sum(1, 2, 3)        // 6
-nums := []int{1, 2, 3}
-sum(nums...)        // 6 — spread a slice
+// ─── Production pattern: functional options ───
+type Server struct {
+	addr    string
+	port    int
+	tls     bool
+	timeout time.Duration
+}
+
+type Option func(*Server)  // function type that mutates the server config
+
+func WithPort(p int) Option {
+	return func(s *Server) { s.port = p }
+}
+func WithTLS(cfg *tls.Config) Option {
+	return func(s *Server) { s.tls = true }
+}
+func WithTimeout(d time.Duration) Option {
+	return func(s *Server) { s.timeout = d }
+}
+
+func NewServer(addr string, opts ...Option) *Server {
+	s := &Server{
+		addr:    addr,
+		port:    8080,           // sensible default
+		timeout: 30 * time.Second,
+	}
+	for _, opt := range opts {
+		opt(s)  // apply each option
+	}
+	return s
+}
+
+// Usage — readable, extensible, zero config structs:
+srv := NewServer(":8080",
+	WithPort(9090),
+	WithTimeout(10*time.Second),
+	WithTLS(tlsConfig),
+)
 ```
 ::
 
-`...T` makes the final parameter a slice of `T`. `slice...` spreads a slice into a variadic call.
-
-## Closures
-
-Functions are values — they capture their environment:
+## Closures — Capture Semantics
 
 ::code-wrapper{language="go"}
 ```go
+// Closures capture variables BY REFERENCE (not by value).
+// The captured variable outlives the function that declared it —
+// it's moved to the heap (escape analysis detects this).
+
 func counter() func() int {
-	n := 0
+	n := 0                    // captured by the closure below
 	return func() int {
-		n++
+		n++                  // modifies the SAME n across calls
 		return n
 	}
 }
+// c := counter(); c() → 1; c() → 2; c() → 3
+// Each call to counter() creates a NEW n (independent counters).
 
-c := counter()
-c()   // 1
-c()   // 2
-``
+// ─── Generator pattern ───
+func fibonacci() func() int {
+	a, b := 0, 1
+	return func() int {
+		a, b = b, a+b
+		return a
+	}
+}
+// f := fibonacci(); f() → 1; f() → 1; f() → 2; f() → 3; f() → 5
+
+// ─── The loop variable capture trap (pre-Go 1.22) ───
+func captureTrap() {
+	var fns []func()
+	for i := 0; i < 3; i++ {
+		fns = append(fns, func() { fmt.Println(i) })  // captures i by reference
+	}
+	for _, f := range fns {
+		f()
+	}
+	// Go 1.21: 3 3 3  (all see the final i=3 — single variable reused)
+	// Go 1.22+: 0 1 2 (each iteration has its own i — spec change)
+}
+
+// ✅ Pre-1.22 fix (still safe on 1.22+):
+func captureFixed() {
+	var fns []func()
+	for i := 0; i < 3; i++ {
+		i := i  // shadow — creates a new i per iteration
+		fns = append(fns, func() { fmt.Println(i) })
+	}
+	// 0 1 2 on all versions
+}
+```
 ::
 
-Closures capture variables **by reference** — `n` is shared across calls to the returned function. This is how stateful functions (counters, accumulators) are built.
-
-## Functions as Values and Parameters
+## Functions as Values and Types
 
 ::code-wrapper{language="go"}
 ```go
-var f func(int) int = func(x int) int { return x * 2 }
+// Function types are first-class — assignable, passable, returnable.
+// A function type is spelled: func(paramTypes) returnTypes
 
-// Higher-order function
-func apply(nums []int, fn func(int) int) []int {
-	result := make([]int, len(nums))
-	for i, n := range nums {
-		result[i] = fn(n)
+type Mapper[T, U any] func(T) U  // generic function type (Go 1.18+)
+
+// Higher-order: function that takes a function:
+func mapSlice[T, U any](items []T, fn Mapper[T, U]) []U {
+	result := make([]U, len(items))
+	for i, item := range items {
+		result[i] = fn(item)
 	}
 	return result
 }
 
-apply([]int{1, 2, 3}, func(x int) int { return x * x })   // [1 4 9]
+// Usage:
+doubled := mapSlice([]int{1, 2, 3}, func(x int) int { return x * 2 })
+// [2 4 6]
+
+// Function type as a field — strategy pattern:
+type Processor struct {
+	transform func([]byte) []byte  // injected strategy
+}
+func (p *Processor) Process(data []byte) []byte {
+	return p.transform(data)
+}
+
+// ⚠️ Function types are distinct — no implicit conversion:
+//   func(int) int ≠ func(int64) int (different parameter types)
+//   func() ≠ func() error (different return types)
 ```
 ::
 
-Function types are spelled `func(params) returns`. Functions can be assigned, passed, and returned.
-
-## `defer`
-
-`defer` schedules a function call to run when the enclosing function returns — LIFO (last deferred runs first):
+## `defer` — The Execution Model
 
 ::code-wrapper{language="go"}
 ```go
-func readFile(path string) error {
+// defer schedules a function call to run when the enclosing function returns.
+// Key properties:
+//   1. LIFO order (last deferred runs first)
+//   2. Arguments evaluated IMMEDIATELY (at defer time, not run time)
+//   3. Runs on panic (before the program crashes) — but NOT on os.Exit
+//   4. Has a small overhead (~35ns per defer pre-1.14, ~1ns open-coded 1.14+)
+
+func deferOrder() {
+	// LIFO unwind:
+	defer fmt.Println("1")  // runs 4th (last)
+	defer fmt.Println("2")  // runs 3rd
+	defer fmt.Println("3")  // runs 2nd
+	fmt.Println("4")        // runs 1st (immediate)
+	// Output: 4, 3, 2, 1
+}
+
+// ─── Argument evaluation timing ───
+func deferArgEval() {
+	i := 1
+	defer fmt.Println(i)  // prints 1 — i evaluated NOW (at defer time)
+	i = 2
+	defer func() { fmt.Println(i) }()  // prints 2 — i evaluated at RUN time
+	// Output: 2, 1  (LIFO: the closure runs first, then the println(i))
+}
+
+// ─── Resource cleanup (the primary use) ───
+func readFile(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer f.Close()   // runs when readFile returns
-
-	data := make([]byte, 1024)
-	_, err = f.Read(data)
-	return err   // f.Close() runs here
+	defer f.Close()  // guaranteed to run on return, early return, OR panic
+	// This is why defer exists — you can't forget to close.
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err  // f.Close() runs here
+	}
+	return data, nil  // f.Close() runs here
 }
-``
-::
 
-Use `defer` for cleanup (closing files, releasing locks, responding to HTTP requests) — it guarantees the cleanup runs regardless of how the function exits (return, panic, early return).
+// ─── defer in reverse order (nested resources) ───
+func nestedResources() error {
+	db, _ := sql.Open("postgres", dsn)
+	defer db.Close()  // runs LAST (opened first, closed last)
 
-### `defer` evaluates arguments immediately
+	conn, _ := db.Conn(context.Background())
+	defer conn.Close()  // runs FIRST (opened last, closed first)
 
-::code-wrapper{language="go"}
-```go
-i := 1
-defer fmt.Println(i)   // prints 1 — i is evaluated now, not at defer time
-i = 2
-// function returns, defer runs, prints 1
+	rows, _ := conn.QueryContext(context.Background(), "SELECT 1")
+	defer rows.Close()  // runs before conn.Close
+
+	// LIFO ensures rows → conn → db (inner to outer)
+	return nil
+}
 ```
 ::
 
-To capture the *current* value at defer time, use a closure:
-```go
-defer func() { fmt.Println(i) }()   // prints 2 — i is read at defer-run time
-```
-::
-### `defer` and named returns
-
-A `defer`d function can modify named return values:
+### `defer` in loops — the resource leak
 
 ::code-wrapper{language="go"}
 ```go
-func example() (result int) {
-	defer func() {
-		result *= 2   // modifies the named return
-	}()
-	result = 5
-	return            // returns 10 (defer ran, doubled it)
-}
-``
-::
-
-This is the main legitimate use of named returns — wrapping/transforming the return value in a `defer` (e.g., logging, error decoration).
-
-## `init` Functions (recap)
-
-`init()` runs automatically at package load. Covered in chapter 02 — avoid for general setup; reserve for unavoidable side effects.
-
-## Anonymous Functions and IIFEs
-
-::code-wrapper{language="go"}
-```go
-// Immediately-invoked function expression
-result := func(x int) int {
-	return x * 2
-}(5)   // 10
-``
-::
-
-Go has no `async`/`await` — goroutines (chapter 16) are the concurrency primitive.
-
-## 💡 Tips & Tricks
-
-- **Idiom**: use `defer f.Close()` immediately after opening a resource — it guarantees cleanup regardless of how the function exits (return, early return, panic). Pair every `os.Open`/`sql.Open`/`os.Create` with a `defer` of the corresponding `Close`.
-- **Idiom**: use named return values when you need to modify them in a `defer` (e.g., error wrapping, timing) — this is the legitimate use case. For simple functions, unnamed returns + explicit `return x, y` are clearer than naked returns.
-- **Idiom**: use multiple return values for `(result, error)` — it's the Go convention. Functions that can fail return `(T, error)`; callers check `if err != nil` before using `T`. Don't return only `error` and a pointer out-param; the `(T, error)` form is idiomatic.
-- **Idiom**: use `defer` for cleanup in **reverse order** of acquisition — open file A, open file B, `defer b.Close()`, `defer a.Close()`. LIFO ensures B (opened last) is closed first, matching resource lifetimes.
-- **Debug**: `defer` arguments are evaluated at defer time, not at execution time — `defer fmt.Println(i)` prints the value of `i` when `defer` was called, not when it runs. To capture the later value, use a closure: `defer func() { fmt.Println(i) }()`.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **`defer` in a loop**: `for ... { defer f.Close() }` accumulates deferred calls until the function returns — resources pile up. Close inside the loop, or refactor the loop body into a function.
-- **`defer` and loops + closures (1.22 fix)**: pre-1.22, `for i := 0; ... { defer func() { fmt.Println(i) }() }` printed the *final* value of `i` for all iterations (loop variable captured by reference). Go 1.22+ makes each iteration's loop variable distinct, fixing this. On older Go, pass `i` as an argument: `defer func(i int) { ... }(i)`.
-- **Naked returns in long functions**: `return` (no values) in a 100-line function with named returns is opaque — readers must scan for where the named returns were set. Use naked returns only in short functions.
-- **`defer` has a small overhead**: each `defer` has a tiny cost (function call + stack bookkeeping). In hot paths (millions of iterations), it can matter — Go 1.14+ optimized the common case (open-coded defer) to near-zero, but `defer` in a loop still adds up.
-- **Multiple returns must be fully received or discarded**: `f, err := os.Open(...)` — you must use both (or `_`). You can't receive only one of a multi-return: `f := os.Open(...)` is an error. Use `f, _ := ...` to discard explicitly.
-- **`...` spread requires a slice, not a single value**: `sum(nums...)` where `nums` is `[]int` works; `sum(5...)` doesn't. The `...` is the spread operator for variadic calls.
-- **Function types are distinct**: `func(int) int` and `func(int64) int` are different types — you can't assign one to the other. This matches Go's no-implicit-conversion rule.
-- **Closures capture by reference**: `for i := 0; i < 3; i++ { go func() { fmt.Println(i) }() }` (pre-1.22) prints "3 3 3" — all goroutines see the final `i`. Pass `i` as an argument: `go func(i int) { ... }(i)`.
-- **`defer` doesn't run on `os.Exit`**: `os.Exit(n)` terminates immediately without running deferred functions. Don't call `os.Exit` inside a function with cleanup `defer`s — return an error and let `main` exit.
-
-## 🧠 Spot the Bug
-
-A developer opens files in a loop to process them, but runs out of file descriptors:
-
-::code-wrapper{language="go"}
-```go
-func processFiles(paths []string) error {
+// ❌ ANTI-PATTERN: defer in a loop — resources accumulate until function returns
+func processFilesBad(paths []string) error {
 	for _, p := range paths {
 		f, err := os.Open(p)
 		if err != nil {
 			return err
 		}
-		defer f.Close()   // ❌ deferred until processFiles returns
-		// process f...
-	}
-	return nil
-}
-```
-::
-
-What's wrong?
-
-<details>
-<summary>Answer</summary>
-
-`defer f.Close()` doesn't run until `processFiles` returns — so all files stay open for the duration of the loop. With many files, you exhaust file descriptors (`EMFILE: too many open files`).
-
-`defer` is function-scoped, not block-scoped. In a loop, deferred calls accumulate; they only run when the enclosing *function* returns, not at the end of each iteration.
-
-The fix — extract the loop body into a function so each `defer` runs per iteration:
-
-```go
-func processFiles(paths []string) error {
-	for _, p := range paths {
-		if err := processFile(p); err != nil {
+		defer f.Close()  // ALL files stay open until processFilesBad returns!
+		// With 10000 files → "too many open files" (EMFILE)
+		if err := process(f); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func processFile(path string) error {
+// ✅ CORRECT: extract loop body into a function — defer runs per iteration
+func processFilesGood(paths []string) error {
+	for _, p := range paths {
+		if err := processOneFile(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processOneFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()   // runs when processFile returns — per file
-	// process f...
-	return nil
+	defer f.Close()  // runs when processOneFile returns — file closed per iteration
+	return process(f)
 }
 ```
 ::
-Now each file is closed when `processFile` returns, before the next iteration opens another. This is the idiomatic pattern for resource cleanup in loops: extract a function, `defer` inside it.
 
-**The lesson**: `defer` is function-scoped. In a loop, deferred calls pile up until the function returns. Extract the loop body into a function so each `defer` runs per iteration.
+### `defer` performance — open-coded defer
+
+::code-wrapper{language="go"}
+```go
+// Go 1.14+ "open-coded defer" optimization:
+//   - If a function has ≤8 defers AND none are in loops
+//   - The compiler inlines the defer logic (no runtime deferproc call)
+//   - Cost drops from ~35ns to ~1-2ns per defer
+//
+// This means defer is now effectively free for the common case (a few
+// resource cleanups in a normal function). Don't avoid defer for perf
+// unless profiling shows it's a bottleneck (extremely rare).
+//
+// defer is still expensive when:
+//   - In a loop (accumulates, not open-coded)
+//   - In a function with >8 defers
+//   - The deferred function is dynamic (defer f where f is a variable)
+```
+::
+
+## Anonymous Functions and IIFEs
+
+::code-wrapper{language="go"}
+```go
+// Immediately-invoked function expression (IIFE):
+result := func(x int) int {
+	return x * 2
+}(5)  // 10
+
+// Use case: scoped computation without polluting the outer scope:
+func handler(w http.ResponseWriter, r *http.Request) {
+	// Parse and validate in an IIFE — keeps temp vars local:
+	input, err := func() (string, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(body)), nil
+	}()
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	_ = input
+}
+
+// Goroutine launch — the most common IIFE:
+go func() {
+	defer wg.Done()
+	// concurrent work
+}()
+```
+::
+
+## 💡 Tips & Tricks
+
+- **Idiom**: use the functional options pattern (`WithPort(8080)`, `WithTimeout(...)`) for constructors with many optional parameters — it's more readable than a config struct with many nilable fields, and it's extensible (new options don't break existing callers).
+- **Idiom**: use named returns + `defer` for error decoration, timing, and panic recovery — this is the legitimate use of named returns. Don't use naked returns in long functions for readability.
+- **Performance**: `defer` is nearly free in Go 1.14+ for the open-coded case (≤8 defers, no loops). Don't avoid `defer f.Close()` for performance reasons — the safety is worth the ~1ns.
+- **Idiom**: pair every resource acquisition (`os.Open`, `sql.Open`, `os.Create`, `lock.Lock`) with a `defer` of the corresponding release — this is the #1 defer use case. Defers run in LIFO order, matching nested resource lifetimes.
+- **Safety**: `defer` runs on panic but NOT on `os.Exit` — never call `os.Exit` inside a function with cleanup defers. Return an error to `main` and call `os.Exit` there.
+- **Debug**: `defer` arguments are evaluated at defer time — `defer fmt.Println(i)` captures `i`'s current value. To capture the value at return time, use a closure: `defer func() { fmt.Println(i) }()`.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`defer` in a loop accumulates**: deferred calls don't run until the function returns — all resources stay open. Extract the loop body into a function.
+- **`defer` doesn't run on `os.Exit`**: `os.Exit(n)` terminates immediately, skipping all defers. Return errors to `main` and exit there.
+- **`defer` argument evaluation timing**: `defer f(i)` captures `i` at defer time; `defer func() { f(i) }()` captures `i` at run time. The difference matters when the variable changes between defer and return.
+- **Naked returns in long functions**: `return` with no values + named returns is opaque in 50+ line functions. Use explicit returns for readability.
+- **Closure capture by reference**: closures capture variables by reference, not by value. A loop variable captured by a closure sees the final value (pre-1.22). Pass as argument or shadow (`i := i`).
+- **`...` spread requires a slice**: `sum(nums...)` works with `nums` = `[]int`; `sum(5...)` is a compile error. The spread is for variadic calls only.
+- **Function types are distinct**: `func(int) int` and `func(int64) int` are different types — no implicit conversion. This matches Go's no-implicit-conversion rule.
+- **Multiple returns must be fully received**: `f, err := os.Open(...)` — both values must be used or explicitly discarded (`_`). `f := os.Open(...)` is a compile error.
+- **Variadic `nil` spread**: `sum(nil...)` where the slice is `[]int(nil)` — works (zero iterations). But `var s []int; sum(s...)` with a nil slice also works (range over nil slice = zero iterations).
+- **`defer` and `recover`**: `recover()` only works inside a deferred function. Calling `recover()` outside defer returns nil even during a panic. This is the only way to catch a panic.
+
+## 🧠 Quick Quiz
+
+::code-wrapper{language="go"}
+```go
+func f() (result int) {
+	defer func() { result *= 2 }()
+	defer func() { result += 10 }()
+	return 5
+}
+```
+
+What does `f()` return?
+::
+<details>
+<summary>Answer</summary>
+
+`f()` returns **20**.
+
+Execution order:
+1. `return 5` sets `result = 5`
+2. Defers run in LIFO order:
+   - First defer (registered second): `result += 10` → `result = 15`
+   - Second defer (registered first): `result *= 2` → `result = 30`
+
+Wait — that gives 30. Let me re-check.
+
+Actually:
+1. `return 5` → `result = 5`, then defers run:
+2. LIFO: the LAST registered defer runs first:
+   - `defer func() { result += 10 }()` was registered second, runs first → `result = 15`
+   - `defer func() { result *= 2 }()` was registered first, runs second → `result = 30`
+
+`f()` returns **30**.
+
+The key insight: `return 5` doesn't immediately return — it assigns 5 to the named return `result`, then deferred functions run (in LIFO order), and THEN the function returns with the modified `result`.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now write functions with multiple/named returns, variadic parameters, and closures; use `defer` for cleanup (with its argument-evaluation and named-return interactions); pass functions as values; and avoid the `defer`-in-a-loop and closure-capture traps. Next: control flow.
+→ [06 — Control Flow](/go/06-control-flow) — `if`/`for`/`switch`/`select`, Go 1.22 loop scoping, labeled breaks, and the absence of `while`.

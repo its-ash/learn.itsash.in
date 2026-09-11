@@ -1,368 +1,361 @@
+---
+title: Vue 3 Engineering Reference — State Management with Pinia
+description: Setup store vs options store, composition-based store patterns, cross-store dependencies, store persistence, SSR state hydration, and $reset/$patch batch mutations for production apps.
+---
+
 # 10 — State Management with Pinia
 
-## Why a Store, Not Just `provide`/`inject`
+## Setup Store — Composition API Style
 
-Chapter 06 covered `provide`/`inject` for cross-tree communication. It works, but scales poorly once several unrelated component trees need the same data, mutations need to be traceable, or you want DevTools time-travel debugging and SSR-safe state. Pinia — the official Vue 3 state library — solves all of that with a small, fully-typed API and no boilerplate mutations layer (unlike Vuex before it).
+::code-wrapper{language="typescript" filename="stores/user.ts"}
+```typescript
+import { defineStore, ref, computed } from '#imports'  // Nuxt auto-import; else from 'pinia'
 
-::code-wrapper{language="bash"}
-```bash
-npm install pinia
+// ── defineStore with setup function (Composition API style) ──
+// More flexible than Options API stores: can use any composable, watcher, etc.
+export const useUserStore = defineStore('user', () => {
+  // ── State: refs ────────────────────────────────────────
+  const user = ref<{ id: number; name: string; email: string } | null>(null)
+  const token = ref<string | null>(null)
+  const loading = ref(false)
+
+  // ── Getters: computed ───────────────────────────────────
+  const isAuthenticated = computed(() => !!token.value && !!user.value)
+  const displayName = computed(() => user.value?.name ?? 'Guest')
+
+  // ── Actions: plain functions (can be async) ─────────────
+  async function login(credentials: { email: string; password: string }) {
+    loading.value = true
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(credentials),
+      })
+      const data = await res.json()
+      user.value = data.user
+      token.value = data.token
+      localStorage.setItem('token', data.token)  // persistence
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function logout() {
+    user.value = null
+    token.value = null
+    localStorage.removeItem('token')
+  }
+
+  // ── Everything returned is part of the store's public API ──
+  // State (refs), getters (computed), and actions (functions) all exposed.
+  return { user, token, loading, isAuthenticated, displayName, login, logout }
+})
 ```
 ::
 
-::code-wrapper{language="javascript" filename="main.js"}
-```javascript
-import { createApp } from 'vue'
-import { createPinia } from 'pinia'
-import App from './App.vue'
+## Options Store — The Alternative
 
-const app = createApp(App)
-app.use(createPinia())
-app.mount('#app')
-```
-::
-
-## Defining a Store — Options Style
-
-::code-wrapper{language="javascript" filename="stores/counter.js"}
-```javascript
+::code-wrapper{language="typescript" filename="stores/cart.ts"}
+```typescript
 import { defineStore } from 'pinia'
 
-export const useCounterStore = defineStore('counter', {
+// ── Options API style store: state/getters/actions separated ──
+// More structured, less flexible. Similar to Vue's Options API.
+export const useCartStore = defineStore('cart', {
+  // ── State: a function returning the initial state (like data()) ──
+  // MUST be a function (not a plain object) — fresh copy per store instance.
   state: () => ({
-    count: 0,
-    history: []
+    items: [] as Array<{ id: number; name: string; price: number; qty: number }>,
+    couponCode: null as string | null,
   }),
+
+  // ── Getters: like computed, access state via `this` ──
   getters: {
-    doubled: (state) => state.count * 2,
-    // getters can reference other getters via `this`, fully typed in TS
-    doubledPlusOne() {
-      return this.doubled + 1
-    }
-  },
-  actions: {
-    increment(amount = 1) {
-      this.count += amount
-      this.history.push({ type: 'increment', amount, at: Date.now() })
+    count: (state) => state.items.reduce((sum, i) => sum + i.qty, 0),
+
+    // ── Getter with parameter: return a function from a getter ──
+    itemPrice: (state) => (id: number) =>
+      state.items.find(i => i.id === id)?.price ?? 0,
+
+    // ── Getter using another getter: access via `this` ──
+    total: (state) => {
+      return state.items.reduce((sum, i) => sum + i.price * i.qty, 0)
     },
-    async fetchInitialCount() {
-      const res = await fetch('/api/counter')
-      const { value } = await res.json()
-      this.count = value
-    }
-  }
+    // For getters referencing other getters, use `this`:
+    // totalWithTax() { return this.total * 1.08 }
+  },
+
+  // ── Actions: methods, mutate state via `this` ──
+  actions: {
+    addItem(item: { id: number; name: string; price: number }) {
+      const existing = this.items.find(i => i.id === item.id)
+      if (existing) {
+        existing.qty++  // direct mutation — Pinia allows it
+      } else {
+        this.items.push({ ...item, qty: 1 })
+      }
+    },
+
+    removeItem(id: number) {
+      this.items = this.items.filter(i => i.id !== id)
+    },
+
+    // ── Actions can be async ──
+    async checkout() {
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ items: this.items, coupon: this.couponCode }),
+      })
+      if (res.ok) this.$reset()  // reset to initial state
+    },
+  },
 })
 ```
 ::
 
-`state` must always be a function returning a fresh object — exactly like a component's `data()` — so every app instance (and every SSR request) gets its own isolated state rather than sharing one mutable object across users.
+## $patch — Batch Mutations for Performance
 
-## Defining a Store — Setup Style
+::code-wrapper{language="typescript" filename="patch-mutations.ts"}
+```typescript
+import { useUserStore } from './stores/user'
 
-The "setup store" syntax mirrors `<script setup>` directly: `ref`/`reactive` become state, `computed` become getters, plain functions become actions. This is the recommended style for new code because it composes naturally with the rest of the Composition API:
+const store = useUserStore()
 
-::code-wrapper{language="javascript" filename="stores/counter.js"}
-```javascript
-import { ref, computed } from 'vue'
-import { defineStore } from 'pinia'
-
-export const useCounterStore = defineStore('counter', () => {
-  const count = ref(0)
-  const history = ref([])
-
-  const doubled = computed(() => count.value * 2)
-
-  function increment(amount = 1) {
-    count.value += amount
-    history.value.push({ type: 'increment', amount, at: Date.now() })
-  }
-
-  async function fetchInitialCount() {
-    const res = await fetch('/api/counter')
-    const { value } = await res.json()
-    count.value = value
-  }
-
-  return { count, history, doubled, increment, fetchInitialCount }
+// ── $patch with object: batch multiple state changes into one mutation ──
+// Triggers ONE re-render for all changes, not one per property.
+store.$patch({
+  user: { id: 1, name: 'Ada', email: 'ada@example.com' },
+  token: 'xyz',
+  loading: false,
 })
+
+// ── $patch with function: for complex mutations (arrays, nested objects) ──
+// The function receives `state` and can mutate it freely.
+// Pinia batches all mutations inside the function into one update.
+store.$patch((state) => {
+  state.user.name = 'Grace'
+  state.user.email = 'grace@example.com'
+  // Multiple mutations, single re-render batch.
+})
+
+// ── Direct mutation: also valid, triggers per-property ──
+store.user.name = 'Ada'       // one update
+store.token = 'abc'            // another update → two re-renders
+// Use $patch to batch when updating multiple properties simultaneously.
 ```
 ::
 
-Anything not returned from a setup store is private to the store — a useful way to hide internal helper refs/functions that consumers shouldn't touch directly, something the Options syntax can't express (everything in Options `state` is always public).
+## Cross-Store Dependencies — Composing Stores
 
-## Using a Store in a Component
-
-::code-wrapper{language="vue" filename="CounterWidget.vue"}
-```vue
-<script setup>
-import { storeToRefs } from 'pinia'
-import { useCounterStore } from '@/stores/counter'
-
-const counterStore = useCounterStore()
-
-// WRONG (commented out): destructuring the store directly loses reactivity,
-// identically to destructuring any other reactive object
-// const { count, doubled } = counterStore
-
-// RIGHT — storeToRefs preserves reactivity for state and getters
-const { count, doubled } = storeToRefs(counterStore)
-
-// actions are plain functions, not reactive state — safe to destructure directly
-const { increment } = counterStore
-</script>
-
-<template>
-  <p>Count: {{ count }} (doubled: {{ doubled }})</p>
-  <button @click="increment()">+1</button>
-  <button @click="increment(5)">+5</button>
-</template>
-```
-::
-
-`storeToRefs` only wraps state and getters in refs — it deliberately skips actions, so plain destructuring of methods is always safe and doesn't need this helper.
-
-## Composing Stores
-
-Stores can call other stores' `use*Store()` functions inside their own actions/getters — this is the standard way to share logic across domains (e.g., a `cart` store that needs to know if a user is authenticated):
-
-::code-wrapper{language="javascript" filename="stores/cart.js"}
-```javascript
-import { ref, computed } from 'vue'
+::code-wrapper{language="typescript" filename="stores/checkout.ts"}
+```typescript
 import { defineStore } from 'pinia'
-import { useAuthStore } from './auth'
+import { useCartStore } from './cart'
+import { useUserStore } from './user'
 
-export const useCartStore = defineStore('cart', () => {
-  const items = ref([])
+// ── One store can use another — call useXxxStore() inside actions ──
+// Don't call at store definition time (circular dependency risk).
+// Call inside actions or setup function body.
+export const useCheckoutStore = defineStore('checkout', () => {
+  const cart = useCartStore()
+  const user = useUserStore()
 
-  const total = computed(() =>
-    items.value.reduce((sum, item) => sum + item.price * item.qty, 0)
-  )
+  async function processPayment(paymentMethod: string) {
+    if (!user.isAuthenticated) throw new Error('Must be logged in')
 
-  async function checkout() {
-    const authStore = useAuthStore()
-    if (!authStore.isLoggedIn) {
-      throw new Error('Must be logged in to checkout')
-    }
-    await fetch('/api/checkout', {
+    const res = await fetch('/api/checkout', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${authStore.token}` },
-      body: JSON.stringify({ items: items.value })
+      body: JSON.stringify({
+        items: cart.items,
+        userId: user.user?.id,
+        paymentMethod,
+      }),
     })
-    items.value = []
+
+    if (res.ok) {
+      cart.$reset()  // clear cart after successful checkout
+    }
+
+    return res.json()
   }
 
-  return { items, total, checkout }
+  return { processPayment }
 })
 ```
 ::
 
-Calling `useAuthStore()` inside `useCartStore`'s action (rather than at the top level of the file) avoids relying on store initialization order — it's resolved lazily, exactly when the action actually runs.
+## Store Persistence — Plugin Pattern
 
-## Persisting State
+::code-wrapper{language="typescript" filename="plugins/persist.ts"}
+```typescript
+import type { PiniaPluginContext } from 'pinia'
 
-Pinia has no built-in persistence — the common approach is either a small hand-written `watch`, or the `pinia-plugin-persistedstate` plugin:
+// ── Pinia plugin: runs for every store, persists state to localStorage ──
+export function persistPlugin({ store, options }: PiniaPluginContext) {
+  // ── Opt-in: only persist stores with `persist: true` in options ──
+  if (!options.persist) return
 
-::code-wrapper{language="bash"}
-```bash
-npm install pinia-plugin-persistedstate
+  const key = `pinia:${store.$id}`
+
+  // ── Hydrate from storage on store creation ──
+  const saved = localStorage.getItem(key)
+  if (saved) {
+    store.$patch(JSON.parse(saved))  // restore saved state
+  }
+
+  // ── Subscribe to state changes — save on every mutation ──
+  store.$subscribe((mutation, state) => {
+    // Debounce localStorage writes in production (mutations can be frequent)
+    localStorage.setItem(key, JSON.stringify(state))
+  }, { detached: true })  // detached: keep subscription even after store disposed
+
+  // ── Alternative: use $onAction to persist only after specific actions ──
+  // store.$onAction(({ name, after }) => {
+  //   if (name === 'addToCart') after(() => localStorage.setItem(key, JSON.stringify(store.$state)))
+  // })
+}
 ```
-::
 
-::code-wrapper{language="javascript" filename="main.js"}
-```javascript
+::code-wrapper{language="typescript" filename="main.ts"}
+```typescript
 import { createPinia } from 'pinia'
-import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
+import { persistPlugin } from './plugins/persist'
 
 const pinia = createPinia()
-pinia.use(piniaPluginPersistedstate)
+pinia.use(persistPlugin)  // register plugin — applies to all stores
+
+app.use(pinia)
 ```
 ::
 
-::code-wrapper{language="javascript" filename="stores/auth.js"}
-```javascript
-import { defineStore } from 'pinia'
+## SSR Hydration — Request-Scoped State
 
-export const useAuthStore = defineStore('auth', {
-  state: () => ({ token: null, user: null }),
-  actions: {
-    login(token, user) {
-      this.token = token
-      this.user = user
-    },
-    logout() {
-      this.token = null
-      this.user = null
-    }
-  },
-  persist: true   // survives a full page reload via localStorage by default
-})
-```
-::
+::code-wrapper{language="typescript" filename="ssr-hydration.ts"}
+```typescript
+import { createPinia } from 'pinia'
 
-For hand-rolled persistence without a plugin dependency, a `$subscribe` callback works for any store:
+// ── SSR: create a FRESH Pinia instance per request ──────
+// Module-scoped Pinia leaks state across requests (security bug).
+// Each request gets its own Pinia → stores are request-scoped.
+export function createApp() {
+  const pinia = createPinia()  // fresh per request
 
-::code-wrapper{language="javascript" filename="stores/settings.js"}
-```javascript
-import { defineStore } from 'pinia'
+  // ── On server: serialize state into HTML for client hydration ──
+  // After all onServerPrefetch hooks resolve:
+  const state = pinia.state.value  // all store states
+  // Inject into HTML: <script>window.__PINIA__ = ${JSON.stringify(state)}</script>
 
-export const useSettingsStore = defineStore('settings', {
-  state: () => ({
-    theme: JSON.parse(localStorage.getItem('settings') ?? '{}').theme ?? 'light'
-  })
-})
-```
-::
-
-::code-wrapper{language="javascript" filename="main.js"}
-```javascript
-import { useSettingsStore } from '@/stores/settings'
-
-const settingsStore = useSettingsStore(pinia)
-
-settingsStore.$subscribe((mutation, state) => {
-  localStorage.setItem('settings', JSON.stringify(state))
-})
-```
-::
-
-## Resetting State
-
-::code-wrapper{language="javascript"}
-```javascript
-const counterStore = useCounterStore()
-
-counterStore.$reset()   // Options stores only — resets to the state() factory's output
-
-// Setup stores have no built-in $reset — write your own, since Pinia
-// can't introspect which refs make up "state" in a setup store
-```
-::
-
-## Subscribing to Actions and Patching State in Bulk
-
-::code-wrapper{language="javascript"}
-```javascript
-const counterStore = useCounterStore()
-
-counterStore.$onAction(({ name, args, after, onError }) => {
-  console.log(`action "${name}" called with`, args)
-
-  after((result) => {
-    console.log(`action "${name}" finished, returned`, result)
-  })
-
-  onError((error) => {
-    console.error(`action "${name}" failed`, error)
-  })
-})
-
-// $patch batches multiple state mutations into a single reactive update
-// and a single DevTools entry, instead of one entry per assignment
-counterStore.$patch({ count: 10 })
-counterStore.$patch((state) => {
-  state.count++
-  state.history.push({ type: 'patch', at: Date.now() })
-})
-```
-::
-
-## Options API Equivalent
-
-Pinia stores are framework-agnostic to Composition vs Options — the difference above is only in how the *store itself* is authored. Consuming a store from an Options API component uses `mapStores`/`mapState`/`mapActions` helpers:
-
-::code-wrapper{language="vue"}
-```vue
-<script>
-import { mapState, mapActions } from 'pinia'
-import { useCounterStore } from '@/stores/counter'
-
-export default {
-  computed: {
-    ...mapState(useCounterStore, ['count', 'doubled'])
-  },
-  methods: {
-    ...mapActions(useCounterStore, ['increment'])
+  // ── On client: hydrate from serialized state ──
+  if (typeof window !== 'undefined' && window.__PINIA__) {
+    pinia.state.value = window.__PINIA__  // replace initial state with server state
   }
+
+  return { pinia }
 }
-</script>
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Prefer setup-style stores for new code — they let you use any Composition API feature (custom composables, watchers with options, other stores) directly in the store body, whereas Options stores are limited to the `state`/`getters`/`actions` shape.
-- **Debug** — Pinia integrates with Vue DevTools out of the box once `app.use(createPinia())` runs — the DevTools "Pinia" tab shows every store's live state, a full mutation timeline, and lets you time-travel or manually edit state for debugging, with zero extra setup.
-- **Idiom** — Keep one store per domain (`auth`, `cart`, `settings`) rather than one giant store — Pinia stores are cheap to create and this mirrors how you'd naturally split modules, and keeps `$onAction`/DevTools output readable.
-- **Performance** — `$patch` with an object or function batches multiple mutations into a single reactive flush and a single DevTools entry — meaningfully cheaper than several separate assignments when updating many fields from, say, a bulk API response.
-- **Idiom** — Call `use*Store()` at the top of `<script setup>` (or lazily inside an action, as in the cart/auth example), never conditionally — same synchronous-call constraint as composables from chapter 07, since Pinia stores are themselves built on composables internally.
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+import { storeToRefs } from 'pinia'
+import { useUserStore } from './stores/user'
+
+// ── 1. storeToRefs — destructure store without losing reactivity ──
+// Direct destructuring breaks reactivity (same as reactive() destructuring).
+const store = useUserStore()
+const { user, isAuthenticated } = storeToRefs(store)  // ✅ refs, reactive
+const { login, logout } = store                      // ✅ actions are stable, no ref needed
+
+// ── 2. $reset — restore to initial state (Options API stores only) ──
+// Setup stores don't have $reset by default — implement manually:
+function reset() {
+  user.value = null
+  token.value = null
+  loading.value = false
+}
+
+// ── 3. $subscribe — watch all state changes ──
+store.$subscribe((mutation, state) => {
+  // mutation.type: 'direct' | 'patch object' | 'patch function'
+  console.log(mutation.type, state)
+})
+
+// ── 4. $onAction — hook into actions (before/after/error) ──
+store.$onAction(({ name, args, after, onError }) => {
+  console.log(`action ${name} started`, args)
+  after((result) => console.log(`${name} succeeded`, result))
+  onError((err) => console.error(`${name} failed`, err))
+})
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Destructuring a store object directly loses reactivity, same as any other reactive source** — `const { count } = useCounterStore()` gives you a frozen snapshot of `count` at that instant; always go through `storeToRefs(store)` for state/getters, and destructure actions separately since they're plain functions unaffected by this problem.
-- **`state()` must return a fresh object, never a module-level shared object** — Defining `state: () => sharedObject` where `sharedObject` lives outside the factory function reintroduces exactly the singleton-sharing bug Pinia's factory pattern exists to prevent — especially dangerous under SSR, where a shared object would leak one request's state into another's response.
-- **`$reset()` doesn't exist on setup stores** — It's implemented by re-invoking the `state()` factory, which only exists conceptually for Options stores; calling `$reset()` on a setup store throws, and you must write manual reset logic (reassigning each ref back to its initial value) yourself.
-- **Calling `use*Store()` outside of a component's setup, a plugin, or another store's setup, without passing the `pinia` instance explicitly, throws** — Pinia relies on an active Pinia instance being available via the same "currently active" tracking mechanism components use for `inject`; code that runs before the app is mounted (or entirely outside Vue, like a plain `.js` module loaded eagerly) needs `useCounterStore(pinia)` with an explicit instance.
-- **Getters that depend on another store are not automatically reactive to that store's changes in the way you might expect from `computed` alone** — A getter calling `useOtherStore()` internally does correctly track that store's reactive state (getters are implemented as `computed` under the hood), but only if the dependency is read during the getter's synchronous execution — conditionally skipping the read (e.g., an early return before touching the other store) can under-track dependencies, the same rule that governs any `computed`.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Destructuring a store breaks reactivity ──
+// const { user } = useUserStore()  → user is a snapshot, not reactive
+// Fix: const { user } = storeToRefs(store)
+
+// ── 2. $reset only works on Options API stores ──
+// Setup (function) stores don't have $reset — Pinia can't know initial state.
+// Implement your own reset() action in setup stores.
+
+// ── 3. State must be serializable for persistence ──
+// localStorage stores strings — Date, Map, Set, class instances don't survive.
+// Use a custom replacer/reviver in JSON.stringify/parse, or avoid non-serializable state.
+
+// ── 4. Cross-store calls inside setup() body risk circular deps ──
+// Store A's setup calls useB(), Store B's setup calls useA() → infinite loop.
+// Call useXxxStore() inside ACTIONS, not at store definition time.
+
+// ── 5. SSR: module-scoped Pinia leaks state across requests ──
+// createPinia() must be called per-request, not at module scope.
+// Nuxt handles this automatically; custom SSR setups must do it manually.
+
+// ── 6. Getters with parameters are NOT cached ──
+// itemPrice(id) returns a function → recomputes every call.
+// Only parameter-less getters are cached (like computed).
+```
+::
 
 ## 🧠 Spot the Bug
 
-A settings panel reads and displays store state, but editing a "draft" copy of it in the panel doesn't affect the panel's own inputs correctly — typing in one field resets the others.
+A component destructures a Pinia store and the UI stops updating when the store changes.
 
-::code-wrapper{language="vue" filename="SettingsPanel.vue"}
-```vue
-<script setup>
-import { useSettingsStore } from '@/stores/settings'
+::code-wrapper{language="typescript" filename="StoreDestructureBug.ts"}
+```typescript
+import { useUserStore } from './stores/user'
 
-const settingsStore = useSettingsStore()
-const { theme, fontSize, notifications } = settingsStore
-</script>
+const store = useUserStore()
+const { user, isAuthenticated } = store  // ← destructured: no longer reactive
+const { login } = store                  // ← actions are fine to destructure
 
-<template>
-  <select v-model="theme">
-    <option value="light">Light</option>
-    <option value="dark">Dark</option>
-  </select>
-  <input v-model.number="fontSize" type="number" />
-  <input v-model="notifications" type="checkbox" />
-</template>
+// user is a plain object snapshot, not a ref.
+// When store.user changes, this `user` variable doesn't update.
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`const { theme, fontSize, notifications } = settingsStore` destructures the store directly, which strips reactivity from each field exactly like destructuring any other reactive object (chapter 03). `v-model` on the resulting plain, disconnected local variables doesn't write back into the store at all — each input mutates an unreactive local copy that the template isn't actually re-rendering from, which is why interacting with one field appears to "reset" or ignore the others: the template is still reading the original store snapshot taken at component creation, not the mutated locals.
+Destructuring a store copies the current values out of the reactive state. Like destructuring a `reactive()` object, the local variables are snapshots — they don't track future store changes.
 
-::code-wrapper{language="vue" filename="SettingsPanel.vue"}
-```vue
-<script setup>
+**Fix** — use `storeToRefs()` for state/getters, destructure actions directly:
+
+::code-wrapper{language="typescript" filename="StoreDestructureFixed.ts"}
+```typescript
 import { storeToRefs } from 'pinia'
-import { useSettingsStore } from '@/stores/settings'
+import { useUserStore } from './stores/user'
 
-const settingsStore = useSettingsStore()
-const { theme, fontSize, notifications } = storeToRefs(settingsStore)
-</script>
-
-<template>
-  <select v-model="theme">
-    <option value="light">Light</option>
-    <option value="dark">Dark</option>
-  </select>
-  <input v-model.number="fontSize" type="number" />
-  <input v-model="notifications" type="checkbox" />
-</template>
+const store = useUserStore()
+const { user, isAuthenticated } = storeToRefs(store)  // refs — reactive
+const { login } = store  // actions are stable functions, safe to destructure
 ```
 ::
 
-**The lesson**: always destructure Pinia store state/getters through `storeToRefs()`, never directly off the store instance — direct destructuring of a Pinia store is the exact same reactivity-loss trap as destructuring a plain `reactive()` object.
+**The lesson**: `storeToRefs()` converts store state and getters to refs (like `toRefs()` for reactive objects). Actions are plain functions and don't need wrapping — destructure them directly.
 
 </details>
-
-## Key Takeaways
-
-- Pinia stores come in two flavors — Options style (`state`/`getters`/`actions`) and setup style (`ref`/`computed`/functions) — setup style is the modern recommendation for its full Composition API access and ability to hide private internals.
-- Always destructure state and getters from a store through `storeToRefs()`; actions are plain functions and safe to destructure directly.
-- Stores can call other stores' `use*Store()` inside actions/getters to compose cross-domain logic, typically resolved lazily rather than at module top level.
-- Pinia has no built-in persistence — use `pinia-plugin-persistedstate` or a hand-written `$subscribe` callback writing to `localStorage`.
-- `$patch` batches multiple state mutations into a single reactive update and DevTools entry; `$onAction` lets you observe every action call, its result, and any error.
-- `$reset()` only exists on Options stores, since it relies on re-invoking the `state()` factory — setup stores need manual reset logic.

@@ -1,16 +1,52 @@
+---
+title: "05 — Chain-of-Thought Prompting"
+description: "CoT as self-generated context narrowing — zero-shot, few-shot, extended thinking, reasoning-answer separation, and the fluent-but-wrong failure mode. Production patterns for bounded reasoning and high-stakes verification. Code-first reference for mid-to-senior engineers."
+---
+
 # 05 — Chain-of-Thought Prompting
 
-## The Core Idea
+## The Mechanism: CoT as Self-Generated Context
 
-**Chain-of-thought (CoT) prompting** means asking a model to work through a problem in explicit intermediate steps before giving a final answer, rather than jumping straight to the answer. The classic trigger phrase — "let's think step by step" — became famous because appending it to a prompt measurably improved accuracy on reasoning-heavy tasks (arithmetic, logic puzzles, multi-step word problems) across many models, without changing anything else about the prompt.
+::code-wrapper{language="python" filename="cot_mechanism.py"}
+```python
+# WHY CoT WORKS — the autoregressive mechanism:
+#
+# WITHOUT CoT: the model must arrive at the correct answer in ONE shot,
+# with no intermediate "scratch space." The final answer token is conditioned
+# only on the prompt + whatever implicit internal computation happens in a
+# single forward pass.
+#
+# WITH CoT: the model writes intermediate steps. Those steps become PART OF
+# the context that later tokens condition on. Each step narrows the space
+# of plausible next steps. The model is using its OWN GENERATED TEXT as
+# working memory.
+#
+# CoT doesn't make the model "think harder" in some abstract sense — it
+# gives the model more tokens of relevant, self-generated context to
+# condition the final answer on.
 
-Why does this work, mechanically? Recall from Chapter 1 that generation is autoregressive — each new token is conditioned on everything generated so far, including the model's own prior output in this response. When a model jumps straight to a final answer, it has to arrive at the correct result in effectively one shot, with no intermediate "scratch space" to build on. When it's allowed (or instructed) to write out intermediate steps, those steps become part of the context that later tokens condition on — the model is, in a real sense, using its own generated text as working memory, and each step narrows the space of plausible next steps. This is the single biggest mechanistic idea to hold onto in this chapter: **CoT doesn't make the model "think harder" in some abstract sense — it gives the model more tokens of relevant, self-generated context to condition the final answer on.**
+# Pseudocode of the difference:
+def without_cot(prompt):
+    # Answer token conditioned on prompt only
+    answer = model.generate(prompt + "Answer:")
+    return answer  # one-shot — no scratch space
 
-## Zero-Shot CoT: The One-Line Trick
+def with_cot(prompt):
+    # Reasoning tokens become context for the answer
+    reasoning = model.generate(prompt + "Think step by step:")
+    answer = model.generate(prompt + reasoning + "Answer:")
+    return answer  # reasoning tokens are now load-bearing context for the answer
 
-The simplest form of CoT requires no examples at all — just an instruction:
+# Each intermediate line is a CHECKPOINT the model can verify against:
+# if the running total is nonsensical (negative, absurdly large), that's
+# visible in the token stream and can influence correction — a single
+# hidden mental step cannot.
+```
+::
 
-::code-wrapper{language="markdown"}
+## Zero-Shot CoT: The One-Line Trigger
+
+::code-wrapper{language="markdown" filename="zero_shot_cot.md"}
 ```markdown
 A store had 142 units of a product. They sold 37% of their stock on Monday,
 then received a shipment of 60 more units. On Tuesday they sold 28 units.
@@ -20,9 +56,7 @@ Think through this step by step before giving your final answer.
 ```
 ::
 
-Without the "think step by step" instruction, a model asked to answer this directly has a meaningfully higher chance of arithmetic slip-ups (recall from Chapter 1 that multi-digit arithmetic is genuinely harder for LLMs than it looks, because it's pattern completion over tokens, not true digit-by-digit computation). With the instruction, the model is far more likely to write out something like:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="zero_shot_cot_output.md"}
 ```markdown
 Starting stock: 142 units
 Sold 37% on Monday: 142 × 0.37 = 52.54, round to 53 units sold
@@ -34,13 +68,9 @@ Final answer: 121 units remain.
 ```
 ::
 
-...and each intermediate line is a **checkpoint the model can verify against** as it continues — if the running total is nonsensical (negative, absurdly large), that's visible in the token stream and can influence correction in a way that a single hidden mental step cannot.
-
 ## Few-Shot CoT: Demonstrating the Reasoning Pattern
 
-You can combine CoT with the few-shot technique from Chapter 3 by showing worked examples that include the reasoning, not just the final answer:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="few_shot_cot.md"}
 ```markdown
 Q: A cafe sells cups of coffee for $4 and pastries for $3. On a day they
 sold 45 coffees and 20 pastries, but 3 pastries were returned for a refund,
@@ -61,48 +91,99 @@ A:
 ```
 ::
 
-This is especially valuable when the reasoning *style* itself matters — e.g., you want the model to always check units, always state assumptions explicitly, or always structure reasoning in a particular sequence specific to your domain (like always checking eligibility criteria before computing a benefit amount). Zero-shot CoT gets you "some reasoning"; few-shot CoT gets you reasoning shaped the way you need it.
+## Extended Thinking / Reasoning Mode
 
-## When CoT Helps
+::code-wrapper{language="python" filename="extended_thinking.py"}
+```python
+from anthropic import Anthropic
 
-CoT provides the largest, most reliable gains on tasks that are:
+client = Anthropic()
 
-- **Multi-step and compositional** — where the final answer genuinely depends on correctly completing several intermediate sub-computations in sequence (arithmetic word problems, multi-step logical deduction, planning tasks).
-- **Prone to a specific, identifiable error mode** if skipped — e.g., "jumping to a conclusion without checking all the constraints" in a constraint-satisfaction problem.
-- **Reasoning-shaped rather than lookup-shaped** — tasks where the answer is *derived*, not *recalled*. If the model already "knows" the answer as a fact from training (e.g., "what's the capital of France"), CoT adds nothing and just adds latency.
-- **Verifiable at each step** — if you (or a downstream process) can check the intermediate steps, CoT also gives you an audit trail, not just better accuracy. This matters enormously for anything high-stakes: a wrong final answer with visible, checkable reasoning is far more useful (and far more debuggable) than a wrong final answer with no explanation.
+# Extended thinking is a DEDICATED reasoning phase with its own token budget,
+# distinct from prompted CoT. The model reasons in a separate channel BEFORE
+# producing its user-facing answer. The thinking content is typically presented
+# separately (collapsed/summarized or not exposed at all), not interleaved.
 
-## When CoT Adds Noise Instead of Value
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=4096,
+    thinking={                  # ← dedicated reasoning budget, not prompt text
+        "type": "enabled",
+        "budget_tokens": 2048,  # the model can use up to 2048 tokens for reasoning
+    },
+    messages=[{
+        "role": "user",
+        "content": "Given these three vendor contracts, which has the most "
+                   "unfavorable termination clause, and why?",
+    }],
+)
 
-CoT is not free, and reflexively adding "think step by step" to every prompt is a common overcorrection. Situations where it can actively hurt:
+# The response contains separate blocks:
+thinking_block = next(b for b in response.content if b.type == "thinking")
+answer_block = next(b for b in response.content if b.type == "text")
 
-- **Simple factual or classification tasks.** Asking a model to "think step by step" before classifying a clearly positive product review as POSITIVE or NEGATIVE adds latency and cost for no accuracy benefit, and can occasionally cause the model to overthink a simple case into an incorrect, more nuanced-sounding but wrong answer — talking itself out of the obviously correct response by generating unnecessary hedging or alternative framings.
-- **Latency-sensitive interactive applications.** Every token of visible reasoning is a token the user has to wait for (or that streams before the "real" answer starts appearing in a way that's useful to them). For a live chat interface where response speed matters, gratuitous CoT on easy queries directly hurts user experience for no quality gain.
-- **Tasks where the "reasoning" is actually just narrative padding.** A model can produce text that *looks* like step-by-step reasoning without the steps being genuinely load-bearing for the final answer — sometimes called "unfaithful" reasoning, where the stated steps don't actually determine the conclusion the way they appear to. This is a real, documented phenomenon: reasoning-shaped text is not automatically reasoning-*grounded* text. Don't assume that because an output *contains* step-by-step-looking text, the final answer is actually more reliable — verify against known-correct cases (Chapter 19) rather than trusting the presence of visible steps as proof of correctness.
-- **Creative or subjective generative tasks with no "correct" answer to derive.** Asking a model to "think step by step" before writing a poem or a piece of marketing copy is usually a category error — there's no computation to walk through, and forcing a reasoning structure onto an inherently non-computational task can produce stilted, mechanical output.
+# KEY DISTINCTION from prompted CoT:
+# - Prompted CoT: "think step by step" in the prompt → reasoning is VISIBLE
+#   in the response text, every time, even on trivial inputs
+# - Extended thinking: API-level setting → the model ADAPTIVELY decides how
+#   much reasoning a problem needs, reducing "wasted CoT on easy tasks"
+#
+# PRACTICAL RULE: on a model with genuine extended-thinking support, use the
+# dedicated setting/parameter rather than simulating it with a prompt instruction.
+# The dedicated mechanism is trained and optimized for deep reasoning.
+#
+# But: for tasks needing a SPECIFIC reasoning structure (Chapter 5's worked
+# examples, Chapter 11's verification checks), explicitly prompt that structure
+# — even alongside extended thinking. Extended thinking raises the CEILING on
+# unaided reasoning; it doesn't replace a scaffold you know works better.
+```
+::
 
-## Extended Thinking / Reasoning Models
+## Anti-Pattern: CoT on Simple Tasks
 
-Beyond prompting a standard model to show its work, some current-generation models (as of this writing, this includes specific modes on Claude, GPT, and Gemini model families — check each provider's current documentation, since this area moves fast) support a distinct mechanism sometimes called **extended thinking** or **reasoning mode**. Rather than you asking for visible reasoning in the final response text, the model is given a separate internal "thinking" budget or scratchpad where it can reason at length before producing its user-facing answer — and this thinking is often handled distinctly from the final response (sometimes shown to you in a collapsed/summarized form, sometimes not shown at all, sometimes billed differently from output tokens).
+::code-wrapper{language="python" filename="anti_patterns.py"}
+```python
+# ANTI-PATTERN: reflexively adding "think step by step" to EVERY prompt
 
-The conceptual distinction that matters for prompting purposes:
+# BAD — CoT on a simple classification adds latency + cost for zero benefit:
+BAD_PROMPT = """
+Classify the sentiment of this review as POSITIVE, NEGATIVE, or MIXED.
 
-| | Prompted CoT | Extended thinking / reasoning mode |
-|---|---|---|
-| How it's invoked | You ask for it explicitly in the prompt ("think step by step") | Often a model/API-level setting, sometimes automatic based on task difficulty |
-| Where the reasoning appears | Inline, as part of the visible response text | Frequently in a separate channel — visible only as a summary, or not exposed to you at all, depending on the provider and settings |
-| Reasoning depth | Whatever the prompt elicits — can be shallow if not carefully prompted | Often deeper and more thorough by design, sometimes with an adjustable "how much effort" setting |
-| When it activates | Every time you ask for it, even on trivial inputs, unless you're careful | Increasingly, providers are building models that adaptively decide how much reasoning a given problem needs, reducing the "wasted CoT on easy tasks" problem somewhat automatically |
+Review: "Works great, arrived on time."
 
-Practical implication: on a model that supports a genuine extended-thinking mode, you often get better results by using that mode's dedicated setting/parameter rather than trying to simulate it with a "think step by step" instruction in the prompt — the dedicated mechanism is typically trained and optimized specifically for deep reasoning in a way that a plain prompt-level instruction can only approximate. Check the specific model/provider's current documentation for how to enable and configure this, since exact parameter names, defaults, and behavior differ across Claude, GPT, and Gemini and change over time. Chapter 15 covers Claude-specific extended thinking conventions in more depth.
+Think through this step by step before giving your final answer.
+"""
+# The model might overthink a simple case into an incorrect, more nuanced-sounding
+# but wrong answer — talking itself out of the obviously correct response.
 
-## CoT and Output Format: A Common Conflict
+# FINE — direct answer on a simple task:
+GOOD_PROMPT = """
+Classify the sentiment of this review as POSITIVE, NEGATIVE, or MIXED.
+Reply with only the label.
 
-A frequent practical problem: you want both step-by-step reasoning *and* a clean, structured final output (say, JSON) for downstream parsing. Interleaving them in one response can be awkward — either the JSON is now buried after prose reasoning (making naive parsing fail), or you suppress the reasoning to keep the output clean (losing the accuracy benefit).
+Review: "Works great, arrived on time."
+"""
 
-The standard solution is to **separate the reasoning from the final structured answer explicitly**, either via a two-part response format or, better, a two-call pipeline:
+# ANTI-PATTERN: reasoning AFTER the answer
+BAD_ORDERING = """
+What is the final price? Answer first, then explain your reasoning.
+"""
+# Because generation is autoregressive, reasoning that appears AFTER a stated
+# answer CANNOT have influenced that answer — the answer was already committed
+# before the reasoning tokens were generated. This is post-hoc justification,
+# not reasoning that informs the answer.
 
-::code-wrapper{language="markdown"}
+# CORRECT: reasoning BEFORE the answer
+GOOD_ORDERING = """
+Think through this step by step, then give your final answer.
+"""
+# The reasoning tokens become context that the answer token conditions on.
+```
+::
+
+## CoT + Output Format: The Separation Pattern
+
+::code-wrapper{language="markdown" filename="cot_with_format.md"}
 ```markdown
 First, reason through the problem step by step inside <reasoning> tags.
 Then, after your reasoning, output your final answer inside <answer> tags
@@ -112,29 +193,55 @@ as a JSON object matching this schema: {"category": string, "confidence":
 ```
 ::
 
-This lets you parse deterministically: extract everything inside `<answer>` and discard (or separately log, for debugging) everything inside `<reasoning>`. See Chapter 7 for more on structured output patterns, and Chapter 10 for the alternative approach — using a separate reasoning call and a separate, format-only extraction call as two steps in a pipeline, which cleanly avoids ever mixing the two concerns in one response.
+::code-wrapper{language="python" filename="two_call_pipeline.py"}
+```python
+import re, json
 
-## 💡 Tips & Tricks
+# PRODUCTION PATTERN: two-call pipeline cleanly separates reasoning from
+# structured output, avoiding the format conflict entirely.
 
-- **"Think step by step" is a floor, not a ceiling** — the bare phrase is a reasonable default, but you'll often get better results by specifying *what kind* of steps you want: "list the relevant constraints first, then check each option against them, then state your conclusion" gives the model a specific reasoning scaffold rather than an open-ended "think about it" instruction.
-- **Ask for reasoning before the answer, never after** — because generation is autoregressive, reasoning that appears *after* a stated answer can't have influenced that answer (the answer was already committed to before the reasoning tokens were generated). If you want reasoning to actually inform the answer (not just retroactively justify it), the prompt must be structured so reasoning comes first in the generated output.
-- **Use CoT to debug prompts, even if you don't ship it** — When a zero-shot prompt is failing mysteriously, temporarily add "think step by step" and inspect the reasoning trace. It often reveals *which* assumption or ambiguity is causing the failure (see Chapter 4), which you can then fix with a clearer instruction — sometimes letting you remove the CoT instruction afterward because the underlying ambiguity is gone.
-- **Cap the reasoning length for cost-sensitive production paths** — If you've confirmed CoT helps but you're running at scale, consider instructing a bounded reasoning length ("reason in at most 4 short steps") rather than leaving it fully open-ended, which controls both cost and the risk of the model wandering into unhelpful tangents.
-- **CoT plus self-consistency is a strong combo for high-stakes decisions** — generating several independent CoT traces for the same problem and checking whether they converge on the same answer is a more robust signal than trusting a single trace, especially for anything with real consequences. This is covered fully in Chapter 11.
+def reasoning_then_extraction(question: str, context: str) -> dict:
+    # Call 1: reason freely (no format constraint competing for attention)
+    reasoning_response = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": f"""
+            Reason through this problem step by step.
+            Context: {context}
+            Question: {question}
+            Show your work. Do not produce a final structured answer yet.
+        """}],
+    )
+    reasoning = reasoning_response.content[0].text
 
-## ⚠️ Edge Cases & Gotchas
+    # Call 2: extract structured answer from the reasoning (format-only, no reasoning)
+    extraction_response = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=256,
+        output_config={"format": {"type": "json_schema", "schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string"},
+                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+            },
+            "required": ["category", "confidence"],
+        }}},
+        messages=[{"role": "user", "content": f"""
+            Based on this reasoning, extract the final answer as JSON.
+            Reasoning: {reasoning}
+        """}],
+    )
+    return json.loads(extraction_response.content[0].text)
 
-- **Reasoning can be fluent and wrong at the same time.** A model can produce a chain of reasoning that reads as completely coherent, logical, and confident, while containing a subtle factual or arithmetic error partway through that invalidates the conclusion — and because each step conditions the next, one early error propagates and gets "confirmed" by everything that follows, since the model is now reasoning consistently *from* the mistake rather than toward the truth. Fluency of the reasoning trace is not evidence of its correctness — always verify against ground truth where possible (Chapter 11, Chapter 19).
-- **Forcing a reasoning format can truncate the answer at the token limit.** If your prompt requests lengthy step-by-step reasoning *and* you have a `max_tokens` limit, the reasoning can consume the whole budget, cutting off before the final answer is ever produced. If you need a guaranteed final answer, either bound the reasoning length explicitly, request the answer first with reasoning after (if you don't need the reasoning to inform the answer, e.g., for post-hoc explanation only), or allocate a generous token budget with the final answer format made cheap and short to produce even at the end of a long trace.
-- **"Think step by step" doesn't guarantee the model uses your intended steps.** Especially in zero-shot CoT, the model chooses its own reasoning structure, which may not match the structure you had in mind (e.g., it might reason about the wrong sub-problem first). If the *specific sequence* of reasoning matters for your task, use few-shot CoT with examples demonstrating that exact sequence, rather than trusting zero-shot CoT to invent the right structure on its own.
-- **CoT doesn't fix tasks that are fundamentally about missing information, not missing reasoning.** If a prompt asks the model to determine something that genuinely isn't derivable from the given information (e.g., "what will the stock price be tomorrow" from historical data alone), CoT will produce confident-looking reasoning that arrives at a number anyway — the reasoning scaffold doesn't prevent the model from confabulating premises it needs but doesn't have. See Chapter 17 for handling genuine uncertainty rather than manufactured confidence.
-- **Extended thinking/reasoning-mode budgets and prompted CoT can conflict or double up.** If you enable a model's dedicated extended-thinking parameter *and* also include a "think step by step" instruction in your prompt text, behavior can be redundant (paying for reasoning twice, in two different mechanisms) or, in some implementations, can interact in ways not well-documented for your specific provider and model version. Check current provider documentation before combining the two, rather than assuming they compose additively.
+# Benefits: reasoning is free-form (no format tension), structured output is
+# enforced by the API (no parsing failures), and you can LOG the reasoning
+# separately for debugging without it polluting the parsed result.
+```
+::
 
-## 🧠 Spot the Issue
+## The "Fluent But Wrong" Failure
 
-A developer building a loan pre-approval assistant wants the model to explain its reasoning for transparency, so they write:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="fluent_but_wrong.md"}
 ```markdown
 Determine whether this applicant qualifies for pre-approval. Think step
 by step, and make sure your final answer is APPROVED or DENIED.
@@ -148,21 +255,165 @@ monthly debt / monthly income) below 36%, and loan amount no more than
 ```
 ::
 
-The model produces a lengthy, confident-sounding chain of reasoning and concludes APPROVED. On manual review, a loan officer catches that the loan amount ($340,000) is actually 5.86x the annual income ($58,000), which fails the "no more than 5x annual income" rule outright — yet the model's own written reasoning trace claimed to have checked this exact criterion and stated it passed. What does this reveal about trusting a CoT trace, and what's the actual bug here (beyond "the model made a math error")?
+::code-wrapper{language="python" filename="fluent_but_wrong_diagnosis.py"}
+```python
+# The model produces a lengthy, confident chain of reasoning and concludes APPROVED.
+# A loan officer catches: $340,000 / $58,000 = 5.86x — FAILS the "no more than 5x" rule.
+# Yet the model's reasoning trace CLAIMED to check this criterion and stated it passed.
+#
+# WHAT HAPPENED: the reasoning trace LOOKED like it verified the constraint, but
+# the underlying multiplication (5 × $58,000 = $290,000, then $340K vs $290K) either
+# wasn't performed correctly or was misreported in the restated conclusion.
+#
+# THE DEEPER LESSON: a visible reasoning trace is NOT a verification mechanism.
+# It's a debugging aid and an accuracy improvement ON AVERAGE, but any individual
+# trace can be wrong while looking entirely legitimate. Fluency ≠ correctness.
+#
+# PRODUCTION FIX for high-stakes numeric/rule-based decisions:
+# Externalize the actual arithmetic and threshold checks into DETERMINISTIC code.
+
+def evaluate_loan(credit_score, annual_income, loan_amount, monthly_debt):
+    """Deterministic evaluation — the model does NOT compute these."""
+    # Rule 1: credit score >= 680
+    credit_ok = credit_score >= 680
+
+    # Rule 2: DTI < 36% (existing monthly debt / monthly income)
+    monthly_income = annual_income / 12
+    dti = monthly_debt / monthly_income
+    dti_ok = dti < 0.36
+
+    # Rule 3: loan amount <= 5x annual income
+    loan_ratio_ok = loan_amount <= 5 * annual_income
+
+    return {
+        "approved": credit_ok and dti_ok and loan_ratio_ok,
+        "checks": {
+            "credit_score": {"value": credit_score, "pass": credit_ok},
+            "dti_ratio": {"value": round(dti, 4), "pass": dti_ok},
+            "loan_to_income": {"value": round(loan_amount / annual_income, 2), "pass": loan_ratio_ok},
+        }
+    }
+
+result = evaluate_loan(710, 58_000, 340_000, 1_200)
+# {"approved": False, "checks": {
+#   "credit_score": {"value": 710, "pass": True},
+#   "dti_ratio": {"value": 0.0248, "pass": True},
+#   "loan_to_income": {"value": 5.86, "pass": False}  ← deterministic, no hallucination
+# }}
+
+# Use the MODEL for judgment (is the application suspicious? is there context?),
+# use DETERMINISTIC CODE for the numbers. CoT is a nice-to-have explanation
+# layer on top of verified numbers, NOT the source of truth for the numbers.
+```
+::
+
+## 💡 Tips & Tricks
+
+::code-wrapper{language="python" filename="tips.py"}
+```python
+# [Idiom] "Think step by step" is a floor, not a ceiling. Specify WHAT KIND
+# of steps: "list the relevant constraints first, then check each option
+# against them, then state your conclusion" gives a specific reasoning scaffold.
+
+# [Debug] Ask for reasoning BEFORE the answer, never after. Autoregressive
+# generation means reasoning after the answer is post-hoc justification that
+# couldn't have influenced the answer.
+
+# [Debug] Use CoT to debug prompts even if you don't ship it. When a zero-shot
+# prompt fails mysteriously, add "think step by step" and inspect the trace.
+# It often reveals which assumption or ambiguity is causing the failure (Chapter 4).
+# Then fix the instruction — sometimes letting you remove the CoT entirely.
+
+# [Performance] Cap reasoning length for cost-sensitive paths. "reason in at
+# most 4 short steps" controls both cost and the risk of wandering into
+# unhelpful tangents. Open-ended CoT + tight max_tokens can truncate before
+# the final answer is produced — bound the reasoning or raise the budget.
+
+# [Idiom] CoT + self-consistency (Chapter 11) is a strong combo for high-stakes
+# decisions: generate several independent CoT traces, check if they converge.
+# More robust than trusting a single trace, especially for anything with consequences.
+```
+::
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="python" filename="edge_cases.py"}
+```python
+# [Gotcha] Reasoning can be fluent AND wrong simultaneously. A model can produce
+# a chain that reads as completely coherent and confident while containing a
+# subtle error partway through. Because each step conditions the next, one
+# early error propagates and gets "confirmed" by everything that follows — the
+# model reasons consistently FROM the mistake rather than toward truth.
+# Fluency of the trace is NOT evidence of correctness. Verify against ground truth.
+
+# [Gotcha] Forcing a reasoning format can truncate the answer at the token limit.
+# If your prompt requests lengthy step-by-step reasoning AND you have a
+# max_tokens limit, the reasoning can consume the whole budget, cutting off
+# before the final answer is ever produced. Either bound the reasoning length,
+# request the answer first (if reasoning is for post-hoc explanation only),
+# or allocate a generous budget with a cheap final-answer format.
+
+# [Gotcha] "Think step by step" doesn't guarantee the model uses YOUR intended
+# steps. In zero-shot CoT, the model chooses its own reasoning structure, which
+# may not match yours (it might reason about the wrong sub-problem first).
+# If the SPECIFIC SEQUENCE matters, use few-shot CoT with examples showing
+# that exact sequence.
+
+# [Gotcha] CoT doesn't fix tasks that are about missing information, not missing
+# reasoning. If a prompt asks the model to determine something genuinely
+# un-derivable from the given information, CoT produces confident-looking
+# reasoning that arrives at a number anyway — the scaffold doesn't prevent
+# confabulation of missing premises. See Chapter 17.
+
+# [Gotcha] Extended thinking + prompted CoT can conflict or double up. Enabling
+# a dedicated extended-thinking parameter AND including "think step by step"
+# can be redundant (paying for reasoning twice) or interact in undocumented ways.
+# Check current provider docs before combining.
+```
+::
+
+## 🧠 Spot the Bug
+
+A developer building a loan pre-approval assistant writes the prompt shown in `fluent_but_wrong.md` above. The model concludes APPROVED, but the loan-to-income ratio is 5.86x, failing the 5x rule. The model's own reasoning trace claimed to have checked this and stated it passed. What does this reveal?
 
 <details>
 <summary>Answer</summary>
 
-The reasoning trace *looked* like it verified the constraint, but the underlying multiplication (5 × $58,000 = $290,000, then comparing $340,000 against that) either wasn't actually performed correctly or was performed and then misreported in the final restated conclusion — this is exactly the "fluent and wrong" failure mode: a chain of reasoning that reads as if it checked something can still get that specific check wrong, especially when it involves the same category of multi-digit arithmetic error covered in Chapter 1. The deeper lesson isn't just "watch for arithmetic slips" — it's that **a visible reasoning trace is not a verification mechanism by itself**; it's a debugging aid and an accuracy improvement on average, but any individual trace can still be wrong while looking entirely legitimate. For a high-stakes decision like loan approval, the correct fix is not "add more CoT instructions" but to **externalize the actual arithmetic and threshold checks into deterministic code** (compute the 5x multiple and the DTI ratio outside the model, in a tool call or the calling application, per Chapter 13) and use the model only for the parts of the task that genuinely require judgment — with CoT as a nice-to-have explanation layer on top of verified numbers, not as the source of truth for the numbers themselves.
+The reasoning trace *looked* like it verified the constraint, but the underlying multiplication either wasn't performed correctly or was misreported. This is the "fluent and wrong" failure: a chain that reads as if it checked something can still get that specific check wrong, especially for multi-digit arithmetic (Chapter 1's tokenization problem). 
 
-**The lesson**: chain-of-thought improves average accuracy and gives you an inspectable trace, but it is not a substitute for actually verifying high-stakes numeric or rule-based decisions with deterministic computation — a model can narrate a check it didn't actually perform correctly, and the narration will look just as confident either way.
+The deeper lesson: **a visible reasoning trace is not a verification mechanism**. For high-stakes decisions like loan approval, the fix is not "add more CoT instructions" but to **externalize the arithmetic and threshold checks into deterministic code** (see `fluent_but_wrong_diagnosis.py`) and use the model only for parts that genuinely require judgment — with CoT as an explanation layer on top of verified numbers, not as the source of truth for the numbers themselves.
 
 </details>
 
 ## Key Takeaways
 
-- Chain-of-thought prompting asks the model to generate intermediate reasoning before a final answer, which works because autoregressive generation lets earlier reasoning tokens condition and improve later ones — it's giving the model more relevant self-generated context, not "making it think harder" in an abstract sense.
-- Zero-shot CoT ("think step by step") is a cheap, effective default for multi-step or compositional reasoning tasks; few-shot CoT (demonstrating the reasoning pattern with examples) gives more control over the specific structure of the reasoning.
-- CoT helps most on genuinely multi-step, derivation-based tasks and helps little or actively hurts on simple lookups, classifications, and purely creative/subjective tasks — it adds latency and cost that isn't always worth paying.
-- A fluent, confident-looking reasoning trace is not proof of correctness — reasoning can be internally consistent and still wrong, especially on arithmetic or rule-checking, so high-stakes numeric decisions should be verified with deterministic computation, not trusted from the trace alone.
-- Distinct from prompted CoT, many current models offer a dedicated extended-thinking/reasoning mode as an API-level setting — check current provider docs, since this is one of the fastest-moving areas of model capability and configuration.
+::code-wrapper{language="python" filename="key_takeaways.py"}
+```python
+"""
+Chain-of-thought — mechanism, application, and limits.
+"""
+
+# 1. CoT works because autoregressive generation lets earlier reasoning tokens
+#    condition and improve later ones. It's self-generated context, not "thinking
+#    harder." The model uses its own output as working memory.
+#    without_cot: answer = model(prompt + "Answer:")
+#    with_cot:    answer = model(prompt + reasoning + "Answer:")  # reasoning is context
+
+# 2. Zero-shot CoT ("think step by step") is a cheap default for multi-step tasks.
+#    Few-shot CoT (demonstrating the reasoning pattern) gives control over the
+#    specific STRUCTURE of the reasoning.
+
+# 3. CoT helps most on derivation-based tasks (arithmetic, logic, planning).
+#    It hurts on simple lookups, classifications, and creative tasks — adds
+#    latency and cost with no accuracy gain, can cause overthinking.
+
+# 4. A fluent, confident reasoning trace is NOT proof of correctness. Reasoning
+#    can be internally consistent and still wrong, especially on arithmetic.
+#    → High-stakes numeric decisions: use deterministic code, not CoT, for the numbers.
+
+# 5. Extended thinking ≠ prompted CoT. Dedicated reasoning modes (API-level
+#    settings) are trained and optimized for deep reasoning. Use the dedicated
+#    mechanism when available; reserve prompted CoT for when you need a SPECIFIC
+#    reasoning structure the model wouldn't produce on its own.
+```
+::

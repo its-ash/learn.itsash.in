@@ -1,39 +1,69 @@
 # 08 — Dictionaries & Sets
 
-## Dictionaries — Hash Maps with Guaranteed Insertion Order
-
-Since Python 3.7 (officially guaranteed by the language spec, not just a CPython implementation detail as it was in 3.6), dicts preserve **insertion order**.
+## Hash Table Internals — Open Addressing Since 3.6
 
 ::code-wrapper{language="python"}
 ```python
-user = {"name": "Ada", "age": 36, "role": "engineer"}
+# ── CPython 3.6+ dict implementation: compact hash tables ──
+# Unlike traditional hash maps (separate chaining with linked lists),
+# CPython uses OPEN ADDRESSING with a two-array layout:
+#   1. An index array (hash → slot) — sparse, ~1/3 to 2/3 full
+#   2. A dense entries array (hash, key, value) — compact, insertion-ordered
+# This is why dicts preserve insertion order AND use less memory than older dicts.
 
-print(user["name"])          # "Ada"
-user["email"] = "ada@example.com"   # add a new key
-user["age"] = 37                       # update existing key
-del user["role"]                          # remove a key
+import sys
 
-print(user)   # {'name': 'Ada', 'age': 37, 'email': 'ada@example.com'}
-              # insertion order preserved: name, age, email (role removed)
-```
-::
+# The hash table's load factor triggers a resize — observable via size jumps
+d = {}
+prev_size = sys.getsizeof(d)
+for i in range(20):
+    d[i] = i * 2
+    size = sys.getsizeof(d)
+    if size != prev_size:
+        print(f"resize at len={len(d):>3}: {prev_size} → {size} bytes")
+        prev_size = size
+# Resize happens at ~2/3 load factor — capacity roughly doubles each time
 
-### Safe access — `.get()`, `.setdefault()`, and `KeyError`
+# ── Hash collisions: equal values MUST hash equally ──
+# Python's numeric tower: 1 == 1.0 == True are all equal, so they hash identically
+print(hash(1) == hash(1.0) == hash(True))   # True — all three are the "same" key in a dict/set
+print({1, 1.0, True})                       # {1} — collapses to ONE element (first inserted wins)
 
-::code-wrapper{language="python"}
-```python
-user = {"name": "Ada"}
+# ANTI-PATTERN: using 1 and True (or 0 and False) as distinct dict keys
+config = {1: "integer value", True: "boolean value"}
+print(config)   # {1: 'boolean value'} — True overwrote 1! They're the same key!
 
-print(user["missing"])          # KeyError: 'missing'  — direct indexing raises
+# ── Production: a bounded LRU cache built on dict ordering (3.7+) ──
+# Insertion-order preservation makes OrderedDict/dict a natural LRU substrate
+from collections import OrderedDict
 
-print(user.get("missing"))         # None — no error, default default is None
-print(user.get("missing", "N/A"))     # "N/A" — explicit fallback
+class LRUCache:
+    """Least-recently-used cache with O(1) get/set — production pattern."""
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self._store: OrderedDict = OrderedDict()
 
-# setdefault: get if present, otherwise insert-and-return a default
-user.setdefault("role", "member")
-print(user)   # {'name': 'Ada', 'role': 'member'}
-user.setdefault("role", "admin")   # role already exists — NOT overwritten
-print(user)   # still {'name': 'Ada', 'role': 'member'}
+    def get(self, key):
+        """Return value and mark as most-recently-used, or None on miss."""
+        if key not in self._store:
+            return None
+        self._store.move_to_end(key)   # move to tail = most recently used
+        return self._store[key]
+
+    def put(self, key, value):
+        """Insert/update key. Evicts LRU entry if over capacity."""
+        if key in self._store:
+            self._store.move_to_end(key)   # update = also marks as MRU
+        self._store[key] = value
+        if len(self._store) > self.capacity:
+            self._store.popitem(last=False)   # pop from HEAD = least recently used
+
+cache = LRUCache(3)
+cache.put("a", 1); cache.put("b", 2); cache.put("c", 3)
+cache.get("a")         # "a" is now MRU
+cache.put("d", 4)      # evicts "b" (LRU), not "a" (was accessed)
+print(cache.get("b"))  # None — evicted
+print(cache.get("a"))  # 1 — still present
 ```
 ::
 

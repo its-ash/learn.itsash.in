@@ -1,246 +1,393 @@
+---
+title: "12 — Interfaces"
+description: "Interface internals (type, value pair), the nil interface trap, implicit satisfaction, consumer-side interface definition, and the accept-interfaces-return-structs idiom."
+---
+
 # 12 — Interfaces
 
-Interfaces are Go's abstraction mechanism — a set of method signatures. Unlike Java/C#, Go interfaces are **satisfied implicitly** (no `implements` keyword). This is Go's most distinctive design choice.
-
-## Declaration
+## Interface Internals — The (Type, Value) Pair
 
 ::code-wrapper{language="go"}
 ```go
-type Speaker interface {
-	Speak() string
+// An interface value is a 2-word header:
+//   ┌──────────┬──────────┐
+//   │ type     │ value    │
+//   │ 8 bytes  │ 8 bytes  │
+//   └──────────┴──────────┘
+//
+// type:  pointer to the interface's dynamic type metadata (itable)
+// value: pointer to the concrete data (or the data itself if ≤ 1 word)
+//
+// The itable maps the interface's methods to the concrete type's methods.
+// Method dispatch goes: interface method → itable → concrete method.
+// This is a single indirection — fast, but not as fast as a direct call.
+
+type Speaker interface{ Speak() string }
+
+type Dog struct{ Name string }
+func (d Dog) Speak() string { return d.Name + " barks" }
+
+func internals() {
+	var s Speaker
+	s = Dog{Name: "Rex"}  // s holds (Dog, Dog{Name: "Rex"})
+	// type = Dog, value = Dog{Name: "Rex"} (stored inline if ≤ 1 word,
+	//   or a pointer to heap if larger)
+	fmt.Println(s.Speak())  // dispatches via itable → Dog.Speak
+}
+```
+
+## Implicit Satisfaction — No `implements` Keyword
+
+::code-wrapper{language="go"}
+```go
+// Go interfaces are satisfied IMPLICITLY — the type doesn't declare
+// "I implement Speaker." The compiler checks that all methods exist.
+//
+// This enables:
+//   1. Decoupling: a type can satisfy an interface defined elsewhere
+//   2. Retroactive: define an interface AFTER types exist
+//   3. No import cycles: the interface and the type don't need to know
+//      about each other
+
+// Define the interface (consumer-side):
+type Stringer interface {
+	String() string
 }
 
-type Dog struct{}
-func (d Dog) Speak() string { return "Woof" }
+// A type defined elsewhere satisfies it automatically:
+type Celsius float64
+func (c Celsius) String() string { return fmt.Sprintf("%.1f°C", c) }
 
-type Cat struct{}
-func (c Cat) Speak() string { return "Meow" }
+// Celsius satisfies Stringer — no declaration of intent needed.
+// You can even define an interface for a type in the STD LIBRARY:
+//   type ReadCloser interface { io.Reader; io.Close() }
+//   — satisfied by *os.File, *bufio.Reader (if it has Close), etc.
 
-var s Speaker
-s = Dog{}
-fmt.Println(s.Speak())   // Woof
-s = Cat{}
-fmt.Println(s.Speak())   // Meow
-``
-::
+// ─── Compile-time check (the idiom) ───
+var _ Stringer = Celsius(0)  // compile error if Celsius doesn't satisfy Stringer
+// This asserts satisfaction at compile time — catches breakage when a
+// method is removed or the interface changes. Common in library code.
+```
 
-`Dog` and `Cat` satisfy `Speaker` automatically — they have a `Speak() string` method. No declaration of intent is needed.
-
-## Implicit Satisfaction
-
-The type doesn't declare "I implement Speaker" — the compiler checks that all the interface's methods are present on the type. This has profound implications:
-
-- **Decoupling**: a type can satisfy an interface defined in a different package, without knowing the interface exists.
-- **Retroactive**: you can define an interface after the types exist — "I need anything with a `Write([]byte) (int, error)` method" defines `io.Writer`, satisfied by `os.File`, `bytes.Buffer`, etc.
-- **No inheritance hierarchy**: no base/derived, no virtual dispatch tables to maintain.
-
-### Compile-time interface check
-
-To assert that a type satisfies an interface (catching breakage when the type or interface changes):
+## The Nil Interface Trap — The #1 Go Gotcha
 
 ::code-wrapper{language="go"}
 ```go
-var _ Speaker = Dog{}        // compile error if Dog doesn't satisfy Speaker
-var _ Speaker = (*Dog)(nil)  // for pointer-receiver methods
-``
-::
+// An interface is nil ONLY when BOTH type and value are nil.
+// Wrapping a nil pointer in an interface makes the interface NON-NIL.
 
-This is a common idiom in library code — a compile-time assertion that the interface is satisfied.
-
-## The Empty Interface `interface{}` / `any`
-
-`interface{}` (Go 1.18+ alias: `any`) has no methods — **every type satisfies it**:
-
-::code-wrapper{language="go"}
-```go
-var x any
-x = 5
-x = "hello"
-x = []int{1, 2, 3}
-fmt.Println(x)   // works for any value
-``
-::
-
-`any` is the escape hatch for "I don't know the type" (like `Object` in Java or `void*` in C). But it loses type safety — you must type-assert (chapter 13) to use the value. Prefer specific interfaces over `any` wherever possible.
-
-## Interface Internals
-
-An interface value is a **(type, value) pair** (a "tuple"):
-
-::code-wrapper{language="go"}
-```go
-var s Speaker = Dog{}
-// s holds (Dog, Dog{})
-``
-::
-
-- The **type** is the concrete type (`Dog`).
-- The **value** is a copy of the concrete value (`Dog{}`).
-
-This pair is why interfaces work — the runtime knows the concrete type and can dispatch to the right method. It's also why the nil-interface trap (below) exists.
-
-## The Nil Interface Trap
-
-::code-wrapper{language="go"}
-```go
-var p *Dog = nil
-var s Speaker = p      // s holds (*Dog, nil)
-fmt.Println(s == nil)  // FALSE — s is not a nil interface
-s.Speak()              // may panic (nil pointer dereference inside Speak)
-``
-::
-
-An interface is `nil` only when **both** its type and value are `nil`. `var s Speaker = p` (where `p` is a nil `*Dog`) gives `s` a type (`*Dog`) and a nil value — `s` is **not** a nil interface, even though the concrete value is nil. Calling a method on it dispatches to `*Dog`'s method with a nil receiver — often a panic.
-
-This is the #1 interface gotcha. To return a nil interface, return `nil` directly (not a nil pointer of a concrete type):
-
-::code-wrapper{language="go"}
-```go
-func getSpeaker() Speaker {
-	var p *Dog = nil
-	return p            // ❌ returns a non-nil interface wrapping a nil pointer
-}
-
-func getSpeakerGood() Speaker {
-	return nil          // ✅ returns a nil interface
-}
-``
-::
-
-## Interface Composition
-
-Interfaces can embed other interfaces (combining method sets):
-
-::code-wrapper{language="go"}
-```go
-type ReadWriter interface {
-	io.Reader
-	io.Writer
-}
-
-// Equivalent to:
-type ReadWriter interface {
-	Read(p []byte) (n int, err error)
-	Write(p []byte) (n int, err error)
-}
-``
-::
-
-The standard library uses this heavily: `io.ReadWriter` = `Reader` + `Writer`, `io.ReadWriteCloser` = `Reader` + `Writer` + `Closer`.
-
-## Small Interfaces (the Go idiom)
-
-Go favors **small, focused interfaces** — often a single method:
-
-- `io.Reader` — `Read(p []byte) (int, error)`
-- `io.Writer` — `Write(p []byte) (int, error)`
-- `fmt.Stringer` — `String() string`
-- `error` — `Error() string`
-- `sort.Interface` — `Len()`, `Less(i, j int) bool`, `Swap(i, j int)`
-
-Small interfaces are easy to satisfy, compose, and mock. The Go proverb: **"The bigger the interface, the weaker the abstraction."** Define interfaces where they're *used* (consumer-side), not where types are defined (producer-side).
-
-## Accept Interfaces, Return Concrete Types
-
-A Go idiom: functions accept interface types (for flexibility) but return concrete types (for clarity):
-
-::code-wrapper{language="go"}
-```go
-func process(r io.Reader) *Result {   // accept the smallest interface that works
-	// ...
-	return &Result{}                   // return a concrete type
-}
-``
-::
-
-This keeps the function flexible (accepts any `Reader`) while giving callers a concrete, inspectable result.
-
-## Type Assertion (preview, chapter 13)
-
-::code-wrapper{language="go"}
-```go
-var s Speaker = Dog{}
-d := s.(Dog)          // type assertion — panics if s isn't a Dog
-d, ok := s.(Dog)      // comma-ok — ok is false if s isn't a Dog
-``
-::
-
-## 💡 Tips & Tricks
-
-- **Idiom**: define interfaces where they're *used* (consumer-side), not where types are defined (producer-side) — a function that needs `io.Reader` should declare the interface locally (or use the stdlib's), not require types to implement a "Readable" interface in their package. This keeps interfaces small and decoupled.
-- **Idiom**: keep interfaces small (1-3 methods) — "the bigger the interface, the weaker the abstraction." `io.Reader` (one method) is satisfied by hundreds of types; a 20-method interface is satisfied by one. Compose small interfaces (`io.ReadWriter = Reader + Writer`) rather than defining large ones.
-- **Idiom**: "accept interfaces, return concrete types" — functions take interface parameters (flexible, mockable) but return concrete types (clear, inspectable). Returning an interface forces callers into type assertions; a concrete type is directly usable.
-- **Idiom**: use `var _ I = T{}` as a compile-time assertion that `T` satisfies `I` — catches breakage when a method is removed from `T` or added to `I`, at compile time rather than at a distant call site.
-- **Debug**: the nil-interface trap — `var s Speaker = (*Dog)(nil); s == nil` is `false` (the interface has a type, `*Dog`, so it's non-nil). To return a nil interface, return `nil` directly, not a nil pointer of a concrete type. This is the #1 interface bug.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **The nil interface trap**: `var s Speaker = (*Dog)(nil); s == nil` is `false` — the interface wraps a (*Dog, nil) pair, so it's non-nil. Calling a method panics (nil receiver). Return `nil` directly for a nil interface.
-- **Interfaces are satisfied by method set**: a value type satisfies only value-receiver methods; a pointer type satisfies all methods. `var s Speaker = T{}` fails if `Speaker` requires a pointer-receiver method — use `&T{}`.
-- **Interfaces can't be fields of themselves directly** (infinite size) — but `any` can hold anything, so `any` works.
-- **`interface{}` / `any` loses type safety**: you must type-assert to use the value. Prefer specific interfaces; reserve `any` for genuine "any value" cases (`fmt.Println`, `json.Marshal`).
-- **No method on `interface{}`**: `any` has no methods — calling anything on an `any` value requires a type assertion first.
-- **Interface comparison**: interfaces are comparable with `==` if their dynamic types are comparable. Comparing interfaces holding slices/maps/functions panics at runtime.
-- **Embedding an interface in a struct**: `type S struct { io.Reader }` — `S` has a `Reader` field (an interface); `S` satisfies `io.Reader` via promotion. Useful for decorating/delegating (e.g., wrapping a `Reader` to add logging).
-- **Nil pointer receiver method call**: `var p *Dog; p.Speak()` — if `Speak` has a value receiver, Go can't dereference `p` (nil) → panic. If `Speak` has a pointer receiver, it *can* be called on a nil `*Dog` (the method can check `p == nil`) — a pattern for nil-safe methods.
-- **Interface values are immutable in a sense**: the interface holds a (type, value) pair; you can reassign the interface variable, but you can't mutate the held value through the interface (unless the interface's method mutates it via a pointer).
-- **Empty interface and `fmt`**: `fmt.Println(x)` where `x` is `any` — `fmt` introspects the dynamic type and prints accordingly. This is why `fmt.Println` "just works" on any value.
-
-## 🧠 Spot the Bug
-
-A function returns an interface, and the caller checks for nil but the check fails:
-
-::code-wrapper{language="go"}
-```go
 type Logger interface{ Log(string) }
 
 type nullLogger struct{}
 func (n *nullLogger) Log(string) {}
 
-func getLogger(verbose bool) Logger {
-	if !verbose {
-		var n *nullLogger = nil
-		return n   // "return a nil logger"
+func getLogger(enabled bool) Logger {
+	var l *nullLogger = nil  // nil pointer
+	if enabled {
+		l = &nullLogger{}
+	}
+	return l  // ❌ returns (type=*nullLogger, value=nil) — NON-NIL interface!
+}
+
+func nilTrap() {
+	l := getLogger(false)
+	fmt.Println(l == nil)  // false! The interface has a type, so it's non-nil.
+	// l.Log("hello")      // panics: nil pointer dereference (the value is nil)
+}
+
+// ✅ CORRECT: return nil directly for a nil interface:
+func getLoggerFixed(enabled bool) Logger {
+	if !enabled {
+		return nil  // returns a true nil interface (type=nil, value=nil)
 	}
 	return &nullLogger{}
+}
+
+func fixedDemo() {
+	l := getLoggerFixed(false)
+	fmt.Println(l == nil)  // true
+}
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ nil interface    │ (type=nil, value=nil) │ == nil → true             │
+// │ non-nil wrapping │ (type=*T,  value=nil) │ == nil → FALSE (the trap) │
+// │ Calling a method │ panics (nil pointer dereference)                  │
+// └──────────────────────────────────────────────────────────────────────┘
+```
+
+## Consumer-Side Interface Definition
+
+::code-wrapper{language="go"}
+```go
+// Go idiom: define interfaces where they're USED (consumer-side), not
+// where types are DEFINED (producer-side).
+//
+// Why: the consumer knows what it needs. The producer shouldn't force
+// every type to implement a giant interface "just in case."
+//
+// "The bigger the interface, the weaker the abstraction." — Rob Pike
+
+// ❌ ANTI-PATTERN: producer-side giant interface
+// package storage
+// type Storage interface {
+//     Get(ctx, key) (val, error)
+//     Set(ctx, key, val) error
+//     Delete(ctx, key) error
+//     List(ctx, prefix) ([]string, error)
+//     BatchGet(ctx, keys) (map[string]string, error)
+//     Watch(ctx, key) (<-chan Event, error)
+//     // ... 20 more methods
+// }
+// Every storage backend must implement ALL of these.
+
+// ✅ CORRECT: consumer-side small interfaces
+package cache
+
+// The cache only needs Get and Set — define the minimal interface:
+type Storage interface {
+	Get(ctx context.Context, key string) (string, error)
+	Set(ctx context.Context, key, val string) error
+}
+
+type Cache struct {
+	storage Storage  // accepts ANY type with Get and Set
+}
+
+func (c *Cache) GetOrSet(ctx context.Context, key string, load func() (string, error)) (string, error) {
+	val, err := c.storage.Get(ctx, key)
+	if err == nil {
+		return val, nil
+	}
+	val, err = load()
+	if err != nil {
+		return "", err
+	}
+	_ = c.storage.Set(ctx, key, val)
+	return val, nil
+}
+
+// Now ANY storage backend (Redis, Memcached, Postgres, in-memory) that
+// has Get and Set works with Cache — even types defined AFTER Cache.
+```
+
+## Accept Interfaces, Return Structs
+
+::code-wrapper{language="go"}
+```go
+// Go idiom: functions ACCEPT interface types (flexible, mockable) but
+// RETURN concrete types (clear, inspectable).
+//
+// Accepting an interface lets callers pass any implementation.
+// Returning a concrete type gives callers full access to the result.
+
+// ✅ Accept interface, return concrete:
+func process(r io.Reader) *Result {  // accepts any Reader
+	data, _ := io.ReadAll(r)
+	return &Result{data: data}  // returns *Result (concrete, inspectable)
+}
+
+// ❌ ANTI-PATTERN: return an interface (forces callers to type-assert)
+func processBad(r io.Reader) Resulter {  // returns an interface
+	return &Result{data: data}
+}
+// Caller must type-assert to use Result's fields:
+//   r := processBad(reader)
+//   if res, ok := r.(*Result); ok { ... }  // awkward, loses type safety
+
+// ❌ ANTI-PATTERN: accept concrete (inflexible, hard to test)
+func processBad2(f *os.File) *Result {  // only accepts *os.File
+	// Can't pass a bytes.Reader, a network connection, a test mock.
+	// Unit testing requires a real file — painful.
+}
+```
+
+## Interface Composition
+
+::code-wrapper{language="go"}
+```go
+// Interfaces compose by embedding other interfaces:
+type ReadWriter interface {
+	io.Reader   // embeds Read(p []byte) (int, error)
+	io.Writer   // embeds Write(p []byte) (int, error)
+}
+
+type ReadWriteCloser interface {
+	io.Reader
+	io.Writer
+	io.Closer
+}
+
+// The standard library uses this heavily:
+//   io.ReadWriter      = Reader + Writer
+//   io.ReadWriteCloser = Reader + Writer + Closer
+//   io.ReadWriteSeeker = Reader + Writer + Seeker
+
+// Small interfaces compose into larger ones. This is how Go avoids
+// giant interfaces — compose the minimal pieces.
+```
+
+## The Empty Interface `any` (Go 1.18+)
+
+::code-wrapper{language="go"}
+```go
+// `any` is an alias for `interface{}` (Go 1.18+). Every type satisfies it.
+// It's the escape hatch for "I don't know the type" — but loses type safety.
+
+func anyDemo() {
+	var x any
+	x = 42
+	x = "hello"
+	x = []int{1, 2, 3}
+
+	// To use the value, you MUST type-assert:
+	switch v := x.(type) {
+	case int:
+		fmt.Println("int:", v)
+	case string:
+		fmt.Println("string:", v)
+	default:
+		fmt.Printf("unknown: %T\n", v)
+	}
+}
+
+// ⚠️ Avoid `any` when a specific interface works:
+// ❌ func process(data any)  — caller can pass anything, you must assert
+// ✅ func process(r io.Reader)  — caller must pass something readable
+
+// Legitimate uses of `any`:
+//   - fmt.Println(...any)  — printing any value (introspection)
+//   - json.Marshal(any)    — encoding arbitrary JSON
+//   - reflect package      — runtime type inspection
+//   - Generic containers that truly hold anything (rare)
+```
+
+## Production Pattern — Interface for Testability
+
+::code-wrapper{language="go"}
+```go
+// ─── Define interfaces for external dependencies to enable mocking ───
+
+// internal/store/store.go
+type UserStore interface {
+	GetUser(ctx context.Context, id int64) (*User, error)
+	SaveUser(ctx context.Context, u *User) error
+}
+
+// internal/store/postgres.go (production implementation)
+type PostgresStore struct {
+	db *sql.DB
+}
+func (s *PostgresStore) GetUser(ctx context.Context, id int64) (*User, error) {
+	// real DB query
+	return &User{}, nil
+}
+func (s *PostgresStore) SaveUser(ctx context.Context, u *User) error {
+	// real DB insert
+	return nil
+}
+
+// internal/service/user_service.go (uses the interface, not the concrete type)
+type UserService struct {
+	store UserStore  // accepts any UserStore — PostgresStore in prod, MockStore in tests
+}
+
+func (s *UserService) GetProfile(ctx context.Context, id int64) (*User, error) {
+	return s.store.GetUser(ctx, id)  // testable with a mock
+}
+
+// internal/service/user_service_test.go
+type MockUserStore struct {
+	users map[int64]*User
+}
+func (m *MockUserStore) GetUser(ctx context.Context, id int64) (*User, error) {
+	if u, ok := m.users[id]; ok {
+		return u, nil
+	}
+	return nil, errors.New("not found")
+}
+func (m *MockUserStore) SaveUser(ctx context.Context, u *User) error {
+	m.users[u.ID] = u
+	return nil
+}
+
+func TestGetProfile(t *testing.T) {
+	svc := &UserService{store: &MockUserStore{users: map[int64]*User{1: {ID: 1, Name: "Alice"}}}}
+	u, err := svc.GetProfile(context.Background(), 1)
+	if err != nil { t.Fatal(err) }
+	if u.Name != "Alice" { t.Errorf("expected Alice, got %s", u.Name) }
+}
+```
+
+## 💡 Tips & Tricks
+
+- **Idiom**: define interfaces where they're USED (consumer-side), not where types are defined — a function that needs `io.Reader` should declare it locally, not require types to implement a "Readable" interface in their package. Small, consumer-defined interfaces keep code decoupled.
+- **Idiom**: keep interfaces small (1-3 methods) — "the bigger the interface, the weaker the abstraction." `io.Reader` (one method) is satisfied by hundreds of types; a 20-method interface is satisfied by one. Compose small interfaces.
+- **Idiom**: accept interfaces, return concrete types — functions take interface parameters (flexible, mockable) but return concrete types (clear, inspectable). Returning an interface forces callers into type assertions.
+- **Idiom**: `var _ I = T{}` as a compile-time assertion — catches breakage when a method is removed from `T` or added to `I`, at compile time. Common in library code.
+- **Debug**: the nil-interface trap — `var s Speaker = (*Dog)(nil); s == nil` is `false`. To return a nil interface, return `nil` directly, not a nil pointer of a concrete type. This is the #1 interface bug.
+- **Idiom**: use interfaces for external dependencies (database, HTTP client, email sender) to enable testing with mocks — define the minimal interface the consumer needs, not the full API of the dependency.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **The nil interface trap**: `var s Speaker = (*Dog)(nil); s == nil` is `false` — the interface has a type (`*Dog`), so it's non-nil. Calling a method panics. Return `nil` directly for a nil interface.
+- **Interfaces satisfied by method set**: a value type satisfies only value-receiver methods; a pointer type satisfies all methods. `var s Speaker = T{}` fails if `Speaker` requires a pointer-receiver method — use `&T{}`.
+- **Interface comparison**: interfaces are comparable with `==` if their dynamic types are comparable. Comparing interfaces holding slices/maps/functions panics at runtime.
+- **`any` loses type safety**: you must type-assert to use the value. Prefer specific interfaces; reserve `any` for genuine "any value" cases (`fmt`, `json`).
+- **Interface values are immutable**: the interface holds a (type, value) pair; you can reassign the interface variable, but can't mutate the held value through the interface (unless the method mutates via a pointer).
+- **Embedding an interface in a struct**: `type S struct { io.Reader }` — `S` has a `Reader` field (an interface); `S` satisfies `io.Reader` via promotion. Useful for decorating/delegating.
+- **Nil pointer receiver method call**: `var p *Dog; p.Speak()` — if `Speak` has a value receiver, Go can't dereference `p` (nil) → panic. If `Speak` has a pointer receiver, it CAN be called on nil `*Dog` (the method can check `p == nil`).
+- **Interface boxing causes escape**: `var i any = x` moves `x` to the heap. In hot paths, avoid passing values through `any` — use concrete types to keep them on the stack.
+
+## 🧠 Quick Quiz
+
+::code-wrapper{language="go"}
+```go
+type MyErr struct{}
+func (m *MyErr) Error() string { return "my error" }
+
+func doSomething(fail bool) error {
+	if fail {
+		var err *MyErr = nil
+		return err
+	}
+	return nil
 }
 
 func main() {
-	l := getLogger(false)
-	if l == nil {
-		fmt.Println("no logger")   // NEVER printed
-	}
-	l.Log("hello")   // works? or panics?
+	err := doSomething(true)
+	fmt.Println(err == nil)
 }
 ```
+
+What's printed?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`getLogger(false)` returns `n` where `n` is a nil `*nullLogger`. The return type is `Logger` (an interface), so the nil pointer gets *wrapped* into an interface: the result is a `(type: *nullLogger, value: nil)` interface — which is **not a nil interface**. `l == nil` is `false` (the interface has a type, `*nullLogger`), so the `if l == nil` check never triggers.
+```
+false
+```
 
-`l.Log("hello")` calls `(*nullLogger).Log` with a nil receiver. In this case, `Log` doesn't dereference the receiver (it's `func (n *nullLogger) Log(string) {}` — no field access), so it *doesn't panic* — it's a nil-safe method. But if `Log` accessed `n.someField`, it would panic.
+`doSomething(true)` returns `err` where `err` is a nil `*MyErr`. But the return type is `error` (an interface). Returning a nil `*MyErr` into an `error` interface creates a non-nil interface with type `*MyErr` and value `nil`. So `err == nil` is `false`.
 
-The fix — return `nil` directly (a nil interface), not a nil concrete pointer:
+This is the nil-interface trap applied to error returns. Calling `err.Error()` would panic (nil pointer dereference).
+
+The fix — return `nil` directly:
 
 ```go
-func getLogger(verbose bool) Logger {
-	if !verbose {
-		return nil   // ✅ a nil interface, not a (*nullLogger, nil)
+func doSomething(fail bool) error {
+	if fail {
+		return &MyErr{}  // return a real error
+		// or: return nil  // if you meant "no error"
 	}
-	return &nullLogger{}
+	return nil
 }
 ```
-::
-Now `l == nil` is `true`, and the caller's nil check works.
 
-**The lesson**: returning a nil concrete pointer wraps it in a non-nil interface. To return a "nil" interface, return `nil` directly. This is the #1 interface gotcha — and it's invisible because the method may work (if nil-safe) until someone adds a field access.
+If you need to return a nil error explicitly, return `nil` (not a nil pointer of a concrete error type).
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now declare and use interfaces, understand implicit satisfaction (no `implements`), compose small interfaces, follow "accept interfaces, return concrete types," use `any`/`interface{}` deliberately, and avoid the nil-interface trap (return `nil`, not a nil concrete pointer). Next: type assertions and type switches.
+→ [13 — Type Assertions & Type Switches](/go/13-type-assertions-and-switches) — comma-ok assertions, type switch dispatch, interface-to-interface assertions, and JSON's float64 trap.

@@ -1,341 +1,350 @@
-# 08 — Type System
+---
+title: Scala — Type System: Variance, Bounds, Givens & Phantom Types
+description: Deep-dive into Scala 3's type system — variance annotations and their constraints, upper/lower bounds, context abstractions (given/using), type classes, higher-kinded types, phantom types for compile-time state machines, and match types.
+---
 
-## Generics (Type Parameters)
+# 08 — Type System: Variance, Bounds, Givens & Phantom Types
 
-Define functions and classes that work with multiple types:
-
-::code-wrapper{language="scala"}
-```scala
-// Generic function
-def identity[A](x: A): A = x
-
-identity(42)                // Int
-identity("hello")           // String
-
-// Generic class
-class Box[T](value: T) {
-  def get: T = value
-  def set(v: T): Unit = { /* update */ }
-}
-
-val intBox: Box[Int] = Box(42)
-val strBox: Box[String] = Box("hello")
-
-// Multiple type parameters
-def swap[A, B](pair: (A, B)): (B, A) = (pair._2, pair._1)
-
-swap((1, "hello"))          // ("hello", 1)
-```
-::
-
-## Type Bounds
-
-Constrain type parameters:
+## Variance — The Subtyping of Generics
 
 ::code-wrapper{language="scala"}
 ```scala
-// Upper bound: T must be subtype of Number
-def process[T <: Number](x: T): String = s"Number: $x"
+// Variance controls whether C[Sub] is a subtype of C[Super].
 
-process(5)                  // OK (Int extends Number)
-process("str")              // ERROR
+// INVARIANT [T] (default): C[Sub] is NOT a subtype of C[Super]
+//   Safe: can read AND write T. Used for mutable collections.
+class MutableBox[T](var value: T)
+// MutableBox[Dog] is NOT a MutableBox[Animal] — adding a Cat would corrupt it.
 
-// Lower bound: T must be supertype of String
-def fill[T >: String](x: T): Unit = { }
+// COVARIANT [+T]: if Sub <: Super, then C[Sub] <: C[Super]
+//   Safe: can only READ T (produce/return), never write (consume/accept).
+//   Used for immutable collections, producers, return types.
+class ImmutableList[+T]                                  // List[Dog] <: List[Animal] ✅
+// ImmutableList[Dog].head: Animal ← safe, a Dog IS an Animal
+// Cannot have def append(t: T) — would allow adding Cat to List[Dog]
 
-// Multiple bounds (not recommended; use trait instead)
-def compare[T <: Comparable[T]](a: T, b: T): Int = a.compareTo(b)
-```
-::
-
-## Variance
-
-Control how generic types relate to subtyping:
-
-::code-wrapper{language="scala"}
-```scala
-// Invariant (default): List[Dog] is NOT a List[Animal]
-val dogList: List[Dog] = List(Dog("Buddy"))
-val animalList: List[Animal] = dogList  // ERROR
-
-// Covariant: if Dog <: Animal then List[Dog] <: List[Animal]
-class CoList[+T](val head: T, val tail: CoList[T])
-
-val dogCoList: CoList[Dog] = CoList(Dog("Buddy"), null)
-val animalCoList: CoList[Animal] = dogCoList  // OK
-
-// Contravariant: if Dog <: Animal then Function[Animal] <: Function[Dog]
-trait Comparator[-T] {
+// CONTRAVARIANT [-T]: if Sub <: Super, then C[Super] <: C[Sub] (INVERTED)
+//   Safe: can only WRITE T (consume/accept), never read (produce/return).
+//   Used for consumers, function parameters, comparators.
+trait Comparator[-T]:
   def compare(a: T, b: T): Int
-}
+// Comparator[Animal] <: Comparator[Dog] ← safe, comparing Dogs as Animals is fine
+// A function Animal => String is a subtype of Dog => String:
+val f: Animal => String = a => a.name
+val g: Dog => String = f                  // OK! Function1 is contravariant in its parameter
 
-val animalComparator: Comparator[Animal] = new Comparator[Animal] {
-  def compare(a: Animal, b: Animal) = 0
-}
-val dogComparator: Comparator[Dog] = animalComparator  // OK
+// The variance positions rule (the "in/out" rule):
+//   +T: T can appear in RETURN positions (out), never in parameter positions (in)
+//   -T: T can appear in PARAMETER positions (in), never in return positions (out)
+//    T: T can appear anywhere (both in and out)
 ```
 ::
 
-## Type Aliases
-
-Define shortcuts for complex types:
+## Variance Constraints — The Lower Bound Trick
 
 ::code-wrapper{language="scala"}
 ```scala
-type UserMap = Map[String, User]
-type Predicate[T] = T => Boolean
-type Config = Map[String, String]
+// Problem: covariant List[+T] needs a "prepend" method, but prepend takes T as a
+// parameter (contravariant position) — conflicts with +T variance.
+//
+// Solution: lower bound on the type parameter
+class MyList[+T]:
+  // def prepend(t: T): MyList[T]  ← COMPILE ERROR: covariant T in contravariant position
+  def prepend[U >: T](u: U): MyList[U] = ???  // ✅ U is a supertype of T, T appears in covariant position
 
-val users: UserMap = Map()
-val isEven: Predicate[Int] = _ % 2 == 0
-val cfg: Config = Map("host" -> "localhost")
+// When you prepend a Cat to a MyList[Dog]:
+//   U = LUB(Cat, Dog) = Animal
+//   Result: MyList[Animal]
+// This is EXACTLY how List's :: works — it widens the element type as needed.
 
-// Useful for large generic types
-type UserResult = Either[String, User]
+val dogs: MyList[Dog] = MyList(dog1, dog2)
+val animals: MyList[Animal] = dogs.prepend(cat1)  // U=Animal, returns MyList[Animal]
 
-def getUser(id: Int): UserResult = Right(User(id, "Alice"))
+// ❌ ANTI-PATTERN: making a mutable collection covariant
+// class MutList[+T](var head: T)  ← COMPILE ERROR: covariant T in var (contravariant position)
+// Because var generates both getter (covariant) AND setter (contravariant) — conflicting.
 ```
 ::
 
-## Implicit Parameters
-
-Scala automatically injects implicit parameters:
+## Type Classes with `given` / `using` — Scala 3
 
 ::code-wrapper{language="scala"}
 ```scala
-// Define implicit value
-implicit val doubleFormat: String = "%.2f"
+// Type class: a trait parameterized by a type, with instances provided via 'given'.
+// This is ad-hoc polymorphism — different behavior per type, without inheritance.
 
-// Function with implicit parameter
-def format(value: Double)(implicit fmt: String): String = {
-  String.format(fmt, value)
-}
+trait Show[T]:
+  extension (t: T) def show: String
 
-// Scala automatically passes doubleFormat
-format(3.14159)             // "3.14"
+trait Eq[T]:
+  extension (t: T) def ===(other: T): Boolean
 
-// Can override explicitly
-format(3.14159)("%.4f")     // "3.1416"
+// Instances — provided as 'given' values, resolved by the compiler via 'using'
+given Show[Int] with
+  extension (t: Int) def show: String = s"Int($t)"
+
+given Show[String] with
+  extension (t: String) def show: String = s""""$t""""
+
+given Show[Boolean] with
+  extension (t: Boolean) def show: String = t.toString
+
+// Usage — 'using' parameter is resolved automatically from the given scope
+def printAll[T](values: List[T])(using s: Show[T]): Unit =
+  values.foreach(v => println(s.show(v)))  // or: v.show (extension method via the given)
+
+printAll(List(1, 2, 3))                     // → Int(1), Int(2), Int(3) — Show[Int] resolved
+printAll(List("a", "b"))                    // → "a", "b" — Show[String] resolved
+
+// Context-bound sugar: [T: Show] means (using Show[T])
+def serialize[T: Show](t: T): String = summon[Show[T]].show(t)
+// summon[Show[T]] retrieves the given instance from scope
 ```
 ::
 
-### Implicit conversions (Use with caution)
+## Type Class Instance Resolution — Priority & Scope
 
 ::code-wrapper{language="scala"}
 ```scala
-// Define implicit conversion
-implicit def stringToInt(s: String): Int = s.toInt
+// Given instances are resolved by the compiler in this priority order:
+//   1. Explicitly passed: f(using myInstance)
+//   2. Local given in the current scope
+//   3. Given in the companion object of the type class (Show)
+//   4. Given in the companion object of the type (Show[Int] in Int's companion — can't do for Int)
+//   5. Imported givings: import MyGivens.*
 
-val x: Int = "42"           // String automatically converted to Int
+// Ambiguous givens → compile error
+given Show[Int] with extension (t: Int) def show = t.toString
+given Show[Int] with extension (t: Int) def show = s"int=$t"
+// serialize(42) → ERROR: ambiguous givens: both Show[Int] instances match
 
-// Type class pattern (preferred)
-trait Show[T] {
-  def show(x: T): String
-}
+// Organize givens in companion objects for automatic availability:
+object Show:
+  given Show[Int] with extension (t: Int) def show = t.toString
+  given Show[String] with extension (t: String) def show = s""""$t""""
+  given [T: Show] => Show[List[T]] with           // conditional instance — needs Show[T]
+    extension (list: List[T]) def show =
+      list.map(_.show).mkString("[", ",", "]")
 
-implicit val intShow: Show[Int] = new Show[Int] {
-  def show(x: Int) = s"Int($x)"
-}
-
-def display[T](x: T)(implicit s: Show[T]): String = s.show(x)
-
-display(42)                 // "Int(42)"
+// Now Show[List[Int]] is auto-derived from Show[Int] — no manual instance needed
+serialize(List(1, 2, 3))                   // → "[1,2,3]"
 ```
 ::
 
-## Self Types
-
-Declare dependencies on other traits:
+## Higher-Kinded Types — `F[_]`
 
 ::code-wrapper{language="scala"}
 ```scala
-trait HasName {
-  def name: String
-}
+// Higher-kinded type: a type constructor that takes a type parameter.
+// List is * → * (takes one type, produces one type). List[Int] is a concrete type.
 
-trait CanGreet {
-  self: HasName =>           // self must have HasName
-  
-  def greet() = s"Hello, $name"
-}
+// Functor: a type class for things you can map over
+trait Functor[F[_]]:
+  extension [A](fa: F[A]) def map[B](f: A => B): F[B]
 
-class Person(val name: String) extends HasName with CanGreet
+given Functor[List] with
+  extension [A](fa: List[A]) def map[B](f: A => B): List[B] = fa.map(f)
 
-val p = Person("Alice")
-p.greet()                   // "Hello, Alice"
+given Functor[Option] with
+  extension [A](fa: Option[A]) def map[B](f: A => B): Option[B] = fa.map(f)
+
+// Usage: works on ANY functor, regardless of concrete type
+def doubleAll[F[_]: Functor](fa: F[Int]): F[Int] = fa.map(_ * 2)
+doubleAll(List(1, 2, 3))                    // → List(2, 4, 6)
+doubleAll(Some(42))                         // → Some(84)
+doubleAll(None)                             // → None
+
+// Monad: extends Functor with flatMap (sequencing)
+trait Monad[F[_]] extends Functor[F]:
+  extension [A](fa: F[A])
+    def flatMap[B](f: A => F[B]): F[B]
+    def map[B](f: A => B): F[B] = flatMap(a => pure(f(a)))
+  def pure[A](a: A): F[A]
+
+given Monad[Option] with
+  extension [A](fa: Option[A])
+    def flatMap[B](f: A => Option[B]): Option[B] = fa.flatMap(f)
+  def pure[A](a: A): Option[A] = Some(a)
+
+// Generic monadic computation — works for Option, List, Future, IO, etc.
+def compose[F[_]: Monad, A, B, C](f: A => F[B], g: B => F[C])(a: A): F[C] =
+  f(a).flatMap(g)                           // no knowledge of F's concrete type
 ```
 ::
 
-## Higher-Kinded Types
-
-Types that take type parameters:
+## Phantom Types — Compile-Time State Machines
 
 ::code-wrapper{language="scala"}
 ```scala
-// Higher-kinded type parameter
-trait Functor[F[_]] {
-  def map[A, B](fa: F[A])(f: A => B): F[B]
-}
+// Phantom types: type parameters that exist only at compile time, erased at runtime.
+// Used to encode state transitions in the type system — invalid transitions don't compile.
 
-implicit val listFunctor: Functor[List] = new Functor[List] {
-  def map[A, B](fa: List[A])(f: A => B) = fa.map(f)
-}
+sealed trait ConnectionState
+object ConnectionState:
+  trait Disconnected extends ConnectionState
+  trait Connecting extends ConnectionState
+  trait Connected extends ConnectionState
+  trait Closed extends ConnectionState
 
-def fmap[F[_], A, B](fa: F[A])(f: A => B)(implicit F: Functor[F]): F[B] =
-  F.map(fa)(f)
+// The type parameter [S] is phantom — it never appears in fields.
+// It exists ONLY to track state at compile time.
+final class Connection[S <: ConnectionState] private (val host: String, val port: Int):
+  // State transitions encoded in return types
+  def connect()(using S <:< ConnectionState.Disconnected): Connection[ConnectionState.Connecting] =
+    new Connection[ConnectionState.Connecting](host, port)  // runtime: same object, new phantom type
 
-fmap(List(1, 2, 3))(_ * 2)  // List(2, 4, 6)
+  def waitForConnection()(using S <:< ConnectionState.Connecting): Connection[ConnectionState.Connected] =
+    new Connection[ConnectionState.Connected](host, port)
+
+  def disconnect()(using S <:< ConnectionState.Connected): Connection[ConnectionState.Disconnected] =
+    new Connection[ConnectionState.Disconnected](host, port)
+
+  def close()(using S <:< ConnectionState.Disconnected): Connection[ConnectionState.Closed] =
+    new Connection[ConnectionState.Closed](host, port)
+
+object Connection:
+  def create(host: String, port: Int): Connection[ConnectionState.Disconnected] =
+    new Connection[ConnectionState.Disconnected](host, port)
+
+// Usage — invalid transitions DON'T COMPILE:
+val conn = Connection.create("api.x.com", 443)  // Connection[Disconnected]
+// conn.disconnect()  // ERROR: not in Connected state
+val connecting = conn.connect()                   // Connection[Connecting]
+// connecting.connect()  // ERROR: not in Disconnected state
+val connected = connecting.waitForConnection()    // Connection[Connected]
+val disconnected = connected.disconnect()         // Connection[Disconnected]
+val closed = disconnected.close()                 // Connection[Closed]
+// closed.connect()  // ERROR: not in Disconnected state (it's Closed)
+
+// Runtime cost: ZERO. The type parameter [S] is erased — no field stores it.
+// The `<:<` evidence parameter is a `null` at runtime (optimized away by the compiler).
 ```
 ::
 
-## Type Refinement
-
-Create types on-the-fly with refinements:
+## Opaque Types — Zero-Cost Type Aliases
 
 ::code-wrapper{language="scala"}
 ```scala
-trait Named {
-  def name: String
-}
+// opaque type: a type alias that's ONLY visible inside its defining object.
+// Outside the object, it's a distinct type — the compiler prevents mixing it with the underlying type.
 
-trait Aged {
-  def age: Int
-}
+object AccountId:
+  opaque type AccountId = Long              // outside: AccountId is its own type
+  def apply(l: Long): AccountId = l         // smart constructor
+  extension (id: AccountId) def value: Long = id  // accessor (only works if in scope)
 
-// Type refinement: Any with Both traits
-val person: Named with Aged = new Named with Aged {
-  def name = "Alice"
-  def age = 30
-}
+object UserId:
+  opaque type UserId = Long
+  def apply(l: Long): UserId = l
+  extension (id: UserId) def value: Long = id
 
-// Structural types (duck typing)
-def getName(obj: { def name: String }) = obj.name
+// At runtime: AccountId and UserId are both just `long` — zero overhead.
+// At compile time: they're distinct types.
+val acct: AccountId = AccountId(42)
+val user: UserId = UserId(42)
+// acct == user  // COMPILE ERROR: different types, even though both are Long at runtime
+// acct + 1      // COMPILE ERROR: AccountId has no + method (no extension defined)
+
+// This replaces value classes (AnyVal) for primitive wrappers — no boxing, no wrapper object.
 ```
 ::
 
-## Existential Types
-
-Forget type information explicitly:
+## Match Types — Compile-Time Type-Level Computation
 
 ::code-wrapper{language="scala"}
 ```scala
-val list: List[_] = List(1, 2, 3)  // existential type (don't care what's inside)
+// Match types: pattern match on types at the TYPE level, evaluated by the compiler.
+// This is type-level programming — the "result" is a type, computed at compile time.
 
-val boxes: List[Box[_]] = List(
-  Box(42),
-  Box("hello"),
-  Box(true)
-)
+// Type-level boolean
+type Bool = true | false
+type Not[B <: Boolean] = B match
+  case true  => false
+  case false => true
+// Not[true] → false (computed by compiler, not runtime)
 
-// Can read but not write
-for (box <- boxes) {
-  val x = box.get    // type is unknown
-  // box.set(value)  // ERROR: can't write (wrong type)
-}
+// Type-level list operations
+type Size[T <: Tuple] <: Int = T match
+  case EmptyTuple => 0
+  case _ *: tail => 1 + Size[tail]          // recursive match type
+
+summon[Size[(Int, String, Boolean)] =:= 3]  // compiles: compiler computed 3
+
+// Type-level serialization — choose a representation per type
+type WireFormat[T] = T match
+  case Int       => Int
+  case Long      => Long
+  case String    => String
+  case Boolean   => Boolean
+  case Option[t] => Option[WireFormat[t]]
+  case List[t]   => Array[WireFormat[t]]    // List[Int] → Array[Int] (no boxing!)
+
+// The compiler reduces WireFormat[List[Option[Int]]] to Array[Option[Int]]
+// This is how libraries like Magnolia derive type classes generically.
 ```
 ::
 
-## Phantom Types
-
-Use types for compile-time validation without runtime overhead:
+## Type Projections & Dependent Types
 
 ::code-wrapper{language="scala"}
 ```scala
-// Phantom types for compile-time safety
-sealed trait Verified
-sealed trait Unverified
+// Path-dependent type: a type that depends on a value (instance)
+class Repository:
+  type Entity                            // abstract type member
+  def get(id: Long): Option[Entity]
+  def save(e: Entity): Long
 
-case class Email[T](value: String)
+class UserRepo extends Repository:
+  type Entity = User                     // concrete: Entity is User
+  def get(id: Long): Option[User] = ???
+  def save(e: User): Long = ???
 
-def verify(email: Email[Unverified]): Email[Verified] = {
-  // validation logic
-  Email[Verified](email.value)
-}
+class OrderRepo extends Repository:
+  type Entity = Order                    // concrete: Entity is Order
+  def get(id: Long): Option[Order] = ???
+  def save(e: Order): Long = ???
 
-def send(email: Email[Verified]): Unit = {
-  // send email (verified emails only)
-}
-
-val unverified = Email[Unverified]("user@example.com")
-// send(unverified)  // ERROR: requires Email[Verified]
-
-val verified = verify(unverified)
-send(verified)      // OK
+// The type repo.Entity depends on which repo instance you use
+def transfer(from: Repository, to: Repository)(e: from.Entity): to.Entity = ???
+// from.Entity and to.Entity are different types — can't mix them.
+// This prevents passing a User to an OrderRepo — type-safe at compile time.
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Use type aliases for complex types**: Makes signatures clearer.
+**`summon[T]` to verify type evidence at compile time**: `summon[T =:= U]` succeeds only if T and U are the same type — use for compile-time assertions.
 
-**Prefer upper bounds over casting**: `def f[T <: Base](x: T)` is safer than casts.
+::code-wrapper{language="scala"}
+```scala
+summon[Int =:= Int]                        // compiles (evidence exists)
+// summon[Int =:= String]                  // compile error (no evidence)
+```
+::
 
-**Type variance matters for APIs**: Contravariance for inputs, covariance for outputs (PECS principle).
+**`<:<` for safe downcasts**: `def f(x: Any)(using ev: x.type <:< String)` — only callable when the compiler can prove the type relationship.
 
-**Phantom types for compile-time safety**: Create types that vanish at runtime but prevent bugs at compile time.
-
-**Implicit parameters enable DSLs**: Cleaner syntax for optional configuration.
+**Given instances in companion objects for automatic availability**: Place `given` instances in the companion of the type class — they're always in scope without imports.
 
 ## ⚠️ Edge Cases & Gotchas
 
-**Type erasure**: Generics are erased at runtime. `List[Int]` and `List[String]` look the same at runtime.
+**Variance and arrays**: Scala `Array[T]` is INVARIANT (unlike Java's covariant arrays). This prevents `ArrayStoreException` at compile time — a deliberate fix.
 
-**Variance annotations limit operations**: Covariant types `[+T]` can't take `T` as parameter; contravariant types `[-T]` can't return `T`.
+**Type erasure breaks pattern matching on generics**: `case x: List[Int]` and `case x: List[String]` match the SAME thing at runtime (both are `List`). Use `ClassTag` or `TypeTest` for reified type checks.
 
-**Implicit ambiguity**: Multiple implicit values in scope cause compile error.
+**`given` ambiguity is a compile error, not a runtime error**: Two givens of the same type in scope → the compiler refuses to pick. Unlike implicit resolution in Scala 2 (which sometimes picked "more specific"), Scala 3 requires explicit disambiguation.
 
-::code-wrapper{language="scala"}
-```scala
-implicit val x: Int = 1
-implicit val y: Int = 2
-val z: Int = x  // ERROR: ambiguous implicits
-```
-::
+**Phantom types increase type complexity**: Overuse makes signatures hard to read. Use for genuine state-machine constraints (connection states, builder phases), not for trivial distinctions.
 
-**Phantom types have zero runtime cost**: But if you need runtime checks, use real types or runtime reflection.
+## 🧠 Quick Quiz
 
-**Self types don't enforce subclassing**: They only ensure the implementation has the required members.
-
-## 🧠 Spot the Bug
-
-What does this print?
-
-::code-wrapper{language="scala"}
-```scala
-def first[T](list: List[T]): Option[T] = list.headOption
-
-first(List(1, 2, 3))     // Some(1)
-first(List())            // None
-
-val x = first(List(1, 2, 3))
-x match {
-  case Some(v) => println(v)
-  case None => println("empty")
-}
-```
-::
+Why does `List[Any]` accept `List[Int]`, `List[String]`, etc., but `Array[Any]` does NOT accept `Array[Int]`?
 
 <details>
 <summary>Answer</summary>
 
-Prints `1`.
+- `List` is covariant (`List[+T]`). `List[Int] <: List[Any]` because `Int <: Any`. This is safe because `List` is immutable — you can't add a `String` to a `List[Int]` (it returns a new `List`, the original is unchanged).
+- `Array` is invariant (`Array[T]`). `Array[Int]` is NOT a subtype of `Array[Any]`. This is safe because `Array` is mutable — if `Array[Int]` were a subtype of `Array[Any]`, you could do `val anyArr: Array[Any] = intArr; anyArr(0) = "string"` — a `String` in an `int[]` would be an `ArrayStoreException` at runtime.
 
-Here's why:
-- `first(List(1, 2, 3))` returns `Some(1)`
-- Pattern match on `Some(v)` binds `v = 1`
-- Prints `1`
-
-**The lesson**: Generics work correctly with type inference. Scala infers `T = Int`.
-
+Scala learned from Java's mistake (Java arrays are covariant and DO throw `ArrayStoreException` at runtime). Scala's invariant arrays prevent this at compile time.
 </details>
-
-## Key Takeaways
-
-- Generics: `[T]` type parameter on functions/classes.
-- Bounds: `T <: Upper` (upper), `T >: Lower` (lower).
-- Variance: `[+T]` (covariant), `[-T]` (contravariant), `[T]` (invariant).
-- Type aliases for readability: `type UserMap = Map[String, User]`.
-- Implicit parameters for automatic injection: `def f[T](implicit x: T)`.
-- Higher-kinded types for generic abstractions: `F[_]`.
-- Phantom types for compile-time validation.
-- Type erasure: generics don't work at runtime.

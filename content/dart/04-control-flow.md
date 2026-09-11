@@ -1,281 +1,292 @@
-# 04 — Control Flow
+---
+title: "Dart — Control Flow, Exhaustiveness & Pattern Matching"
+description: "Deep-dive into Dart 3 exhaustive switches, sealed class patterns, record destructuring, guard clauses, and control-flow edge cases. Code-first engineering reference."
+---
 
-Dart's control flow: `if`/`else`, loops (`for`, `while`, `do-while`, `for-in`), `switch`, `break`/`continue`, and assertions.
+# Dart — Control Flow, Exhaustiveness & Pattern Matching
 
-## `if` / `else`
-
-::code-wrapper{language="dart"}
-```dart
-if (score >= 90) {
-	print('A');
-} else if (score >= 80) {
-	print('B');
-} else {
-	print('C or below');
-}
-```
-::
-Conditions must be `bool` (no truthy/falsy). Curly braces are required for multi-statement blocks; optional (but discouraged) for single statements.
-
-## Loops
-
-### `for`
+## Exhaustive Switches — The Compiler Safety Net
 
 ::code-wrapper{language="dart"}
 ```dart
-for (var i = 0; i < 5; i++) {
-	print(i);
-}
-```
-::
-Classic C-style `for`: init; condition; update.
+// Dart 3 exhaustive switches: if you handle all subtypes of a sealed type,
+// the compiler ENFORCES completeness — no `default` needed, and adding a
+// new subtype causes a compile error at every non-exhaustive switch.
 
-### `for-in`
-
-::code-wrapper{language="dart"}
-```dart
-for (var fruit in ['apple', 'banana', 'cherry']) {
-	print(fruit);
+sealed class Result<T> {
+  const Result();
 }
 
-for (var entry in {'a': 1, 'b': 2}.entries) {
-	print('${entry.key}: ${entry.value}');
+class Success<T> extends Result<T> {
+  final T value;
+  const Success(this.value);
 }
-```
-::
-`for-in` iterates any `Iterable`. For `Map`, iterate `.entries` (or `.keys`/`.values`).
 
-### `while`
-
-::code-wrapper{language="dart"}
-```dart
-var i = 0;
-while (i < 5) {
-	print(i);
-	i++;
+class Failure<T> extends Result<T> {
+  final String error;
+  const Failure(this.error);
 }
-```
-::
-Checks the condition *before* each iteration. May run zero times.
 
-### `do-while`
-
-::code-wrapper{language="dart"}
-```dart
-var i = 0;
-do {
-	print(i);
-	i++;
-} while (i < 5);
-```
-::
-Checks the condition *after* each iteration. Runs at least once.
-
-## `break` and `continue`
-
-::code-wrapper{language="dart"}
-```dart
-for (var i = 0; i < 10; i++) {
-	if (i == 3) continue;   // skip 3
-	if (i == 7) break;      // stop at 7
-	print(i);               // 0, 1, 2, 4, 5, 6
+class Loading<T> extends Result<T> {
+  const Loading();
 }
-```
-::
-`break` exits the loop; `continue` skips to the next iteration.
 
-### Labeled breaks
-
-::code-wrapper{language="dart"}
-```dart
-outer:
-for (var i = 0; i < 3; i++) {
-	for (var j = 0; j < 3; j++) {
-		if (i == 1 && j == 1) break outer;   // breaks the outer loop
-		print('i=$i j=$j');
-	}
-}
-```
-::
-Labels (`outer:`) let `break`/`continue` target an outer loop. Rarely used — usually a sign to refactor into a function (with `return`).
-
-## `switch`
-
-::code-wrapper{language="dart"}
-```dart
-switch (color) {
-	case 'red':
-		print('Stop');
-		break;
-	case 'yellow':
-		print('Slow');
-		break;
-	case 'green':
-		print('Go');
-		break;
-	default:
-		print('Unknown');
-}
-```
-::
-### Exhaustiveness and `enum`
-
-Dart 3 added **exhaustive switches** for `enum`s and sealed types — the compiler ensures all cases are handled:
-
-::code-wrapper{language="dart"}
-```dart
-enum TrafficLight { red, yellow, green }
-
-String action(TrafficLight light) {
-	return switch (light) {
-		TrafficLight.red => 'Stop',
-		TrafficLight.yellow => 'Slow',
-		TrafficLight.green => 'Go',
-	};   // no default needed — all cases covered
-}
-```
-::
-If you add a new enum value later, the compiler flags all non-exhaustive switches — a powerful refactoring safety net.
-
-### Switch expressions (Dart 3)
-
-::code-wrapper{language="dart"}
-```dart
-final message = switch (status) {
-	200 => 'OK',
-	404 => 'Not Found',
-	500 => 'Server Error',
-	_ => 'Unknown',   // _ is the wildcard (default)
+// Exhaustive — all three subtypes handled. No `default` needed.
+String describe<T>(Result<T> r) => switch (r) {
+  Success(:final value) => 'OK: $value',  // destructuring pattern: extracts .value
+  Failure(:final error) => 'ERR: $error',
+  Loading() => 'Loading...',
 };
+
+// If you later add `class Idle<T> extends Result<T> {}`, every switch like the
+// above becomes a COMPILE ERROR: "Idle is not handled." This is the safety net —
+// you can't forget a case.
 ```
 ::
-Switch expressions return a value (no `break` needed). `_` is the wildcard pattern (default). Use for mapping values concisely.
 
-### Pattern matching (Dart 3)
-
-Dart 3 switch supports patterns (chapter 12):
-
-::code-wrapper{language="dart"}
-```dart
-switch (point) {
-	case (int x, int y) when x == y:
-		print('on the diagonal');
-	case (int x, int y):
-		print('($x, $y)');
-}
-```
-::
-### Fallthrough
-
-Dart `switch` does *not* fall through by default — each case must `break`, `return`, `throw`, or `continue`. Empty cases (no body) fall through to the next:
-
-::code-wrapper{language="dart"}
-```dart
-switch (x) {
-	case 1:
-	case 2:           // falls through (empty case)
-		print('1 or 2');
-		break;
-	case 3:
-		print('3');
-		break;
-}
-```
-::
-## `assert`
-
-::code-wrapper{language="dart"}
-```dart
-void withdraw(int amount) {
-	assert(amount > 0, 'Amount must be positive');
-	balance -= amount;
-}
-```
-::
-`assert(condition, message)` checks a condition — throws `AssertionError` if false. **Only runs in debug mode** (JIT, development). In production (AOT), asserts are stripped. Use for development-time invariants, not runtime validation.
-
-## `late` and control flow
-
-`late` variables assigned in branches must be definitely assigned before use:
-
-::code-wrapper{language="dart"}
-```dart
-late String result;
-if (condition) {
-	result = 'yes';
-} else {
-	result = 'no';
-}
-print(result);   // ✓ assigned in both branches
-```
-::
-If a branch doesn't assign and is taken, reading `result` throws.
-
-## 💡 Tips & Tricks
-
-- **Idiom**: use `for-in` (not indexed `for`) for iterating collections — `for (var item in list)` is clearer and less error-prone than `for (var i = 0; i < list.length; i++)`. Use indexed `for` only when you need the index.
-- **Idiom**: use switch expressions (Dart 3) for value mapping — `switch (x) { 1 => 'one', 2 => 'two', _ => 'other' }` is concise and returns a value. Use for mapping enums/status codes to messages.
-- **Idiom**: rely on exhaustive switches for enums — a `switch` over an `enum` without a `default` is checked for exhaustiveness. Adding a new enum value flags all non-exhaustive switches, a refactoring safety net.
-- **Idiom**: use `assert` for development-time invariants — `assert(amount > 0)` catches bugs during development (JIT), stripped in production (AOT). Use for preconditions that should never fail if the code is correct; use `if`/`throw` for runtime validation (user input).
-- **Idiom**: use labeled `break` sparingly — prefer extracting the loop into a function and using `return`. Labels (`outer: for... break outer;`) work but are a sign of complex control flow.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **Conditions must be `bool`**: `if (x)` where `x` is `int` or `String` is a compile error (no truthy/falsy). Compare explicitly.
-- **`switch` doesn't fall through by default**: each non-empty case must end with `break`/`return`/`throw`/`continue`. Forgetting it is a compile error (unlike C/Java, which silently fall through).
-- **Empty cases fall through**: `case 1: case 2: print('1 or 2');` — `case 1` (empty) falls through to `case 2`. Use this for grouping, but it can surprise.
-- **`assert` is stripped in production**: `assert(condition)` runs only in debug (JIT). In AOT (production), it's a no-op. Don't use `assert` for runtime validation (user input) — use `if`/`throw`.
-- **`for-in` on a `Map` iterates entries**: `for (var k in map)` iterates *keys* (a `Map` is `Iterable` of keys). For entries, use `for (var e in map.entries)` or `map.forEach((k, v) => ...)`.
-- **`continue` in `for-in`**: works (skips to the next item). But `continue` in `forEach` (a method, not a loop) is invalid — `forEach` takes a function; use `return` to skip, or a `for-in` for `continue`.
-- **`break` outside a loop is invalid**: `break` only works inside loops and `switch`. In a callback inside a loop, `break` breaks the outer loop (if labeled) or errors.
-- **Exhaustive switch requires all enum cases**: if you add `default` to an enum switch, it's no longer exhaustive (the compiler won't flag missing cases). Prefer no `default` for enums, let exhaustiveness check.
-- **`do-while` runs at least once**: the body executes before the condition is checked. Use when you need at least one iteration (e.g., read-then-check).
-
-## 🧠 Spot the Bug
-
-A developer adds a new enum value, but existing code silently mishandles it:
+### The `default` Trap
 
 ::code-wrapper{language="dart"}
 ```dart
 enum Status { pending, active, completed }
 
-String label(Status s) {
-	switch (s) {
-		case Status.pending: return 'Pending';
-		case Status.active: return 'Active';
-		default: return 'Completed';
-	}
+// ❌ Anti-pattern: using `default` in an enum switch.
+String labelBad(Status s) => switch (s) {
+  Status.pending => 'Pending',
+  Status.active => 'Active',
+  _ => 'Completed',  // wildcard catches everything else — including FUTURE values
+};
+
+// If `Status.cancelled` is added later, `_` silently catches it and returns
+// 'Completed' — a silent semantic bug. The compiler can't warn you.
+
+// ✓ Correct: handle every case explicitly, no wildcard.
+String labelGood(Status s) => switch (s) {
+  Status.pending => 'Pending',
+  Status.active => 'Active',
+  Status.completed => 'Completed',
+  // Adding Status.cancelled here → compile error: non-exhaustive switch.
+  // The compiler FORCES you to handle the new case.
+};
+```
+::
+
+## Pattern Matching — Destructuring & Guards
+
+::code-wrapper{language="dart"}
+```dart
+// Dart 3 patterns: destructuring, type matching, guard clauses (`when`).
+
+// Record destructuring in switch:
+(int x, int y) point = (3, 4);
+String quadrant = switch (point) {
+  (0, 0) => 'origin',
+  (int x, 0) when x > 0 => 'positive x-axis',
+  (int x, 0) => 'negative x-axis',
+  (0, int y) => 'y-axis',
+  (int x, int y) when x > 0 && y > 0 => 'Q1',
+  (int x, int y) when x < 0 && y > 0 => 'Q2',
+  (int x, int y) when x < 0 && y < 0 => 'Q3',
+  _ => 'Q4',
+};
+
+// Type + destructuring patterns:
+sealed class Shape {}
+class Circle extends Shape { final double r; Circle(this.r); }
+class Rectangle extends Shape { final double w, h; Rectangle(this.w, this.h); }
+class Triangle extends Shape { final double a, b, c; Triangle(this.a, this.b, this.c); }
+
+double area(Shape s) => switch (s) {
+  Circle(:final r) => 3.14159 * r * r,
+  Rectangle(:final w, :final h) => w * h,
+  Triangle(:final a, :final b, :final c) {
+    final semi = (a + b + c) / 2;
+    return (semi * (semi - a) * (semi - b) * (semi - c)).abs();
+  }
+};
+
+// `if` with patterns (Dart 3):
+void handleShape(Shape s) {
+  if (s case Circle(:final r) when r > 100) {
+    print('Large circle: $r');
+  } else if (s case Rectangle(:final w, :final h) when w == h) {
+    print('Square: ${w}x${h}');
+  }
+}
+
+// Map pattern (destructuring by key):
+switch (json) {
+  case {'type': 'point', 'x': int x, 'y': int y}:
+    print('Point at ($x, $y)');
+  case {'type': 'circle', 'radius': double r}:
+    print('Circle radius $r');
+  case {'type': String type}:
+    print('Unknown type: $type');
 }
 ```
 ::
-Later, `Status.cancelled` is added. What happens?
+
+## Switch Expressions vs Statements
+
+::code-wrapper{language="dart"}
+```dart
+// Switch EXPRESSION — returns a value, no `break`, arms are `=>`:
+final status = switch (code) {
+  200 || 201 => 'success',  // OR pattern: multiple values, one arm
+  400 => 'bad request',
+  401 || 403 => 'auth error',
+  404 => 'not found',
+  >= 500 => 'server error',  // relational pattern: >= 500
+  _ => 'unknown',
+};
+
+// Switch STATEMENT — for side effects, `break` required (no implicit fallthrough):
+void handle(int code) {
+  switch (code) {
+    case 200:
+    case 201:  // empty case falls through to next (only for empty cases)
+      print('Success');
+      break;
+    case 404:
+      print('Not found');
+      break;
+    default:
+      print('Unknown');
+  }
+}
+
+// ❌ Anti-pattern: forgetting `break` in a switch statement.
+// switch (x) { case 1: print('one'); case 2: print('two'); }  // ✗ compile error
+// Dart requires break/return/throw/continue after each non-empty case body.
+// Only EMPTY cases (no body) fall through to the next.
+```
+::
+
+## Loop Semantics — Capture & `forEach` Trap
+
+::code-wrapper{language="dart"}
+```dart
+// Dart's `for` loop variable is a SINGLE variable reassigned each iteration
+// (like JS `var`, NOT like JS `let` or Rust). Closures capture it by reference.
+
+// ❌ Anti-pattern: closures in a loop all capture the same variable.
+var callbacks = <int Function()>[];
+for (var i = 0; i < 3; i++) {
+  callbacks.add(() => i);
+}
+print(callbacks.map((f) => f()).toList());  // [3, 3, 3] — all see final value of i
+
+// ✓ Correct: capture per-iteration in a `final` local.
+var callbacksFixed = <int Function()>[];
+for (var i = 0; i < 3; i++) {
+  final captured = i;  // fresh per iteration, immutable
+  callbacksFixed.add(() => captured);
+}
+print(callbacksFixed.map((f) => f()).toList());  // [0, 1, 2]
+
+// `forEach` is a METHOD, not a loop — `continue`/`break` don't work inside it.
+// ❌ Anti-pattern: using `continue` in `forEach`.
+[1, 2, 3].forEach((x) {
+  // if (x == 2) continue;  // ✗ compile error — no continue in a callback
+  if (x == 2) return;  // ✓ `return` skips this callback invocation (like continue)
+  print(x);  // 1, 3
+});
+
+// ✓ For `continue`/`break` semantics, use a real loop:
+for (var x in [1, 2, 3]) {
+  if (x == 2) continue;
+  print(x);  // 1, 3
+}
+```
+::
+
+## `assert` — Debug-Only Invariants
+
+::code-wrapper{language="dart"}
+```dart
+// assert() runs ONLY in debug (JIT/VM). In AOT (release), it's completely stripped.
+// Use for development-time invariants — conditions that indicate a bug if false.
+
+void transfer(Account from, Account to, int amount) {
+  assert(amount > 0, 'Transfer amount must be positive');
+  assert(from.balance >= amount, 'Insufficient funds — caller should check first');
+  // These assertions catch programming errors during development.
+  // In release, they vanish — zero overhead. But the checks are NOT runtime validation.
+
+  // For user-facing validation, use explicit checks:
+  if (amount <= 0) throw ArgumentError('Amount must be positive: $amount');
+  if (from.balance < amount) throw StateError('Insufficient funds');
+
+  from.debit(amount);
+  to.credit(amount);
+}
+
+// assert with a lambda body for expensive checks (only evaluated in debug):
+assert(() {
+  _validateInvariants();  // complex check — stripped in release
+  return true;
+}());
+```
+::
+
+## 💡 Tips & Tricks
+
+- **Idiom**: remove `default`/`_` from switches over sealed types and enums — let the compiler enforce exhaustiveness. Adding a new case causes a compile error at every switch, forcing you to handle it. This is Dart 3's most powerful refactoring safety net.
+- **Idiom**: use switch expressions for value mapping — `switch (x) { 200 => 'OK', _ => 'ERR' }` is concise and returns a value. Use for status code mapping, enum-to-string, result unwrapping. Prefer over `if-else` chains for multi-way dispatch.
+- **Idiom**: use patterns for destructuring — `case Success(:final value)` extracts `.value` directly in the switch arm. Eliminates explicit casts and field access. Combines type checking + extraction in one expression.
+- **Idiom**: use guard clauses (`when`) for additional conditions — `case (int x, int y) when x > 0 && y > 0` adds a boolean predicate to a pattern. Use for sub-case filtering without nested `if`.
+- **Debug**: `assert(() { _validateInvariants(); return true; }())` — the lambda body is fully stripped in AOT (including side effects). Use for expensive debug-only validation that must not run in production.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Conditions must be `bool`**: `if (x)` where `x` is `int`, `String`, `List`, or `null` is a compile error. Dart has no truthy/falsy. Compare explicitly: `if (x != null)`, `if (list.isNotEmpty)`.
+- **`switch` doesn't fall through by default**: each non-empty case must end with `break`/`return`/`throw`/`continue`. Only empty cases (no body) fall through. Forgetting the terminator is a compile error (unlike C/Java).
+- **`default`/`_` defeats exhaustiveness**: adding `_` to a switch over a sealed type makes it non-exhaustive-checked — new subtypes are silently caught by the wildcard. Remove `_` for sealed types and enums.
+- **`assert` is stripped in AOT**: the entire expression (including side effects) vanishes in release. Never put business logic, side effects, or runtime validation in `assert`.
+- **`for` loop variable is shared across iterations**: closures capturing `i` see the final value. Use `final captured = i;` inside the loop body for per-iteration capture.
+- **`forEach` doesn't support `continue`/`break`**: it's a method taking a callback. Use `return` to skip (like `continue`), but there's no `break` equivalent. Use a real `for` loop for control flow.
+- **`for-in` on `Map` iterates keys**: `for (var k in map)` iterates keys (a `Map` is `Iterable` of keys). Use `for (var entry in map.entries)` for key-value pairs.
+- **Labeled `break` is rarely idiomatic**: `outer: for (...) { for (...) { break outer; } }` works but signals overly complex control flow. Extract to a function and use `return`.
+- **`do-while` runs at least once**: the body executes before the condition check. Use for read-then-check patterns (e.g., prompt → validate → repeat).
+
+## 🧠 Spot the Bug
+
+A team adds `Status.cancelled` to their enum. The UI silently shows "Completed" for cancelled orders:
+
+::code-wrapper{language="dart"}
+```dart
+enum Status { pending, active, completed, cancelled }
+
+String label(Status s) => switch (s) {
+  Status.pending => 'Pending',
+  Status.active => 'Active',
+  _ => 'Completed',  // catches both completed AND cancelled
+};
+```
+::
+
+Why is this a silent bug, and how to prevent it permanently?
 
 <details>
 <summary>Answer</summary>
 
-The `default` case catches `Status.cancelled` and returns `'Completed'` — wrong! The `default` makes the switch non-exhaustive-checked, so the compiler doesn't flag the missing `Status.cancelled` case. The bug is silent: cancelled items show as "Completed".
+The `_` (wildcard) catches every unhandled case — including the newly added `Status.cancelled`. It returns `'Completed'` for cancelled orders, which is semantically wrong. The wildcard makes the switch non-exhaustive-checked, so the compiler can't flag the missing case.
 
-The fix — remove the `default` and handle all cases explicitly. With exhaustive checking (Dart 3), adding `Status.cancelled` causes a compile error at this switch, forcing the developer to handle it:
+The fix — remove `_`, handle every case explicitly:
 
 ```dart
 enum Status { pending, active, completed, cancelled }
 
-String label(Status s) {
-	return switch (s) {
-		Status.pending => 'Pending',
-		Status.active => 'Active',
-		Status.completed => 'Completed',
-		Status.cancelled => 'Cancelled',
-	};   // exhaustive — compiler ensures all cases
-}
+String label(Status s) => switch (s) {
+  Status.pending => 'Pending',
+  Status.active => 'Active',
+  Status.completed => 'Completed',
+  Status.cancelled => 'Cancelled',
+};
 ```
-::
-Now adding a new `Status` value causes a compile error here (non-exhaustive switch), and the developer must handle it. No silent bugs.
 
-**The lesson**: avoid `default` in `switch` over `enum`s — let Dart 3's exhaustiveness checking catch missing cases. Adding a new enum value then flags all switches that need updating. `default` defeats this safety net and causes silent mishandling.
+Now if `Status.shipped` is added later, this switch becomes a **compile error**: "The switch expression does not exhaustively cover all possible cases." The compiler forces you to handle `shipped` — no silent bugs.
+
+The rule: **never use `_` or `default` in switches over enums or sealed types.** Let exhaustiveness checking be your safety net. The wildcard is acceptable for open types (int, String) where you can't enumerate all cases.
 
 </details>
-
-## Summary
-
-You can use `if`/`else`, loops (`for`, `for-in`, `while`, `do-while`), `break`/`continue` (labeled), `switch` (statements and Dart 3 expressions, exhaustive for enums, pattern matching), and `assert` (debug-only) — with the no-fallthrough and no-`default`-for-exhaustiveness traps avoided. Next: functions and scope.

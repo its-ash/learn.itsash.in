@@ -1,35 +1,93 @@
 # 09 — Comprehensions & Generators
 
-## The Four Comprehension Forms
-
-Python has four comprehension syntaxes, all sharing the same `for ... if ...` grammar but producing different container types.
+## Production Data Pipeline — Lazy Evaluation End-to-End
 
 ::code-wrapper{language="python"}
 ```python
-# List comprehension — eager, builds a full list in memory
-squares_list = [x ** 2 for x in range(5)]
-print(squares_list)          # [0, 1, 4, 9, 16]
-print(type(squares_list))      # <class 'list'>
+# ── A production-grade log processing pipeline ──
+# Each stage is a generator — no intermediate lists, O(1) memory regardless of file size.
+# This pattern processes multi-GB log files with constant memory.
 
-# Set comprehension — eager, deduplicates
-remainders_set = {x % 3 for x in range(10)}
-print(remainders_set)            # {0, 1, 2}
-print(type(remainders_set))        # <class 'set'>
+import re
+from collections.abc import Iterator
 
-# Dict comprehension — eager, key: value pairs
-squares_dict = {x: x ** 2 for x in range(5)}
-print(squares_dict)                  # {0: 0, 1: 1, 2: 4, 3: 9, 4: 16}
-print(type(squares_dict))              # <class 'dict'>
+# Stage 1: lazy line reader — yields one line at a time, never loads the whole file
+def read_lines(path: str) -> Iterator[str]:
+    """Yield lines from a file — the `open` file object IS a line iterator."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        yield from f   # delegates to the file's own __iter__ — zero boilerplate
 
-# Generator expression — LAZY, produces values on demand, uses () not []
-squares_gen = (x ** 2 for x in range(5))
-print(type(squares_gen))                 # <class 'generator'>
-print(list(squares_gen))                   # [0, 1, 4, 9, 16] — must consume to see values
-print(list(squares_gen))                     # [] — ALREADY EXHAUSTED, can't reuse!
+# Stage 2: filter — only lines matching a regex (still lazy, one at a time)
+LOG_RE = re.compile(r"(\d{4}-\d{2}-\d{2}) \[(\w+)\] (.+)")
+def parse_entries(lines: Iterator[str]) -> Iterator[tuple[str, str, str]]:
+    """Parse log lines into (date, level, message) tuples — skips unparseable lines."""
+    for line in lines:
+        if match := LOG_RE.match(line.strip()):
+            yield match.groups()   # walrus: assign + test in one expression
+
+# Stage 3: transform — extract structured data from parsed entries
+def errors_only(entries: Iterator) -> Iterator[dict]:
+    """Filter to ERROR level, yield structured dicts."""
+    for date, level, message in entries:
+        if level == "ERROR":
+            yield {"date": date, "message": message, "length": len(message)}
+
+# Stage 4: aggregate — consume the pipeline, produce final result
+def count_errors(path: str) -> dict[str, int]:
+    """Count errors by date — the ENTIRE pipeline is consumed here, at the end."""
+    counts: dict[str, int] = {}
+    for entry in errors_only(parse_entries(read_lines(path))):
+        counts[entry["date"]] = counts.get(entry["date"], 0) + 1
+    return counts
+
+# The pipeline: read_lines → parse_entries → errors_only → count_errors
+# Each stage pulls from the previous on-demand — only ONE line is in memory at any moment.
+# No intermediate list of all lines, all entries, or all errors is ever materialized.
 ```
 ::
 
-**The critical distinction**: list/set/dict comprehensions are **eager** — they run to completion immediately and hold every result in memory. A generator expression is **lazy** — it produces one value at a time, on demand, and is a **single-use iterator** that can't be restarted once consumed.
+::code-wrapper{language="python"}
+```python
+# ── Generator-based coroutine: two-way communication via send() ──
+# Before async/await, generators were Python's coroutine primitive.
+# send() pushes a value INTO the generator at the yield point — still useful
+# for stateful streaming parsers and co-routine-style data pumps.
+
+def streaming_average():
+    """Consume values via .send(), yields the running average after each input.
+    The FIRST .send() must be None (or use next() to prime) — there's no yield
+    expression yet to receive a value at the start."""
+    total = 0
+    count = 0
+    average = None
+    while True:
+        # yield returns the current average to the caller
+        # .send(value) resumes here, assigning `value` to the left side
+        value = yield average
+        total += value
+        count += 1
+        average = total / count
+
+# Prime the coroutine — advance to the first yield before sending
+coro = streaming_average()
+next(coro)              # prime: advances to `value = yield average`, returns None
+print(coro.send(10))    # 10.0 — total=10, count=1
+print(coro.send(20))    # 15.0 — total=30, count=2
+print(coro.send(30))    # 20.0 — total=60, count=3
+
+# ── Generator exhaustion: the silent failure mode ──
+# ANTI-PATTERN: reusing a generator across multiple consumption passes
+gen = (x * 2 for x in range(5))
+print(sum(gen))   # 0+2+4+6+8 = 20
+print(sum(gen))   # 0! — exhausted, silently produces 0, NOT an error
+
+# CORRECT: materialize to a list if multiple passes are needed
+data = [x * 2 for x in range(5)]   # list — reusable, indexable, len()-able
+print(sum(data))   # 20
+print(sum(data))   # 20 — still works
+print(len(data))   # 5 — generators have no len()
+```
+::
 
 ## Nested Comprehensions and Multiple Clauses
 

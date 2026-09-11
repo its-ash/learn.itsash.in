@@ -1,215 +1,298 @@
-# 01 — Introduction & Setup
+---
+title: "Bash 01 — Shell Architecture, Shebang Semantics & Strict-Mode Internals"
+description: "Deep-dive into Bash interpreter resolution, shebang mechanics, strict-mode internals (set -euo pipefail), and production-grade script scaffolding. Code-first reference for mid-to-senior engineers."
+---
 
-Bash (Bourne Again Shell) is the standard shell on most Linux and macOS systems. It's both a command interpreter (interactive) and a scripting language (automating tasks).
+# 01 — Shell Architecture, Shebang Semantics & Strict-Mode Internals
 
-## Why Bash?
-
-- **Everywhere** — pre-installed on Linux, macOS, and WSL on Windows.
-- **Automation** — glue commands, scripts, cron jobs, CI/CD.
-- **Pipelines** — combine small tools (`grep`, `sed`, `awk`, `sort`, `uniq`) into powerful pipelines.
-- **System administration** — manage files, processes, services.
-
-## The Terminal vs Scripts
-
-- **Interactive** — type commands in the terminal, get immediate output.
-- **Script** — a file (`.sh`) with a sequence of commands, run with `bash script.sh` or `./script.sh`.
-
-## Your First Script
-
-Create `hello.sh`:
+## How the Kernel Resolves a Shebang
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
-echo "Hello, Bash!"
+# The kernel's execve() reads the first ~128 bytes (BINPRM_BUF_SIZE).
+# If it finds "#!", the rest of the line is split into interpreter + optional single arg.
+#   #!/usr/bin/env bash        → execve("/usr/bin/env", ["env", "bash", scriptpath])
+#   #!/bin/bash                → execve("/bin/bash", ["bash", scriptpath])
+#   #!/usr/bin/env bash -Eeuo pipefail → execve("/usr/bin/env", ["env", "bash -Eeuo pipefail", scriptpath])
+#     ^-- "bash -Eeuo pipefail" is passed as ONE arg to env (kernel allows max 1 arg).
+#          env splits it via its own argv parsing — works on Linux, NOT portable to all Unices.
+#
+# CRLF trap: "#!/usr/bin/env bash\r\n" → interpreter name is "bash\r" → "No such file or directory".
+# Fix: sed -i 's/\r$//' script.sh  OR  configure editor to LF.
+
+# Verify the resolved interpreter path and version at runtime:
+printf 'interpreter: %s\n' "$(readlink -f "$(command -v bash)")"
+printf 'bash version: %s\n' "$BASH_VERSION"           # e.g. 5.2.15(1)-release
+printf 'bash major:  %d\n' "$BASH_VERSINFO[0]"        # e.g. 5 — use for feature gating
+(( BASH_VERSINFO[0] >= 4 )) || { echo "Requires Bash 4+ (associative arrays, mapfile)." >&2; exit 1; }
 ```
 ::
 
-### Run it
+## Production Script Skeleton (Annotated)
+
+Every script below uses this skeleton. Each line is load-bearing.
 
 ::code-wrapper{language="bash"}
 ```bash
-chmod +x hello.sh   # make executable
-./hello.sh          # run
+#!/usr/bin/env bash
+# ── Strict mode ──────────────────────────────────────────────
+set -Eeuo pipefail
+#  │ │ │  └─ pipefail: pipeline returns rightmost non-zero exit (default: returns last cmd only).
+#  │ │ └──── u: unset variable expansion is a fatal error (not empty string).
+#  │ └────── e: exit immediately on any command failure (with caveats — see below).
+#  └──────── E: ERR trap inherits into functions and subshells (critical for trap ERR).
+#
+# ── Defensive globals ───────────────────────────────────────
+shopt -s inherit_errexit 2>/dev/null || true  # Bash 4.4+: subshells inherit `set -e` (default: off!)
+shopt -s nullglob        # Unmatched globs expand to nothing (not the literal pattern).
+shopt -s globstar        # ** matches recursively (find **/*.py).
+shopt -s extglob         # Extended pattern matching: ?(), *(), +(), @(), !().
+IFS=$' \t\n'            # Explicit IFS — word-splitting on space, tab, newline only.
+
+# ── Constants ───────────────────────────────────────────────
+readonly SCRIPT_NAME=$(basename "${BASH_SOURCE[0]}")
+readonly SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)  # resolves symlinks? No — see 13.
+readonly LOG_FD=2       # stderr
+
+# ── Error handling ──────────────────────────────────────────
+err_report() {
+    printf '[%s] %s:%d: %s failed (exit %d)\n' \
+        "$(date -Iseconds)" "$SCRIPT_NAME" "${1:-0}" "${BASH_COMMAND:-?}" "${2:-0}" >&"$LOG_FD"
+}
+trap 'err_report "$LINENO" "$?"' ERR       # fires on any uncaught command failure (needs set -e -E).
+trap 'cleanup' EXIT                          # fires on any exit path — normal, set -e abort, signal.
+
+cleanup() {
+    local exit_code=$?
+    [[ -n "${tmpdir:-}" && -d "$tmpdir" ]] && rm -rf -- "$tmpdir"
+    exit "$exit_code"   # preserve the original exit code (trap EXIT receives it).
+}
+
+# ── Logging ─────────────────────────────────────────────────
+declare -i LOG_LEVEL=${LOG_LEVEL:-3}  # 0=trace 1=debug 2=info 3=warn 4=error 5=off
+log() {
+    local level=$1; shift
+    local -A levels=([TRACE]=0 [DEBUG]=1 [INFO]=2 [WARN]=3 [ERROR]=4 [OFF]=5)
+    (( levels[$level] >= LOG_LEVEL )) && printf '[%s] %s: %s\n' "$(date -Iseconds)" "$level" "$*" >&"$LOG_FD"
+}
+
+die() { log ERROR "$*"; exit 1; }
+
+# ── Main ─────────────────────────────────────────────────────
+main() {
+    log INFO "Starting $SCRIPT_NAME"
+    tmpdir=$(mktemp -d)  # mktemp -d: creates 0700-permission temp dir — race-free, no symlink attack.
+    log DEBUG "tmpdir=$tmpdir"
+    # ... script logic ...
+    log INFO "Done"
+}
+
+main "$@"
 ```
 ::
-Or without making it executable:
+
+## Anti-Pattern: The Naive Shebang
 
 ::code-wrapper{language="bash"}
 ```bash
-bash hello.sh
-```
-::
-## The Shebang (`#!`)
+# ❌ NAIVE — hardcodes path, breaks on NixOS, Homebrew, conda, alpine
+#!/bin/bash
 
-The first line `#!/usr/bin/env bash` is the **shebang** — it tells the system which interpreter to use. `#!/usr/bin/env bash` is preferred over `#!/bin/bash` (finds `bash` via the `PATH`, more portable).
+# ❌ NAIVE — passes flags as single arg to env, non-portable
+#!/usr/bin/env bash -euo pipefail
 
-Common shebangs:
-- `#!/usr/bin/env bash` — Bash script.
-- `#!/usr/bin/env sh` — POSIX shell (more portable, fewer features).
-- `#!/usr/bin/env python3` — Python script.
-- `#!/usr/bin/env node` — Node.js script.
-
-## `echo` and `printf`
-
-::code-wrapper{language="bash"}
-```bash
-echo "Hello"           # Hello (with newline)
-echo -n "No newline"   # no trailing newline
-printf "%s is %d\n" "Alice" 30   # formatted (like C printf)
-```
-::
-`printf` is more portable and supports formatting. `echo` behavior varies between shells (especially with `-e`/`-n`); `printf` is consistent.
-
-## Which Bash?
-
-Check your Bash version:
-
-::code-wrapper{language="bash"}
-```bash
-bash --version
-```
-::
-Bash 4.0+ (2009) added associative arrays, `coproc`, etc. Bash 5.0+ (2019) added `--` handling, `${var@operator}`. macOS ships Bash 3.2 (due to licensing — GPLv3). On macOS, install Bash 5 via Homebrew: `brew install bash`.
-
-## A Slightly Bigger Script
-
-::code-wrapper{language="bash"}
-```bash
+# ✅ CORRECT — portable, strict mode set in-body (not shebang)
 #!/usr/bin/env bash
 set -euo pipefail
-
-name="${1:-World}"
-echo "Hello, $name!"
-echo "Today is $(date +%A)"
 ```
 ::
-- `set -euo pipefail` — enable strict mode (chapter 18).
-- `"${1:-World}"` — the first argument, defaulting to `World` if not provided.
-- `$(date +%A)` — command substitution (runs `date`, inserts output).
 
-Run it:
+## `set -e` Doesn't Catch Everything
 
 ::code-wrapper{language="bash"}
 ```bash
-./hello.sh Alice
-# Hello, Alice!
-# Today is Monday
+set -e
+
+# ── Commands whose exit status is "tested" don't trigger -e ──
+false && echo "never"          # OK — false is tested by &&
+if false; then echo "never"; fi # OK — false is tested by if
+false || true                   # OK — false is tested by ||
+! false                         # OK — negated
+
+# ── Pipeline: only the LAST command's status matters (without pipefail) ──
+false | true                     # exit 0 — false is masked!
+# pipefail fixes this: set -o pipefail  → false | true exits 1.
+
+# ── Functions: a function returning non-zero triggers -e ONLY if called as a simple command ──
+maybe_fail() { return 1; }
+maybe_fail                       # ✗ script exits (simple command)
+maybe_fail || true               # OK — tested by ||
+if maybe_fail; then echo "ok"; fi # OK — tested by if
+
+# ── Subshell vs command substitution ──
+(false)                           # ✗ subshell failure propagates with -e
+x=$(false)                       # ✗ command substitution failure propagates with -e (Bash 4.4+)
+x=$(false) || true               # OK — tested
+
+# ── `grep` returns 1 when no match — silently kills the script ──
+grep "pattern" file.txt          # ✗ if no match → exit 1 → script dies
+grep "pattern" file.txt || true  # OK — explicit "no match is fine"
+grep -q "pattern" file.txt && echo "found"  # OK — tested by &&
 ```
 ::
-## Comments
+
+## `set -u` and the Default Expansion Trap
 
 ::code-wrapper{language="bash"}
 ```bash
-# This is a comment
-echo "hi"   # inline comment
+set -u
+
+echo "$UNDEFINED_VAR"             # ✗ bash: UNDEFINED_VAR: unbound variable — fatal
+echo "${UNDEFINED_VAR:-}"         # OK — :- provides empty default, doesn't error
+echo "${UNDEFINED_VAR:-default}"  # OK — provides "default"
+echo "${UNDEFINED_VAR-default}"   # OK — but ONLY if unset; empty string still errors
+echo "${UNDEFINED_VAR:?missing}"  # ✗ prints "missing" to stderr, exits — even with :-
+
+# ── Arrays are tricky with set -u ──
+declare -a arr=()
+echo "${arr[@]}"                  # OK — empty array, no error (Bash 4.4+)
+# Bash < 4.4: this errors ("unbound variable") — use ${arr[@]:-}
+
+declare -A map=()
+echo "${map[key]}"                # ✗ if key doesn't exist → unbound (some versions)
+echo "${map[key]:-}"              # OK — safe access pattern
 ```
 ::
-`#` starts a comment (to the end of the line). There are no block comments in Bash.
 
-## Getting Help
-
-- `man bash` — the Bash manual (long but comprehensive).
-- `man <command>` — a command's manual (`man grep`, `man sed`).
-- `tldr <command>` — concise examples (`tldr grep`), install via `npm install -g tldr`.
-- `command --help` — brief help for most commands.
-
-## ShellCheck
-
-[ShellCheck](https://www.shellcheck.net) is a linter for Bash — catches common bugs and suggests improvements. Install it:
+## Edge Cases: `echo` vs `printf` Portability
 
 ::code-wrapper{language="bash"}
 ```bash
-brew install shellcheck           # macOS
-apt install shellcheck            # Debian/Ubuntu
+# ── echo is non-portable for escape sequences ──
+echo -e "line1\nline2"    # Bash: works. dash/POSIX sh: prints "-e line1\nline2" literally.
+echo -n "no newline"      # Bash: works. Some systems: -n printed literally.
+
+# ── printf is the portable choice ──
+printf '%s\n' "line1" "line2"     # always: two lines with newlines
+printf 'exit: %d\n' 42            # C-style format — consistent everywhere
+printf '%-20s %5d\n' "label" 42   # left-align string (20 cols), right-align int (5 cols)
+printf '%x\n' 255                 # ff (hex)
+printf '%b\n' 'tab\there'         # interpret backslash escapes (like echo -e, but portable)
+printf '%q\n' "string with spaces" # shell-quoted: string\ with\ spaces (safe for re-eval)
+
+# ── echo behavior depends on xpg_echo and shopt ──
+shopt -s xpg_echo   # echo now interprets \n, \t (like echo -e always)
+echo "line1\nline2"  # prints two lines (xpg_echo on)
+shopt -u xpg_echo   # echo now prints \n literally
 ```
 ::
-Run it:
+
+## Edge Cases: CRLF Line Endings
 
 ::code-wrapper{language="bash"}
 ```bash
-shellcheck hello.sh
+# Symptom: bash: ./script.sh: /usr/bin/env: bad interpreter: No such file or directory
+# Cause: shebang is "#!/usr/bin/env bash\r" — \r is part of the interpreter name.
+
+# Detect:
+file script.sh  # "ASCII text, with CRLF line terminators"
+
+# Fix:
+sed -i 's/\r$//' script.sh
+# Or: dos2unix script.sh
+# Or in Vim: :set fileformat=unix
+
+# Prevent in Git:
+# .gitattributes:
+# *.sh text eol=lf
 ```
 ::
-Use it on every script — it catches quoting issues, `set -e` gaps, unquoted variables, and many footguns. VS Code has a ShellCheck extension.
 
-## VS Code
-
-Install the **Shell Script** extension (built-in) and **shellcheck** (timonwong.shellcheck). They provide:
-- Syntax highlighting.
-- Linting (ShellCheck).
-- Snippets.
-- "ShellCheck: Fix all" for auto-fixes.
-
-## Project Structure
-
-Bash scripts are usually standalone files, but for a larger project:
-
-::code-wrapper{language="text"}
-```text
-my_project/
-├── bin/
-│   └── my_script.sh        # main entry point
-├── lib/
-│   └── utils.sh            # sourced library
-├── test/
-│   └── test_utils.sh       # tests (using bats, etc.)
-├── README.md
-```
-::
 ## 💡 Tips & Tricks
 
-- **Idiom**: always start scripts with `#!/usr/bin/env bash` (shebang) and `set -euo pipefail` (strict mode) — the shebang makes it executable directly (`./script.sh`), strict mode catches errors early (exit on error, error on undefined var, fail on pipe failure). See chapter 18.
-- **Idiom**: use ShellCheck on every script — it catches quoting issues, unquoted variables, `set -e` gaps, and many common Bash footguns. Install the VS Code extension for real-time linting.
-- **Idiom**: use `#!/usr/bin/env bash` (not `#!/bin/bash`) — `env` finds `bash` via `PATH`, more portable across systems where Bash is in different locations. `#!/bin/bash` assumes a specific path.
-- **Idiom**: use `printf` over `echo` for formatting and portability — `printf "%s is %d\n" "Alice" 30` formats reliably. `echo`'s behavior with `-e`/`-n` varies between shells; `printf` is consistent.
-- **Idiom**: use `man <command>` and `tldr <command>` for reference — `man` is comprehensive, `tldr` is concise examples. Install `tldr` (`npm install -g tldr`) for quick lookups.
+::code-wrapper{language="bash"}
+```bash
+# ── Feature-gate by Bash version ──
+if (( BASH_VERSINFO[0] >= 4 )); then
+    declare -A config       # associative arrays (Bash 4+)
+else
+    # Fallback: parallel indexed arrays or a config file
+    :
+fi
+
+# ── Gate by feature, not version (more robust) ──
+if ! declare -A _test_map 2>/dev/null; then
+    die "Associative arrays not available — need Bash 4+."
+fi
+
+# ── Detect if script is being sourced ──
+# When sourced, BASH_SOURCE[0] != BASH_SOURCE[1] (caller). When executed, they match.
+(return 0 2>/dev/null) && SOURCED=1 || SOURCED=0
+if (( SOURCED )); then
+    # Don't run main() when sourced — act as a library.
+    :
+else
+    main "$@"
+fi
+
+# ── Atomic script self-exec: re-exec with bash if run by sh ──
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"  # re-exec under bash if invoked by sh/dash
+fi
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **macOS ships Bash 3.2**: due to GPLv3 licensing, macOS's default `/bin/bash` is 3.2 (2007). No associative arrays, no `mapfile`, etc. Install Bash 5 via `brew install bash`, use `#!/usr/bin/env bash` to find it.
-- **`echo -e` is not portable**: in POSIX `sh`, `echo -e` prints `-e` literally. Use `printf` for escape sequences. `echo -e` works in Bash but not all shells.
-- **`./script.sh` vs `bash script.sh`**: `./script.sh` uses the shebang's interpreter (and needs execute permission). `bash script.sh` explicitly uses `bash` (no execute permission needed, shebang ignored).
-- **Execute permission**: `./script.sh` needs `chmod +x`. `bash script.sh` doesn't. For scripts you run often, `chmod +x` once.
-- **Spaces in filenames**: `"my file.txt"` (quoted) works; `my file.txt` (unquoted) is two args. Always quote variables: `"$file"`.
-- **CRLF line endings break scripts**: Windows line endings (`\r\n`) cause `bash: ./script.sh: /usr/bin/env: bad interpreter: No such file or directory`. Use LF (`\n`) — `dos2unix script.sh` or configure your editor.
-- **`set -e` doesn't catch everything**: commands in `if`/`&&`/`||` conditions don't trigger exit. Pipes fail only with `set -o pipefail`. See chapter 18.
-- **`$0` is the script name, `$1`…`$9` are args**: `$10` needs `${10}` (or it's `$1` followed by `0`). `$@` is all args, `$#` is the count.
-
-## 🧠 Spot the Bug
-
-A developer writes a script, but the shebang line causes an error:
-
 ::code-wrapper{language="bash"}
 ```bash
-#! /usr/bin/env bash
-echo "Hello"
+# ── Shebang max length is 128 bytes (BINPRM_BUF_SIZE - 2) ──
+# A path longer than 126 chars silently fails with "No such file or directory".
+
+# ── Shebang with spaces: kernel splits on first whitespace ──
+#!/usr/bin/env bash  # "bash" is the single arg to env
+# But: #!/usr/bin/env /opt/bash  → fails (env doesn't resolve absolute paths without PATH lookup)
+
+# ── `set -e` is disabled inside command substitution in Bash < 4.4 ──
+# Bash 4.3: x=$(false); echo "still here"  → prints "still here" (no exit!)
+# Bash 4.4+: x=$(false); echo "still here" → exits (inherit_errexit helps too)
+
+# ── `set -e` in a subshell with `|` ──
+set -e
+(echo "subshell"; false) | cat   # subshell exits 1, but pipefail needed to catch it
+# Without pipefail: cat exits 0 → pipeline exits 0 → no failure detected.
+
+# ── `trap ERR` doesn't fire on `exit` ──
+# trap ERR fires on command failures. trap EXIT fires on any exit (including exit, set -e, signals).
+# For cleanup, use trap EXIT. For logging the failing command, use trap ERR.
+# Combine: trap 'err_handler' ERR; trap 'cleanup' EXIT
+
+# ── `BASH_SOURCE[0]` vs `$0` ──
+# $0: the name the script was invoked as (may be a symlink, or "bash" if sourced)
+# BASH_SOURCE[0]: the file path of the current script (works when sourced)
+# Use BASH_SOURCE[0] for SCRIPT_DIR — $0 is unreliable.
 ```
 ::
 
-What's wrong?
+## 🧠 Quick Quiz
+
+What exit code does this produce, and why?
+
+::code-wrapper{language="bash"}
+```bash
+set -euo pipefail
+false | true
+echo "reached"
+```
+::
 
 <details>
 <summary>Answer</summary>
 
-Actually, `#! /usr/bin/env bash` (with a space after `#!`) works on most systems — the space is allowed. So this isn't the bug.
+- `set -e` alone: pipeline exits with `true`'s status (0). Script continues, prints "reached". `false` is silently masked.
+- `set -o pipefail`: pipeline exits with `false`'s status (1). `set -e` catches it, script dies before "reached".
 
-The common shebang bug is a **typo or wrong path**: `#!/bin/bash` on a system where Bash is in `/usr/bin/bash` (or vice versa). Or `#!/usr/bin/env bashx` (typo). Or **CRLF line endings** (Windows), which make the shebang `#!/usr/bin/env bash\r` — the `\r` becomes part of the interpreter name, and the system can't find `bash\r`.
-
-If the error is `bash: ./script.sh: /usr/bin/env: bad interpreter: No such file or directory`, the cause is almost always CRLF line endings. Fix with:
-
-```bash
-dos2unix script.sh
-# or
-sed -i 's/\r$//' script.sh
-```
-::
-Configure your editor (VS Code: bottom-right "CRLF" → "LF") to use LF for Bash scripts.
-
-**The lesson**: shebang errors are usually (1) wrong interpreter path (use `#!/usr/bin/env bash` for portability), (2) typos, or (3) CRLF line endings (Windows). Use LF line endings and `#!/usr/bin/env bash`.
+**The lesson**: `set -e` without `pipefail` is a false sense of safety — the first command in a pipeline can fail silently. Always use the full `set -euo pipefail`.
 
 </details>
-
-## Summary
-
-You installed/verified Bash, wrote and ran a script (shebang, `chmod +x`), used `echo`/`printf`, comments, and command substitution (`$(...)`). You know about Bash versions (macOS 3.2), ShellCheck (the linter), and the project structure — with the CRLF and `echo -e` portability traps noted. Next: variables and data types.

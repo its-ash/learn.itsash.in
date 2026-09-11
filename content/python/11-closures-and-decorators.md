@@ -1,27 +1,58 @@
 # 11 — Closures & Decorators
 
-## Closures: Functions That Remember
-
-A **closure** is an inner function that captures variables from its enclosing (lexical) scope, keeping them alive even after the outer function has returned.
+## Closure Mechanics — `__closure__` and Cell Objects
 
 ::code-wrapper{language="python"}
 ```python
-def make_multiplier(factor):
-    def multiply(x):
-        return x * factor       # `factor` is captured from the enclosing scope
-    return multiply
+# ── Under the hood: closures store variables in "cell" objects, not a dict ──
+# A cell is a mutable container shared between the enclosing scope and the closure.
+# The closure doesn't copy the value — it holds a REFERENCE to the same cell.
 
-double = make_multiplier(2)
-triple = make_multiplier(3)
+def make_counter(start: int = 0):
+    """Each call creates a fresh scope with its own cell for `count`."""
+    count = start                    # local variable in make_counter's scope
 
-print(double(5))   # 10
-print(triple(5))     # 15
-print(double.__closure__)   # (<cell at 0x...: int object at 0x...>,)
-print(double.__closure__[0].cell_contents)   # 2
+    def increment() -> int:
+        nonlocal count               # binds `count` to the ENCLOSING cell, not a new local
+        count += 1
+        return count
+
+    return increment
+
+counter_a = make_counter(10)
+counter_b = make_counter(100)
+
+print(counter_a())   # 11 — counter_a's cell holds count=10, incremented to 11
+print(counter_a())   # 12 — same cell, persistent state
+print(counter_b())   # 101 — DIFFERENT cell, independent state
+
+# Introspect the closure's captured cells — the actual mechanism
+print(counter_a.__closure__)                         # (<cell at 0x...: int object at 0x...>,)
+print(counter_a.__closure__[0].cell_contents)        # 12 — the current value in the cell
+
+# ── The late-binding trap: closures capture VARIABLES, not VALUES ──
+# ANTI-PATTERN: creating closures in a loop — they all share the SAME loop variable
+callbacks = []
+for i in range(3):
+    callbacks.append(lambda: i)      # captures `i` by reference, not by value at creation
+
+print([cb() for cb in callbacks])    # [2, 2, 2] — all return the FINAL value of i
+
+# FIX 1: default argument — evaluated once at def time, captures the CURRENT value
+callbacks_fixed = []
+for i in range(3):
+    callbacks_fixed.append(lambda i=i: i)   # i=i binds current i as default arg
+
+print([cb() for cb in callbacks_fixed])    # [0, 1, 2] — correct
+
+# FIX 2: factory function — each call creates a genuinely new scope with its own cell
+def make_callback(i: int):
+    return lambda: i               # `i` here is a parameter — fresh cell per call
+
+callbacks_factory = [make_callback(i) for i in range(3)]
+print([cb() for cb in callbacks_factory])  # [0, 1, 2] — correct
 ```
 ::
-
-Each call to `make_multiplier` creates a fresh scope with its own `factor`. `double` and `triple` are independent closures, each carrying its own private, persistent copy of that variable — this is how Python implements "objects with one method and hidden state" without writing a class.
 
 ## `nonlocal` — Mutating an Enclosing Variable
 

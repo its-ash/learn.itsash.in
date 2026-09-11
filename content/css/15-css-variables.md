@@ -1,160 +1,147 @@
-# 15 — CSS Variables (Custom Properties)
+---
+title: "15 — CSS Variables: Custom Properties as the Theming Engine"
+description: "Custom property cascade and inheritance, var() fallback vs invalid-value semantics, runtime theming via data-theme + prefers-color-scheme, JS setProperty bridge, and redefinition in @media. Code-first reference for production design-token systems."
+---
 
-CSS custom properties ("CSS variables") store reusable values, enabling theming, dynamic styling, and DRY code.
+# 15 — CSS Variables: Custom Properties as the Theming Engine
 
-## Defining and Using
+CSS custom properties (`--name`) are real properties that cascade, inherit, and are readable/writable from JS at runtime. They are *not* preprocessor text substitution. This is what makes them the theming engine: change a variable on `:root`, and every consumer re-paints in one frame.
+
+## Defining and Using — with fallback semantics
 
 ::code-wrapper{language="css"}
 ```css
 :root {
-	--primary: #3498db;
-	--spacing: 1rem;
-	--radius: 8px;
+  --primary: #3498db;
+  --spacing: 1rem;
+  --radius: 8px;
 }
-
 .button {
-	background: var(--primary);
-	padding: var(--spacing);
-	border-radius: var(--radius);
-	color: var(--text-color, #333);   /* fallback if --text-color is unset */
+  background: var(--primary);
+  padding: var(--spacing);
+  border-radius: var(--radius);
+  color: var(--text-color, #333);  /* fallback: used ONLY if --text-color is UNSET, not if it's invalid */
 }
 ```
 ::
-- Define with `--name: value;`.
-- Use with `var(--name)` or `var(--name, fallback)`.
-- By convention, define on `:root` (the highest level) for global scope.
 
-## Cascade and Inheritance
-
-CSS variables **inherit** — a variable defined on `:root` is available to all elements. A variable defined on a specific element is available to that element and its descendants:
+## The Cascade — variables inherit and cascade
 
 ::code-wrapper{language="css"}
 ```css
-:root { --color: blue; }
-.card { --color: red; }        /* .card and descendants see red */
-.card .title { color: var(--color); }   /* red */
-.other { color: var(--color); }         /* blue (from :root) */
+:root { --color: blue; }              /* global — every descendant inherits */
+.card { --color: red; }               /* .card and descendants see red; others still blue */
+.card .title { color: var(--color); } /* red (inherits from .card) */
+.other { color: var(--color); }       /* blue (inherits from :root) */
+/* Variables follow the normal cascade: later/more-specific rules override. They are
+   NOT static text substitution — they're real properties that inherit and cascade. */
 ```
 ::
-Variables follow the normal cascade — later/more-specific rules override. They're *not* static text substitution; they're real properties that inherit and cascade.
 
-## Validity and Fallbacks
+## The Invalid-Value Trap — fallback ≠ invalid
 
 ::code-wrapper{language="css"}
 ```css
-color: var(--undefined, #333);              /* fallback used */
-color: var(--primary, var(--default, blue)); /* nested fallback */
-color: var(--primary, blue, green);         /* 'blue, green' is the fallback (commas allowed) */
+:root { --gap: 10; }  /* unitless — invalid when used in padding */
+.box { padding: var(--gap); }  /* var(--gap) → "10" → padding: 10 → INVALID → property set to INITIAL (0) */
+/* ⚠️ The fallback in var(--gap, 10px) applies ONLY if --gap is UNSET, NOT if its value is invalid.
+   An invalid variable value makes the WHOLE property invalid → it goes to initial/inherited, not the fallback. */
 ```
 ::
-If a variable is invalid (e.g., `--gap: 10` without a unit), `var(--gap)` makes the *whole property* invalid (`color: var(--bad)` → `color: unset` to inherited/initial, not the fallback). The fallback only applies if the variable is *unset*, not if it's *invalid*.
 
-## Theming with CSS Variables
+### Anti-pattern: missing unit in a variable value
 
-### Light/dark theme
+::code-wrapper{language="css"}
+```css
+/* ❌ --gap: 10 (no unit) → padding: 10 is invalid → padding becomes 0 (initial), not the fallback */
+:root { --gap: 10; }
+.box { padding: var(--gap); }
+```
+::
+
+::code-wrapper{language="css"}
+```css
+/* ✓ Give the variable a unit, or multiply by 1px in calc(). */
+:root { --gap: 10px; }
+.box { padding: var(--gap); }  /* 10px */
+/* or */
+:root { --gap: 10; }
+.box { padding: calc(var(--gap) * 1px); }  /* 10px — adds the unit at use-site */
+```
+::
+
+## Theming — light/dark with `prefers-color-scheme` + `data-theme`
 
 ::code-wrapper{language="css"}
 ```css
 :root {
-	--bg: #fff;
-	--text: #333;
-	--primary: #3498db;
+  --bg: #fff; --fg: #333; --primary: #3498db;
 }
-@media (prefers-color-scheme: dark) {
-	:root {
-		--bg: #222;
-		--text: #eee;
-		--primary: #5dade2;
-	}
+@media (prefers-color-scheme: dark) {  /* system preference */
+  :root { --bg: #1a1a1a; --fg: #eee; --primary: #5dade2; }
 }
-body { background: var(--bg); color: var(--text); }
+[data-theme="dark"] {  /* manual toggle override (wins via attribute specificity) */
+  --bg: #1a1a1a; --fg: #eee; --primary: #5dade2;
+}
+body { background: var(--bg); color: var(--fg); }  /* one rule, themed by variables */
 ```
 ::
-### Manual toggle (data attribute)
 
-::code-wrapper{language="css"}
-```css
-:root { --bg: #fff; --text: #333; }
-[data-theme="dark"] { --bg: #222; --text: #eee; }
-
-body { background: var(--bg); color: var(--text); }
-```
-::
 ::code-wrapper{language="javascript"}
 ```javascript
+// Toggle theme at runtime — set the attribute, CSS variables update, page re-paints. No reload.
 document.documentElement.setAttribute('data-theme', 'dark');
+// Persist + respect system preference on load:
+const saved = localStorage.getItem('theme');
+if (saved) document.documentElement.setAttribute('data-theme', saved);
 ```
 ::
-The `data-theme` attribute on `<html>` switches the variables — instant theme change, no reload. Persist in `localStorage` and respect `prefers-color-scheme` on load.
 
-## Dynamic Values (JS)
-
-CSS variables are accessible from JS — read and set them at runtime:
+## JS ↔ CSS Bridge — `setProperty` / `getPropertyValue`
 
 ::code-wrapper{language="javascript"}
 ```javascript
 // Read
-const primary = getComputedStyle(document.documentElement).getPropertyValue('--primary');
-
-// Set
+const primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+// Set globally
 document.documentElement.style.setProperty('--primary', '#ff0000');
-
-// For a specific element
-el.style.setProperty('--spacing', '2rem');
+// Set per-element (scoped to that element + descendants)
+el.style.setProperty('--x', `${pointerX}px');
+// CSS: transform: translateX(var(--x)) — JS drives the value, CSS owns the logic.
 ```
 ::
-This is powerful — JS can drive CSS values (e.g., a slider updating `--hue`, a drag updating `--x`/`--y`) without recomputing styles. CSS variables are the bridge for JS↔CSS dynamic styling.
 
-## Variables in Media Queries (for responsive values)
+## Responsive Tokens — redefining in `@media`
 
 ::code-wrapper{language="css"}
 ```css
 :root { --spacing: 1rem; }
-@media (min-width: 768px) {
-	:root { --spacing: 2rem; }
-}
-.container { padding: var(--spacing); }   /* 1rem mobile, 2rem tablet+ */
+@media (min-width: 768px) { :root { --spacing: 2rem; } }  /* token becomes responsive */
+.container { padding: var(--spacing); }  /* 1rem mobile, 2rem tablet+ — no per-use-site media queries */
+/* You CANNOT use var() inside @media conditions: @media (min-width: var(--break)) is invalid.
+   But you CAN redefine variables INSIDE @media blocks (as above). */
 ```
 ::
-You *can't* define variables *inside* `@media` conditions (variables are properties, not at-rule conditions), but you can redefine them *within* media query blocks, as above — a clean way to make responsive tokens.
-
-## CSS Variables vs Preprocessor Variables
-
-| Feature | CSS Variables | Sass/Less Variables |
-|---|---|---|
-| Runtime | ✅ Browser | ❌ Compile-time |
-| Inheritance | ✅ Cascades | ❌ Static |
-| Media query redefinition | ✅ | ❌ (compile-time) |
-| JS access | ✅ | ❌ |
-| Conditional value | ✅ | ❌ |
-| Browser support | ✅ (all modern) | ✅ (compiled to CSS) |
-
-CSS variables are runtime, cascading, and JS-accessible — use them for theming and dynamic values. Preprocessor variables are compile-time constants — use for build-time math and mixins.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use CSS variables for design tokens (`--color-primary`, `--spacing-md`, `--radius`) — define on `:root`, use everywhere. Change one value, the whole UI updates. This is the modern theming foundation.
-- **Idiom**: use `data-theme` attribute + CSS variables for manual theme toggles — `[data-theme="dark"] { --bg: #222; }` and `document.documentElement.setAttribute('data-theme', 'dark')` switches themes instantly, no reload. Persist in `localStorage`, respect `prefers-color-scheme` on first load.
-- **Idiom**: use CSS variables for JS↔CSS bridges — JS sets `el.style.setProperty('--x', '100px')`, CSS uses `transform: translateX(var(--x))`. This drives dynamic styling (drag, slider, scroll) without recomputing styles or inline transforms.
-- **Idiom**: redefine variables in `@media` blocks for responsive tokens — `@media (min-width: 768px) { :root { --spacing: 2rem; } }` makes the token responsive without touching each use site.
-- **Idiom**: use `var(--name, fallback)` for robustness — the fallback applies if the variable is *unset*. Useful for components that should work even if the consumer didn't define the variable.
+- **Idiom**: design tokens on `:root` (`--color-primary`, `--space-md`, `--radius`) — change one value, the whole UI updates in one paint. This is the modern theming foundation.
+- **Idiom**: `data-theme` attribute + CSS variables for manual theme toggles — instant, no reload. Persist in `localStorage`, respect `prefers-color-scheme` on first load.
+- **Idiom**: JS↔CSS bridge via custom properties — JS sets `el.style.setProperty('--x', '100px')`, CSS uses `transform: translateX(var(--x))`. JS drives values, CSS owns the presentation logic (overridable by classes).
+- **Idiom**: redefine variables in `@media` for responsive tokens — the token adapts, every use-site updates. No per-component media queries.
+- **Idiom**: `var(--name, fallback)` for robustness — the fallback applies if the variable is *unset*. Useful for components that should work even if the consumer didn't define the token.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Invalid variable values make the *property* invalid, not the fallback**: `--gap: 10` (no unit) and `padding: var(--gap)` → `padding` is invalid → set to `initial` (0), not the fallback. The fallback only applies if the variable is *unset* (`var(--undefined, 10px)`).
-- **Variables can't be used in property names or selectors**: `var(--prop): red` and `.var(--cls)` don't work. Variables are for *values* only.
-- **Variables can't be used in media query conditions**: `@media (min-width: var(--break))` is invalid. You can redefine variables *inside* media queries, but not use them in the condition.
-- **Variables inherit**: a variable on `:root` is global, but a variable on `.card` only affects `.card` and descendants. Unexpected inheritance can surprise — check the element's computed variables in DevTools.
-- **`var()` in shorthand can be tricky**: `margin: var(--gap)` works, but `margin: var(--gap) var(--gap2)` — if either is invalid, the whole `margin` is invalid.
-- **URLs in variables need quoting carefully**: `--img: url("x.png")` then `background: var(--img)` works. But `--url: "x.png"` then `background: url(var(--url))` doesn't (can't use `var()` inside `url()`).
-- **Variables and `calc()`**: `calc(var(--gap) * 2)` works if `--gap` has a unit (`10px`). `calc(var(--n) * 2)` with `--n: 10` (unitless) gives `20` (unitless, usable in `calc`).
+- **Invalid variable values make the *property* invalid, not the fallback**: `--gap: 10` (no unit) + `padding: var(--gap)` → `padding` invalid → `initial` (0). The fallback only applies if the variable is *unset*.
+- **Variables are for VALUES only**: `var(--prop): red` (property name) and `.var(--cls)` (selector) don't work. No variable in media query conditions either.
+- **`var()` in shorthand can invalidate the whole shorthand**: `margin: var(--gap) var(--gap2)` — if either is invalid, the whole `margin` is invalid.
+- **URLs in variables**: `--img: url("x.png")` then `background: var(--img)` works. But `--url: "x.png"` then `background: url(var(--url))` doesn't (can't use `var()` inside `url()`).
 - **`!important` on variables**: `--primary: blue !important` makes the *variable* important (harder to override). Rarely needed; avoid.
-- **Initial value is `unset` (guaranteed-invalid)**: a variable not defined anywhere is `unset`, so `var(--undefined)` makes the property invalid (or uses the fallback if provided).
-- **CSS variables are case-sensitive**: `--Color` and `--color` are different. Stick to a convention (kebab-case: `--primary-color`).
+- **CSS variables are case-sensitive**: `--Color` ≠ `--color`. Stick to kebab-case (`--primary-color`).
+- **Initial value is guaranteed-invalid (unset)**: `var(--undefined)` with no fallback makes the property invalid → initial/inherited.
 
 ## 🧠 Spot the Bug
-
-A developer sets a spacing variable without a unit, then uses it in `padding` — the padding doesn't apply:
 
 ::code-wrapper{language="css"}
 ```css
@@ -163,31 +150,9 @@ A developer sets a spacing variable without a unit, then uses it in `padding` �
 ```
 ::
 
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`--gap: 10` is a unitless value. `padding: var(--gap)` becomes `padding: 10`, which is an *invalid* value for `padding` (lengths need a unit: `10px`, `10rem`, etc.). When `var()` resolves to an invalid value, the *whole property* is invalid, and `padding` is set to its `initial` value (0) — not a fallback (no fallback was provided, and even if one was, it only applies if the variable is *unset*, not if its value is invalid).
-
-The fix — give `--gap` a unit:
-
-```css
-:root { --gap: 10px; }
-.box { padding: var(--gap); }   /* 10px */
-```
-::
-Or use `calc()` to add the unit (less clean):
-
-```css
-:root { --gap: 10; }
-.box { padding: calc(var(--gap) * 1px); }   /* 10px */
-```
-::
-**The lesson**: CSS variables are substituted as raw values — `--gap: 10` puts `10` in `padding: 10`, which is invalid (no unit). The property becomes invalid (→ initial), not a fallback. Always include units in variable values, or multiply by `1px` in `calc()`.
+`--gap: 10` is unitless. `padding: var(--gap)` resolves to `padding: 10` — invalid (lengths need a unit: `10px`, `10rem`). When `var()` resolves to an invalid value, the *whole property* is invalid → `padding` is set to its `initial` value (0), not a fallback. The fallback only applies if the variable is *unset* (`var(--undefined, 10px)`), not if its value is invalid. Fix: give `--gap` a unit (`--gap: 10px`), or multiply by `1px` in calc (`calc(var(--gap) * 1px)`). Always include units in variable values used as lengths.
 
 </details>
-
-## Summary
-
-You can now define and use CSS variables (`--name`, `var(--name, fallback)`), leverage inheritance/cascade, build light/dark themes (`prefers-color-scheme` + `data-theme`), drive dynamic styling from JS (`setProperty`), redefine tokens in `@media`, and choose CSS variables over preprocessor variables for runtime/cascading needs — while avoiding the invalid-value trap. Next: writing modes and logical properties.

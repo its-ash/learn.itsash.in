@@ -1,312 +1,333 @@
 # 09 — Slices
 
-A slice is a **borrowed view** into a contiguous sequence of elements. It's the most common way to pass "a chunk of data" without taking ownership.
+A slice makes "borrow, don't copy" work for collections. Why does `&[T]` exist when `&Vec<T>` compiles fine? A specific ABI trick — the fat pointer.
 
-## The Slice Type
+## Under-the-Hood Mechanics
 
-### Why slices exist
+### The fat pointer, exactly
 
-A slice `&[T]` is a **borrowed view** into a contiguous run of elements — it carries a pointer and a length (a "fat pointer"), but no ownership. This is the key abstraction that lets you write **one function** that operates on `Vec<T>`, fixed arrays `[T; N]`, and other slices interchangeably: any contiguous buffer can be viewed as a slice without copying or taking ownership. Without slices, every function would either need its own container type or force callers to allocate a `Vec` just to pass a few elements.
-
-### When to reach for it
-
-Use `&[T]` in function signatures whenever you only need to *read* a contiguous run of elements. The caller can pass `&vec`, `&array`, or a sub-slice with zero ceremony, and you never take ownership or force a copy. This is why the standard library's APIs (sort, binary search, iteration) all take slices rather than `Vec`.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let arr = [1, 2, 3, 4, 5];
-let s: &[i32] = &arr;          // slice of the whole array
-let part: &[i32] = &arr[1..4]; // [2, 3, 4]
-```
-::
+fn main() {
+    assert_eq!(std::mem::size_of::<&[i32]>(), 16);   // ptr (8) + len (8) on 64-bit
+    assert_eq!(std::mem::size_of::<&i32>(), 8);       // thin pointer, no length needed
+    assert_eq!(std::mem::size_of::<&str>(), 16);      // same layout as &[u8]
 
-A slice `&[T]` is a **fat pointer**: `(pointer, length)`. Two `usize` worth of data on the stack. No ownership of the underlying elements.
-
-## String Slices `&str`
-
-`&str` is a slice of UTF-8 bytes — same fat-pointer layout but with the UTF-8 invariant:
-
-::code-wrapper{language="rust"}
-```rust
-let s = String::from("hello, world");
-let hello: &str = &s[0..5];     // "hello"
-let world: &s[7..12];            // "world"
-let whole: &str = &s[..];        // whole string
-```
-::
-
-## Indexing Rules
-
-- `..n` = `0..n`; `n..` = `n..len`; `..` = `0..len`.
-- `..=k` is inclusive.
-- Out-of-bounds slicing **panics** at runtime.
-- Slicing on a **non-char boundary** in a `&str` panics:
-
-::code-wrapper{language="rust"}
-```rust
-let s = "hi🦀";  // '🦀' is 4 bytes
-let bad = &s[2..4];   // PANIC: byte index 2 is not a char boundary
-```
-::
-
-To slice by char, use `.chars()` / `.char_indices()`:
-
-::code-wrapper{language="rust"}
-```rust
-let first_char_str: &str = s.split(0).next().unwrap();
-```
-::
-
-Wait — `str::split` splits on a pattern. Use `char_indices` for safety:
-
-::code-wrapper{language="rust"}
-```rust
-let bytes_to = s.char_indices().nth(1).map(|(i, _)| i).unwrap();
-let first: &str = &s[..bytes_to];
-```
-::
-
-## Creating Slices
-
-::code-wrapper{language="rust"}
-```rust
-// From Vec
-let v = vec![1, 2, 3];
-let s = &v[..];
-let s = v.as_slice();
-
-// From array
-let a = [1, 2, 3];
-let s = &a[..];
-
-// From String
-let st = String::from("hi");
-let s: &str = &st[..];
-let s: &str = st.as_str();
-
-// From raw parts (unsafe)
-let s: &[u8] = unsafe { std::slice::from_raw_parts(ptr, len) };
-```
-::
-
-## `&[T]` vs `&[T; N]`
-
-### Why the distinction matters
-
-`&[T]` is a slice — **dynamically sized**: the length lives in the fat pointer, known only at runtime. `&[T; N]` is a reference to a fixed-size array — the length `N` is part of the *type*, known at compile time. The distinction matters when `N` is meaningful: const generics encode the length in the type system (e.g., a fixed-size matrix, a cryptographic block), so `&[T; 16]` preserves the length guarantee that `&[T]` loses. `&[T; N]` coerces to `&[T]` (you can always view a fixed array as a dynamic slice), but not vice versa — you can't recover the compile-time length from a `&[T]`.
-
-- `&[T]` is the slice type (dynamically sized).
-- `&[T; N]` is a reference to a fixed-size array (size known at compile time).
-- `&[T; N]` coerces to `&[T]`.
-
-## Mutable Slices
-
-### When to reach for a mutable slice
-
-A `&mut [T]` lets you **mutate elements in place** over a borrowed view — useful when you want to modify a sub-range of a `Vec` without taking ownership of the whole thing (e.g., sorting a sub-slice, reversing a window, zeroing a range). You get the ergonomics of indexing and iterator adapters over the sub-range while the original container retains ownership. The borrow rules apply: only one `&mut [T]` to overlapping memory at a time.
-
-::code-wrapper{language="rust"}
-```rust
-let mut v = vec![1, 2, 3];
-let s: &mut [i32] = &mut v[..];
-s[0] = 99;
-```
-::
-
-One mutable slice at a time (borrow rules still apply).
-
-## Splitting Slices
-
-### Why `split_at_mut` is needed
-
-If you write `let a = &mut v[..n]; let b = &mut v[n..];`, the borrow checker rejects it: both borrows go through the same `&mut v`, and the compiler can't prove the two ranges don't overlap. `split_at_mut` solves this with a signature that returns *both* borrows from a single input — `fn split_at_mut(&mut [T], mid) -> (&mut [T], &mut [T])` — which lets the compiler trust that the two outputs are disjoint (it's an std function with an `unsafe` interior that proves non-overlap). This is the canonical way to get two non-overlapping mutable views into one buffer.
-
-::code-wrapper{language="rust"}
-```rust
-let (left, right) = s.split_first();   // Option<(&T, &[T])>
-let (mut_left, mut_right) = s.split_at_mut(2);   // (&mut [T], &mut [T])
-```
-::
-
-`split_at_mut` is the canonical way to get two non-overlapping mutable subslices — the compiler can't otherwise prove disjointness.
-
-## Iteration
-
-::code-wrapper{language="rust"}
-```rust
-for x in &arr { /* x: &i32 */ }
-for x in &mut arr { /* x: &mut i32 */ }
-for x in arr { /* x: i32 — consumes (Copy ok) */ }
-```
-::
-
-`&[T]` and `&mut [T]` implement `IntoIterator` yielding `&T` / `&mut T`.
-
-## Why Slices Matter for APIs
-
-Take `&[T]` not `&Vec<T>`:
-
-::code-wrapper{language="rust"}
-```rust
-fn sum(nums: &[i32]) -> i32 {
-    nums.iter().sum()
+    let v = vec![1, 2, 3];
+    let s: &[i32] = &v;
+    // s is (ptr_to_v[0], 3) — it does NOT know about v's capacity or allocator
 }
-sum(&vec![1, 2, 3]);
-sum(&[1, 2, 3]);
-sum(&arr);            // works for arrays too
 ```
 ::
-
-`&[T]` is the most general borrowed form.
-
-## `&str` vs `String` API Choice
-
-::code-wrapper{language="rust"}
-```rust
-fn print(s: &str) { println!("{s}"); }
-print("literal");          // &str
-print(&owned_string);      // &String -> &str
-print(&substring);         // &str
-```
-::
-
-Always prefer `&str` in function parameters unless you need to grow the string.
-
-## 💡 Tips & Tricks
-
-- **Debug**: `slice.get(i)` instead of `slice[i]` while debugging index-related panics — it returns `Option<&T>` so you can `dbg!(slice.get(i))` without crashing the program, then swap back to indexing once you've confirmed the bounds are right.
-- **Idiom**: accept `&[T]`/`&str` in function signatures, never `&Vec<T>`/`&String` — it's strictly more general (accepts arrays, `Vec`, and slices of slices too) at zero runtime cost, since both are already fat pointers under the hood.
-- **Performance**: `slice.windows(n)` and `slice.chunks(n)` are both zero-allocation, lazy iterators — prefer them over manually indexing with a `for i in 0..len` loop for sliding-window or batch-processing logic; they're also harder to get an off-by-one error in.
-- **Idiom**: `split_at_mut` is the *only* safe way to get two simultaneously mutable, non-overlapping views into the same slice — reaching for `unsafe`/raw pointers to "convince" the borrow checker to allow two `&mut` slices is almost always unnecessary once you know this method exists.
-- **Debug**: a panic message like "byte index 2 is not a char boundary" always means UTF-8-unsafe slicing on a `&str` — the fix is almost never to slice at a different fixed byte offset (which is fragile for any non-ASCII input) but to use `.char_indices()`/`.chars()` to find valid boundaries.
-- **Clippy**: `clippy::indexing_slicing` (opt-in, part of `restriction`) flags all direct `[]` indexing in favor of `.get()`, useful to enable temporarily when auditing a codebase for unhandled panics on untrusted input.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **Empty slice**: `&arr[0..0]` is valid, length 0; never panics.
-- **Slicing past end**: `&v[..v.len() + 1]` panics.
-- **`slice.get(i)` / `slice.get_mut(i)`**: returns `Option<&T>` / `Option<&mut T>` — non-panicking indexing.
-- **`slice.get_unchecked(i)`**: unsafe — skips bounds check (only correct when you've proven `i < len`).
-- **Range patterns**: limited; stable Rust allows `[a, b, ..]` only in limited forms.
-- **`Vec::drain`**: takes a range, removes and returns an iterator — modifies the `Vec`.
-- **String slicing pitfall**: indexing `s[i]` is intentionally not allowed for `String`/`&str` because UTF-8 byte indexing is meaningless. Use `s.chars().nth(i)` or `s.as_bytes()[i]` (returns `u8`).
-
-## 🧠 Spot the Bug
-
-What does this print, and why might it surprise someone who expects both halves to be independent?
 
 ::code-wrapper{language="rust"}
 ```rust
 fn main() {
-    let s = String::from("héllo");
-    println!("byte len: {}", s.len());
+    let arr = [1, 2, 3, 4, 5];
+    let v = vec![1, 2, 3, 4, 5];
+    let slice_from_array: &[i32] = &arr;    // slice can borrow from an array...
+    let slice_from_vec: &[i32] = &v;         // ...or a Vec...
+    let slice_from_slice: &[i32] = &v[1..3]; // ...or another slice — all it needs is (ptr, len)
+    println!("{slice_from_array:?} {slice_from_vec:?} {slice_from_slice:?}");
+}
+// Contrast: Vec<T> is THREE words (ptr, len, capacity) because it OWNS the allocation.
+```
+::
 
-    let first_two_bytes = &s[0..2];
-    println!("{first_two_bytes}");
+### `&str` layout and the UTF-8 invariant enforced at the type level
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let s = "hello";                                  // valid UTF-8 by construction (literal)
+    let bytes: &[u8] = s.as_bytes();
+    let back = std::str::from_utf8(bytes).unwrap();    // validated — panics/errors on invalid UTF-8
+
+    let bad: &[u8] = &[0xFF, 0xFE];
+    assert!(std::str::from_utf8(bad).is_err());         // safe path REJECTS invalid bytes
+
+    // unsafe { std::str::from_utf8_unchecked(bad) };   // bypasses the check — UB the moment
+    //                                                     anything treats the result as valid UTF-8
+    println!("{s} {back}");
 }
 ```
 ::
+
+### Indexing vs slicing: two different runtime operations
+
+::code-wrapper{language="rust"}
+```rust
+fn sum_first_three(s: &[i32]) -> i32 {
+    s[0] + s[1] + s[2] // three bounds checks, unless LLVM proves len >= 3 and elides them
+}
+
+fn sum_first_three_checked(s: &[i32]) -> Option<i32> {
+    if s.len() < 3 { return None; }
+    Some(s[0] + s[1] + s[2])   // LLVM CAN now eliminate the redundant checks via range analysis
+}
+
+fn sum_first_three_iter(s: &[i32]) -> i32 {
+    s.iter().take(3).sum()    // never indexes at all — nothing to elide, freely vectorizable
+}
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+::code-wrapper{language="rust"}
+```rust
+fn takes_slice(_: &[i32]) {}          // two register-sized values: pointer + length, no allocation
+fn takes_vec_ref(_: &Vec<i32>) {}      // same cost to CALL, but forces caller to own a Vec in the first place
+
+fn main() {
+    let arr = [1, 2, 3];
+    takes_slice(&arr);      // works: stack array, no heap allocation needed
+    // takes_vec_ref(&arr);  // COMPILE ERROR: &[i32; 3] is not &Vec<i32> — Vec-typed params are less general
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Bounds checking is cheap but not zero — 5-15% overhead is realistic in tight numeric loops
+// that the optimizer can't prove safe. Fix is restructuring, not unsafe get_unchecked as a first move.
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()   // iterator shape LLVM's vectorizer recognizes best
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let s = "héllo wörld";
+    // Repeated byte-offset slicing recomputes boundaries every time — compute once instead:
+    let boundaries: Vec<(usize, char)> = s.char_indices().collect();
+    println!("{boundaries:?}");
+}
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: hand-rolled sub-range splitting instead of `split_at_mut`
+
+::code-wrapper{language="rust"}
+```rust
+// naive: mid-level dev wants two independently-mutable halves of a buffer
+fn process_naive(buf: &mut [f32], mid: usize) {
+    let left = &mut buf[..mid];
+    // let right = &mut buf[mid..]; // ERROR: cannot borrow `*buf` as mutable more than once
+    for x in left { *x *= 2.0; }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn process_right(buf: &mut [f32], mid: usize) {
+    let (left, right) = buf.split_at_mut(mid); // panics if mid > buf.len(); no UB path
+    for x in left.iter_mut() { *x *= 2.0; }
+    for x in right.iter_mut() { *x *= 0.5; }
+}
+
+fn process_parallel(buf: &mut [f32], mid: usize) {
+    let (left, right) = buf.split_at_mut(mid);
+    std::thread::scope(|s| {
+        s.spawn(|| for x in left.iter_mut() { *x *= 2.0; });
+        s.spawn(|| for x in right.iter_mut() { *x *= 0.5; });   // provably non-overlapping, zero sync overhead
+    });
+}
+```
+::
+
+### Anti-pattern: byte-offset string slicing on user input
+
+::code-wrapper{language="rust"}
+```rust
+// naive: truncate a display name to 20 "characters"
+fn truncate_naive(name: &str) -> &str {
+    if name.len() > 20 {
+        &name[..20] // byte length, not char count — panics if byte 20 lands mid-sequence (é, emoji, CJK)
+    } else {
+        name
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn truncate_right(name: &str, max_chars: usize) -> &str {
+    match name.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &name[..byte_idx],
+        None => name, // fewer than max_chars characters total
+    }
+    // For full correctness on grapheme clusters (emoji + skin-tone modifiers), use `unicode-segmentation`.
+}
+```
+::
+
+### Anti-pattern: `get_unchecked` as a premature optimization
+
+::code-wrapper{language="rust"}
+```rust
+// naive: "I profiled this and bounds checks show up, so let's remove them"
+fn dot_product_unsafe(a: &[f64], b: &[f64]) -> f64 {
+    let mut sum = 0.0;
+    for i in 0..a.len() {
+        sum += unsafe { a.get_unchecked(i) * b.get_unchecked(i) }; // UB if b is shorter than a
+    }
+    sum
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn dot_product_safe(a: &[f64], b: &[f64]) -> f64 {
+    assert_eq!(a.len(), b.len(), "slices must be equal length");   // invariant proven ONCE, at the boundary
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum() // LLVM auto-vectorizes; no manual unsafe needed
+}
+```
+::
+
+## Architectural Application
+
+::code-wrapper{language="rust"}
+```rust
+fn parse(input: &str) -> Vec<&str> {         // composes with in-memory strings, mmap'd files, network buffers
+    input.split(',').collect()
+}
+
+// fn parse_narrow(input: &String) -> Vec<&str> { ... }  // forces every caller through an allocation
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Zero-copy parsing: return sub-slices of the ORIGINAL buffer, never allocate new Strings per token.
+fn tokenize(input: &str) -> Vec<&str> {
+    input.split_whitespace().collect()
+    // Each returned &str borrows from `input` — cheap as an (index, length) pair, made SAFE
+    // by the lifetime system (next chapter) tying every token's lifetime to the buffer's.
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn parallel_sum(data: &mut [i64]) -> i64 {
+    let mid = data.len() / 2;
+    let (left, right) = data.split_at_mut(mid);   // proved non-overlapping ONCE, up front
+    let mut left_sum = 0i64;
+    let mut right_sum = 0i64;
+    std::thread::scope(|s| {
+        s.spawn(|| left_sum = left.iter().sum());
+        s.spawn(|| right_sum = right.iter().sum());
+    });
+    left_sum + right_sum
+    // This is the primitive underneath rayon::slice::ParallelSlice — no lock per element needed.
+}
+```
+::
+
+## 💡 Tips & Tricks
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{:?}", v.get(10));           // Option<&T> — no crash while debugging index panics
+    // println!("{}", v[10]);               // would panic immediately
+
+    for window in v.windows(2) {            // zero-allocation, lazy — no manual for-i-in-0..len loop
+        println!("{window:?}");
+    }
+    for chunk in v.chunks(2) {
+        println!("{chunk:?}");
+    }
+}
+```
+::
+
+- **Idiom**: accept `&[T]`/`&str` in signatures, never `&Vec<T>`/`&String` — strictly more general at zero cost.
+- **Idiom**: `split_at_mut` is the *only* safe way to get two simultaneously mutable, non-overlapping views.
+- **Debug**: "byte index N is not a char boundary" always means UTF-8-unsafe slicing — use `.char_indices()` instead of a fixed byte offset.
+- **Clippy**: `clippy::indexing_slicing` flags direct `[]` indexing in favor of `.get()`.
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let arr = [1, 2, 3];
+    let empty = &arr[0..0];               // valid, length 0, never panics
+    println!("{:?}", empty.windows(5).count()); // 0 iterations, NOT a panic — easy to forget
+
+    // let bad = &arr[..arr.len() + 1];   // panics: off-by-one past the end
+
+    let v = vec![10, 20, 30];
+    println!("{:?}", v.get(10));           // None — safe default for untrusted-input indices
+    // println!("{}", unsafe { v.get_unchecked(10) }); // silent UB, not a panic
+
+    let fixed: &[i32; 3] = &arr;
+    let dynamic: &[i32] = fixed;            // coerces automatically — but NOT the reverse; N is lost
+
+    let s = "héllo";
+    // let c = s[0];                        // does not compile — byte indexing is meaningless as "char i"
+    let c = s.chars().nth(0);                // O(n), walks from the start
+    println!("{c:?}");
+}
+```
+::
+
+## 🧠 Spot the Bug
+
+::code-wrapper{language="rust"}
+```rust
+fn last_three(data: &[i32]) -> &[i32] {
+    &data[data.len() - 3..]
+}
+
+fn main() {
+    let readings = vec![10, 20];
+    println!("{:?}", last_three(&readings));
+}
+```
+::
+
+What's wrong, and when does it bite?
 
 <details>
 <summary>Answer</summary>
 
-This panics: `byte index 2 is not a char boundary; it is inside 'é' (bytes 1..3) of \`héllo\``.
-
-`String::len()` reports the length in **bytes**, not characters — `é` is a single Unicode scalar value (one `char`) but encodes to **2 bytes** in UTF-8, so `"héllo".len()` is `6`, not `5`. Slicing `&s[0..2]` looks like it should grab "the first two characters," but string slicing in Rust operates on **byte offsets**, and byte offset `2` falls squarely in the *middle* of `é`'s 2-byte encoding — cutting a multi-byte UTF-8 sequence in half would produce invalid UTF-8, which `&str` can never represent (it's a safety invariant of the type). Rather than silently producing corrupted text, Rust panics immediately at the slice operation. This is a common trap for anyone assuming `&str` indexing works like character-array indexing in languages such as Python or Java, where `s[0:2]` means "first two characters" regardless of encoding.
-
-The fix is to use `char_indices()` to find a valid byte offset for a given number of characters, rather than guessing a byte count:
-
 ::code-wrapper{language="rust"}
 ```rust
-let boundary = s.char_indices().nth(2).map(|(i, _)| i).unwrap_or(s.len());
-let first_two_chars = &s[..boundary];
+// readings has only 2 elements: data.len() - 3 == 2usize - 3
+// debug:   panics "attempt to subtract with overflow" immediately
+// release: wraps to usize::MAX-ish, then fails the subsequent bounds check instead
 ```
 ::
 
-**The lesson**: `&str` length and slicing are always in bytes, not characters — any non-ASCII input can make a byte-offset slice land mid-character, which panics rather than silently corrupting the string.
+::code-wrapper{language="rust"}
+```rust
+fn last_three(data: &[i32]) -> &[i32] {
+    let start = data.len().saturating_sub(3); // clamps to 0 instead of underflowing
+    &data[start..]
+}
+```
+::
+
+**The lesson**: any `usize` arithmetic derived from `.len()` that subtracts a constant is a latent underflow panic on short inputs — reach for `saturating_sub`/`checked_sub` any time the subtrahend isn't provably `<=` the length.
 
 </details>
 
-## Slice Methods Cheat Sheet
-
-::code-wrapper{language="rust"}
-```rust
-s.len();
-s.is_empty();
-s.first();             // Option<&T>
-s.last();
-s.split_first();       // Option<(&T, &[T])>
-s.iter() / s.iter_mut();
-s.windows(2);          // sliding windows
-s.chunks(3);           // non-overlapping chunks
-s.chunks_exact(3);
-s.split(|x| *x == 0);
-s.splitn(2, |x| *x == 0);
-s.contains(&3);
-s.starts_with(&[1, 2]);
-s.ends_with(&[4, 5]);
-s.iter().position(|x| *x == 3);
-s.binary_search(&3);
-s.sort();
-s.sort_by(|a, b| b.cmp(a));
-s.sort_by_key(|x| x.abs());
-s.reverse();
-s.rotate_left(1);
-s.copy_within(0..3, 5);
-s.fill(0);
-```
-::
-
-## Slice Tricks & Patterns
-
-::code-wrapper{language="rust"}
-```rust
-// Trick: use get() for safe indexing without panics
-let s = "hello";
-let c = s.get(0); // Option<&str>
-
-// Trick: split_at_mut for non-overlapping borrows
-let mut v = vec![1, 2, 3, 4];
-let (left, right) = v.split_at_mut(2);
-left[0] = 99;
-right[0] = 88; // both work, no conflict
-
-// Trick: as_slice() to convert collections to slices
-let v = vec![1, 2, 3];
-fn takes_slice(s: &[i32]) {}
-takes_slice(v.as_slice());
-
-// Trick: unwrap slice patterns for infallible binding
-let [a, b, c] = [1, 2, 3]; // direct binding, panics if lengths don't match
-let [x, ..] = [1, 2, 3]; // bind first, ignore rest
-
-// Trick: use windows() for sliding windows
-let v = vec![1, 2, 3, 4, 5];
-for window in v.windows(2) {
-    println!("{:?}", window); // [1,2], [2,3], [3,4], [4,5]
-}
-
-// Trick: use chunks() for non-overlapping segments
-for chunk in v.chunks(2) {
-    println!("{:?}", chunk); // [1,2], [3,4], [5]
-}
-
-// Trick: binary_search on sorted slices
-let v = vec![1, 3, 5, 7, 9];
-match v.binary_search(&5) {
-    Ok(idx) => println!("found at {}", idx),
-    Err(idx) => println!("would insert at {}", idx),
-}
-```
-::
-
 ## Summary
 
-- Slices are borrowed, fat-pointer views into contiguous data.
-- `&str` is a UTF-8 slice; `&[T]` is a generic slice.
-- Use `&[T]` / `&str` in APIs for maximum generality.
-- Split at mutable boundaries with `split_at_mut`.
-- Use `get()` for safe bounds checking; use `windows()`/`chunks()` for iteration patterns.
-- Remember: slicing on UTF-8 char boundaries can panic; use `char_indices()` for safety.
+- A slice is a fat pointer — `(data ptr, length)`, two machine words, no ownership, no capacity — which is exactly what makes `&[T]` strictly more general than `&Vec<T>` as an API parameter.
+- Indexing and range-slicing both insert a runtime bounds check that LLVM can eliminate when it can prove safety via range analysis (most naturally achieved through iterator adapters, not manual indexing).
+- `&str` shares `&[u8]`'s layout plus a UTF-8 invariant enforced at every safe construction point; byte-offset slicing on user text is a latent panic on any non-ASCII input.
+- `split_at_mut` is the load-bearing primitive behind safe data-parallel processing over a single buffer — reach for it before `unsafe` any time you need two independently-mutable views into one slice.
 
-Next: Lifetimes — the borrow checker's vocabulary.
+Next: Lifetimes — the compile-time vocabulary that makes it safe to hand out a slice (or any reference) in the first place.

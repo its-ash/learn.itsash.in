@@ -1,182 +1,139 @@
-# 13 — Animations & Transitions
+---
+title: "13 — Animations & Transitions: The Compositor Pipeline"
+description: "Which properties animate on the GPU (transform/opacity) vs which trigger layout, cubic-bezier overshoot curves, the height:auto trap, grid-template-rows 0fr to 1fr, will-change memory cost, and prefers-reduced-motion. Code-first reference for 60fps animation."
+---
 
-CSS animations and transitions create motion — state changes (transitions) and keyframe sequences (animations).
+# 13 — Animations & Transitions: The Compositor Pipeline
 
-## Transitions
+The render pipeline is: style → layout → paint → composite. Animating `transform` and `opacity` skips layout and paint — they're compositor-only (GPU). Animating `width`/`height`/`top`/`left` triggers layout *every frame* → janky. This is the single most important performance rule in CSS.
 
-A transition smoothly interpolates a property change:
+## Transitions — smooth property interpolation
 
 ::code-wrapper{language="css"}
 ```css
 .button {
-	background: blue;
-	transition: background 0.3s ease, transform 0.2s ease;
+  background: blue;
+  transition: background 0.3s ease, transform 0.2s ease;  /* list SPECIFIC properties */
 }
-.button:hover {
-	background: darkblue;
-	transform: scale(1.05);
+.button:hover { background: darkblue; transform: scale(1.05); }
+/* ⚠️ transition: all is a footgun — animates unexpected properties (background-image, etc.) */
+```
+::
+
+## Timing Functions — `cubic-bezier` for overshoot
+
+::code-wrapper{language="css"}
+```css
+:root {
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);  /* y>1 → overshoots target, settles (bounce) */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);         /* fast start, slow settle */
 }
+.modal { transition: transform 0.3s var(--ease-spring); }
+/* steps(n, start|end): discrete steps — sprite animation, loading bars */
+.sprite { transition: background-position 0.5s steps(8, end); }
 ```
 ::
-### `transition` shorthand
+
+## The Performance Rule — compositor-only properties
+
+::code-wrapper{language="text"}
+```text
+Property          Cost              Animate?
+transform         Compositor (GPU)  ✅ 60fps
+opacity           Compositor (GPU)  ✅ 60fps
+filter            Compositor (mostly) ✅
+color/bg-color    Paint             ⚠️ OK
+box-shadow        Paint             ⚠️ (use pseudo-element opacity instead)
+width/height      Layout            ❌ expensive
+top/left/margin   Layout            ❌ expensive
+```
+::
+
+### Anti-pattern: animating height triggers layout
 
 ::code-wrapper{language="css"}
 ```css
-transition: property duration timing-function delay;
-transition: background 0.3s ease 0s;
-transition: all 0.3s ease;          /* ⚠️ avoid: animates unexpected properties */
-transition: background 0.3s, transform 0.2s;  /* multiple */
+/* ❌ height triggers layout every frame → janky. And height:auto can't interpolate (auto isn't a length). */
+.menu { height: 0; overflow: hidden; transition: height 0.3s ease; }
+.menu.open { height: 200px; }  /* fixed value — breaks if content changes */
 ```
 ::
-### Timing functions
-
-- `ease` (default) — fast start, slow end.
-- `linear` — constant speed.
-- `ease-in` — slow start.
-- `ease-out` — slow end.
-- `ease-in-out` — slow start and end.
-- `cubic-bezier(x1, y1, x2, y2)` — custom curve.
-- `steps(n, start|end)` — stepped (n discrete steps).
 
 ::code-wrapper{language="css"}
 ```css
-transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);  /* overshoot (bounce) */
-transition: opacity 0.5s steps(5, end);  /* 5 discrete steps */
-```
-::
-### What can be animated?
-
-Not all properties transition smoothly. Properties that can be interpolated:
-- `transform`, `opacity`, `color`, `background-color`, `border-color`, `box-shadow`, `text-shadow`, `clip-path`.
-- `width`, `height`, `margin`, `padding`, `top`/`left`/`right`/`bottom` (but these cause layout — expensive).
-
-**Avoid** animating `width`/`height`/`top`/`left` (trigger layout on every frame). **Prefer** `transform` (translate/scale) and `opacity` — they're compositor-only (GPU-accelerated, cheap).
-
-::code-wrapper{language="css"}
-```css
-/* ❌ triggers layout */
-.menu { transition: height 0.3s; }
-.menu.open { height: 200px; }
-
-/* ✓ compositor-only */
-.menu { transition: transform 0.3s; transform: scaleY(0); transform-origin: top; }
+/* ✓ transform: scaleY (compositor-only, GPU, no layout). transform-origin: top anchors it. */
+.menu { transform: scaleY(0); transform-origin: block-start; transition: transform 0.3s ease; }
 .menu.open { transform: scaleY(1); }
+
+/* ✓ grid-template-rows: 0fr → 1fr (animates to content height, interpolable, fits any content) */
+.menu-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s ease; }
+.menu-wrap.open { grid-template-rows: 1fr; }
+.menu { overflow: hidden; }  /* clip the collapsing content */
+/* Browser support: grid-template-rows 0fr↔1fr transition: Chrome 107+, Safari 16+, Firefox 66+. */
 ```
 ::
+
 ## `@keyframes` Animations
 
 ::code-wrapper{language="css"}
 ```css
-@keyframes spin {
-	from { transform: rotate(0deg); }
-	to { transform: rotate(360deg); }
-}
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-@keyframes pulse {
-	0%   { opacity: 1; }
-	50%  { opacity: 0.5; }
-	100% { opacity: 1; }
-}
+.spinner { animation: spin 1s linear infinite; }
+.pulse { animation: pulse 2s ease-in-out infinite; }
 
-.spinner {
-	animation: spin 1s linear infinite;
-}
-.pulse {
-	animation: pulse 2s ease-in-out infinite;
-}
+/* animation: name duration timing-function delay iteration-count direction fill-mode play-state */
+/* animation-fill-mode: forwards → retains the END state after the animation (default: none → snaps back) */
+/* negative animation-delay: -1s on a 2s animation starts it at the 1s mark (already halfway) → staggered */
 ```
 ::
-### `animation` shorthand
+
+## `will-change` — the GPU hint (use sparingly)
 
 ::code-wrapper{language="css"}
 ```css
-animation: name duration timing-function delay iteration-count direction fill-mode play-state;
-animation: spin 1s linear infinite;
-animation: pulse 2s ease-in-out 0s infinite alternate;
+.modal { will-change: transform, opacity; }  /* hint: promote to a GPU layer NOW */
+.modal.closed { will-change: auto; }          /* remove after → frees GPU memory */
+/* ⚠️ Each will-change element gets a GPU layer (RAM). * { will-change: transform; } = OOM on mobile. */
+/* Add will-change just before the animation, remove after. Never leave it permanently. */
 ```
 ::
-### Properties
 
-- `animation-name` — the `@keyframes` name.
-- `animation-duration` — `1s`, `500ms`.
-- `animation-timing-function` — same as transitions.
-- `animation-delay` — `0s`, `-1s` (negative = start mid-animation).
-- `animation-iteration-count` — a number or `infinite`.
-- `animation-direction` — `normal`, `reverse`, `alternate`, `alternate-reverse`.
-- `animation-fill-mode` — `none`, `forwards`, `backwards`, `both`.
-- `animation-play-state` — `running`, `paused`.
-
-### `animation-fill-mode`
-
-- `none` (default) — after the animation, the element returns to its pre-animation state.
-- `forwards` — retains the styles from the last keyframe (after the animation ends).
-- `backwards` — applies the styles from the first keyframe during the delay (before the animation starts).
-- `both` — both `forwards` and `backwards`.
-
-`forwards` is common — you want the element to stay at the end state after the animation.
-
-## Performance: Which Properties to Animate
-
-| Property | Cost | Animate? |
-|---|---|---|
-| `transform` | Compositor (GPU) | ✅ Yes |
-| `opacity` | Compositor (GPU) | ✅ Yes |
-| `filter` | Compositor (mostly) | ✅ Yes |
-| `color`, `background-color` | Paint | ⚠️ OK |
-| `box-shadow` | Paint | ⚠️ OK (or use pseudo-element) |
-| `width`, `height` | Layout | ❌ Avoid |
-| `top`, `left`, `margin` | Layout | ❌ Avoid |
-
-Animate `transform` and `opacity` for 60fps. If you must animate layout properties, consider FLIP (First-Last-Invert-Play) technique with transforms.
-
-## `will-change`
-
-::code-wrapper{language="css"}
-```css
-.modal { will-change: transform, opacity; }   /* hint to the browser */
-```
-::
-`will-change` hints that a property will animate, letting the browser optimize. Use sparingly — adding it to too many elements wastes memory. Add it just before the animation, remove it after.
-
-## `prefers-reduced-motion`
+## `prefers-reduced-motion` — mandatory accessibility
 
 ::code-wrapper{language="css"}
 ```css
 @media (prefers-reduced-motion: reduce) {
-	* {
-		animation-duration: 0.01ms !important;
-		animation-iteration-count: 1 !important;
-		transition-duration: 0.01ms !important;
-	}
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 ```
 ::
-Respect the user's OS preference for reduced motion. Disable or shorten animations.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: animate `transform` and `opacity` for 60fps — they're compositor-only (GPU), no layout/paint. Avoid `width`/`height`/`top`/`left` (trigger layout). Use `transform: scaleY()` instead of `height`, `transform: translateX()` instead of `left`.
-- **Idiom**: use `cubic-bezier(0.34, 1.56, 0.64, 1)` for an overshoot/bounce — the y-value >1 causes the animation to go past the target and settle. This gives a playful, spring-like feel.
-- **Idiom**: use `animation-fill-mode: forwards` (or `both`) to retain the end state — without it, the element snaps back to its pre-animation state after the animation ends. `both` also applies the start state during the delay.
-- **Idiom**: use `prefers-reduced-motion` to disable animations for sensitive users — `@media (prefers-reduced-motion: reduce) { * { animation: none; transition: none; } }` respects the OS preference. Accessibility for vestibular disorders.
-- **Idiom**: use `will-change` sparingly as a hint before animating — `will-change: transform` tells the browser to GPU-optimize. But don't leave it on permanently (wastes memory) or add it to many elements. Add it before the animation, remove after.
+- **Idiom**: `cubic-bezier(0.34, 1.56, 0.64, 1)` for overshoot/bounce — the y-value >1 makes the animation go past the target and settle. Playful, spring-like.
+- **Idiom**: `animation-fill-mode: forwards` (or `both`) to retain the end state — without it, the element snaps back to pre-animation state. `both` also applies the start state during the delay.
+- **Idiom**: negative `animation-delay` for staggered animations that appear already in progress — `animation-delay: -1s` on a 2s animation starts it halfway through.
+- **Idiom**: `steps(8)` for sprite-sheet animation — 8 discrete steps cycle through a sprite sheet, the classic CSS sprite technique.
+- **Idiom**: animate `transform`/`opacity` (GPU), never `width`/`height`/`top`/`left` (layout). `transform: translateX()` for position, `scale()` for size.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`transition: all` is a footgun**: it animates *every* property change, including unexpected ones (like `background-image` on hover, which doesn't transition smoothly). List specific properties.
-- **`transition` doesn't work on `display`**: `display: none` → `block` can't transition (it's not interpolable). Use `opacity` + `visibility`, or animate a transform.
-- **`transition` doesn't work on `height: auto`**: `height: 0` → `auto` can't interpolate (auto isn't a length). Use `max-height` (a large value), `transform: scaleY()`, or measure with JS and set a fixed height.
-- **Animating `width`/`height` triggers layout**: every frame, the browser recomputes the layout of the element and its descendants — expensive, can drop frames. Use `transform: scale()` instead.
+- **`transition: all` is a footgun**: animates every property change, including non-interpolable ones (`background-image`). List specific properties.
+- **`transition` doesn't work on `display`**: `display: none → block` can't transition. Use `opacity` + `visibility`, or a transform.
+- **`height: auto` can't transition**: `auto` isn't a length → not interpolable. Use `transform: scaleY()` or `grid-template-rows: 0fr → 1fr`.
 - **`animation-fill-mode: none` (default) snaps back**: after the animation, the element returns to its pre-animation state. Use `forwards` to keep the end state.
-- **Negative `animation-delay` starts mid-animation**: `animation-delay: -1s` with a 2s animation starts it at the 1-second mark (already halfway). Useful for staggered animations that should appear already in progress.
-- **`will-change` on too many elements wastes memory**: each `will-change` element gets a GPU layer. Use it only for elements about to animate, and remove it after.
-- **`@keyframes` with no `from`/`0%` uses the element's current state**: if you only specify `to { ... }`, the animation starts from the element's computed style. Useful for "animate to this state" without duplicating the start.
-- **`steps()` for sprite animation**: `steps(8)` with a sprite sheet background animates frame-by-frame — the classic CSS sprite animation technique.
-- **`transition` only animates the next change**: if a property changes and then changes back before the transition completes, the transition reverses from the current (mid-transition) state. This is usually desired.
+- **`will-change` on too many elements wastes memory**: each gets a GPU layer. Use only for elements about to animate, remove after.
+- **`@keyframes` without `from`/`0%` uses the element's current state**: if you only specify `to { }`, the animation starts from the computed style. Useful for "animate to this state."
+- **`transition` reverses from the current point**: if a property changes and changes back mid-transition, the transition reverses from the current (mid-animation) state, not the start.
 
 ## 🧠 Spot the Bug
-
-A developer makes a dropdown that expands on click, but the animation is janky (stuttering):
 
 ::code-wrapper{language="css"}
 ```css
@@ -185,46 +142,9 @@ A developer makes a dropdown that expands on click, but the animation is janky (
 ```
 ::
 
-What's wrong and how to fix it?
-
 <details>
 <summary>Answer</summary>
 
-Two issues:
-
-1. **`height` triggers layout on every frame** — the browser recomputes the layout of `.menu` and its descendants each frame, which is expensive and can drop frames (janky).
-
-2. **`height: 0` → `200px` works, but `height: auto` (content-based) doesn't transition** — if the developer later changes to `height: auto` (to fit content), the transition breaks (`auto` isn't interpolable).
-
-The fix — use `transform: scaleY()` (compositor-only, GPU-accelerated, no layout):
-
-```css
-.menu {
-	transform: scaleY(0);
-	transform-origin: top;
-	transition: transform 0.3s ease;
-}
-.menu.open { transform: scaleY(1); }
-```
-::
-Or use `grid-template-rows: 0fr` → `1fr` (a modern trick that transitions and fits content):
-
-```css
-.menu-wrap {
-	display: grid;
-	grid-template-rows: 0fr;
-	transition: grid-template-rows 0.3s ease;
-}
-.menu-wrap.open { grid-template-rows: 1fr; }
-.menu { overflow: hidden; }
-```
-::
-The `grid-template-rows: 0fr` → `1fr` trick animates the height to fit content, no fixed height needed, and `1fr` is interpolable (Chrome 107+, Safari 16+, Firefox 66+).
-
-**The lesson**: avoid animating `height` (triggers layout, and `auto` isn't interpolable). Use `transform: scaleY()` (GPU) or `grid-template-rows: 0fr → 1fr` (animates to content height).
+Animating `height` triggers **layout** every frame — the browser recomputes the layout of `.menu` and all descendants. On mobile (slower CPUs), this drops frames → janky. Also, `height: 200px` is a fixed value — if the content changes, it breaks, and `height: auto` can't transition (auto isn't interpolable). Fix: `transform: scaleY(0)` → `scaleY(1)` (compositor-only, GPU, 60fps) or `grid-template-rows: 0fr → 1fr` (animates to content height, interpolable). The lesson: never animate `width`/`height`/`top`/`left` — use `transform` or `grid-template`.
 
 </details>
-
-## Summary
-
-You can now use transitions (`transition`, timing functions, `cubic-bezier`, `steps`), `@keyframes` animations (shorthand, `iteration-count`, `direction`, `fill-mode`, `play-state`), animate performant properties (`transform`/`opacity`, not `width`/`height`), use `will-change`, and respect `prefers-reduced-motion` — with the `height: auto` trap avoided via `scaleY()` or `grid-template-rows`. Next: filters, blend modes, and masking.

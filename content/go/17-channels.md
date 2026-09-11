@@ -1,226 +1,364 @@
+---
+title: "17 — Channels"
+description: "Unbuffered vs buffered semantics, close rules and ownership, directional channels, nil channel patterns, and channel memory mechanics."
+---
+
 # 17 — Channels
 
-Channels are the conduit for communicating between goroutines. Go's mantra: **"Don't communicate by sharing memory; share memory by communicating."**
-
-## Basics
+## Channel Semantics — The Complete Table
 
 ::code-wrapper{language="go"}
 ```go
-ch := make(chan int)   // unbuffered
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ Operation         │ State                │ Behavior                      │
+// │ ──────────────────│ ─────────────────── │ ────────────────────────────── │
+// │ Send (ch <- v)    │ unbuffered, no rx    │ blocks until receiver ready   │
+// │ Send              │ buffered, buffer full│ blocks until space available  │
+// │ Send              │ closed               │ PANIC                         │
+// │ Send              │ nil                  │ blocks forever                │
+// │ Receive (v := <-ch)│ unbuffered, no tx   │ blocks until sender ready      │
+// │ Receive            │ buffered, empty     │ blocks until value available   │
+// │ Receive            │ closed, drained      │ returns zero value, ok=false  │
+// │ Receive            │ nil                  │ blocks forever                │
+// │ close(ch)          │ open                 │ closes; receivers unblock     │
+// │ close(ch)          │ closed               │ PANIC                         │
+// │ close(ch)          │ nil                  │ PANIC                         │
+// │ len(ch)             │ any                  │ # of buffered elements         │
+// │ cap(ch)             │ any                  │ buffer capacity               │
+// └──────────────────────────────────────────────────────────────────────────┘
 
-ch <- 42        // send (blocks until someone receives)
-v := <-ch       // receive (blocks until someone sends)
+func basics() {
+	// Unbuffered — synchronous rendezvous (send blocks until receive):
+	ch := make(chan int)
+	go func() { ch <- 42 }()  // blocks until someone receives
+	v := <-ch                 // receives 42, unblocks the sender
+	fmt.Println(v)            // 42
 
-ch := make(chan int, 3)   // buffered, capacity 3
-ch <- 1   // doesn't block (buffer has space)
-ch <- 2
-ch <- 3
-// ch <- 4   // blocks (buffer full) until someone receives
-v := <-ch  // 1 (FIFO)
-``
-::
-
-- **Unbuffered** (`make(chan T)`) — send blocks until a receiver is ready; receive blocks until a sender is ready. Synchronous rendezvous.
-- **Buffered** (`make(chan T, n)`) — send blocks only when the buffer is full; receive blocks only when the buffer is empty. Asynchronous up to capacity.
-
-## Closing Channels
-
-::code-wrapper{language="go"}
-```go
-ch := make(chan int)
-close(ch)   // signals no more sends
-
-v, ok := <-ch   // ok is false after all buffered values are consumed and ch is closed
-// v is the zero value, ok is false
-
-// Range over a channel until it's closed
-for v := range ch {
-	fmt.Println(v)   // stops when ch is closed and drained
+	// Buffered — asynchronous up to capacity:
+	bch := make(chan int, 3)
+	bch <- 1  // doesn't block (buffer has space)
+	bch <- 2
+	bch <- 3
+	// bch <- 4  // blocks (buffer full) until someone receives
+	fmt.Println(<-bch)  // 1 (FIFO)
 }
-``
-::
+```
 
-- `close(ch)` signals "no more values will be sent."
-- Receiving from a closed channel returns the zero value with `ok == false`.
-- `range` over a channel receives until it's closed, then stops.
-- **Sending to a closed channel panics** — only the sender should close.
-- **Closing an already-closed channel panics**.
-- **Closing a nil channel blocks forever** (don't).
-
-### Who should close?
-
-The **sender** closes — the receiver never closes (it doesn't know if other senders exist). Closing is a signal from the sender(s) that no more values will come. If there are multiple senders, coordinate closing via a separate "shutdown" channel or a `context`.
-
-## Directional Channels
-
-Channels can be typed as send-only or receive-only (for function parameters, documenting intent):
+## Closing Channels — Rules and Ownership
 
 ::code-wrapper{language="go"}
 ```go
-func producer(out chan<- int) {   // send-only
+// RULE: only the SENDER closes the channel. The receiver never closes
+// (it doesn't know if other senders exist).
+//
+// Closing signals "no more values will be sent."
+// Receiving from a closed channel returns the zero value with ok=false.
+
+func producer(out chan<- int) {  // send-only
+	for i := 0; i < 5; i++ {
+		out <- i
+	}
+	close(out)  // ✅ sender closes — signals "done"
+}
+
+func consumer(in <-chan int) {  // receive-only
+	for v := range in {  // range stops when channel is closed and drained
+		fmt.Println(v)  // 0 1 2 3 4
+	}
+}
+
+func main() {
+	ch := make(chan int)
+	go producer(ch)
+	consumer(ch)
+}
+
+// ─── Multiple senders — the coordinator pattern ───
+// If multiple goroutines send, none should close directly (another might send).
+// Use a coordinator goroutine that closes after all senders are done.
+
+func multiSender(jobs []int) <-chan int {
+	out := make(chan int)
+	var wg sync.WaitGroup
+
+	for _, job := range jobs {
+		wg.Add(1)
+		go func(j int) {
+			defer wg.Done()
+			out <- j  // send
+		}(job)
+	}
+
+	// Coordinator: close after all senders finish
+	go func() {
+		wg.Wait()
+		close(out)  // ✅ safe — all sends are done
+	}()
+
+	return out
+}
+```
+
+## Directional Channels — Compiler-Enforced Intent
+
+::code-wrapper{language="go"}
+```go
+// chan<- T  — send-only (can send, can't receive)
+// <-chan T  — receive-only (can receive, can't send)
+// chan T    — bidirectional (can send and receive)
+
+// Use directional types in function signatures to document intent
+// and let the compiler enforce it.
+
+func producer(out chan<- int) {  // can only send to out
 	for i := 0; i < 3; i++ {
 		out <- i
 	}
+	// v := <-out  // compile error: cannot receive from send-only channel
 	close(out)
 }
 
-func consumer(in <-chan int) {    // receive-only
+func consumer(in <-chan int) {  // can only receive from in
 	for v := range in {
 		fmt.Println(v)
 	}
+	// in <- 42  // compile error: cannot send to receive-only channel
 }
 
-ch := make(chan int)
-go producer(ch)
-consumer(ch)
-``
-::
-
-`chan<- T` (send-only), `<-chan T` (receive-only). The compiler enforces direction — a send-only channel can't be received from.
-
-## Channel Semantics Summary
-
-| Operation | State | Behavior |
-|---|---|---|
-| Send (`ch <- v`) | unbuffered, no receiver | blocks |
-| Send | buffered, buffer full | blocks |
-| Send | closed | **panics** |
-| Send | nil | blocks forever |
-| Receive (`v := <-ch`) | unbuffered, no sender | blocks |
-| Receive | buffered, buffer empty | blocks |
-| Receive | closed, drained | returns zero value, `ok == false` |
-| Receive | nil | blocks forever |
-| `close(ch)` | open | closes |
-| `close(ch)` | closed | **panics** |
-| `close(ch)` | nil | **panics** |
-
-## Common Patterns
-
-### Signal/done channel
-
-::code-wrapper{language="go"}
-```go
-done := make(chan struct{})
-go func() {
-	// do work
-	close(done)   // signal completion (close, not send — multiple receivers)
-}()
-<-done   // block until done is closed
-``
-::
-
-`chan struct{}` is the idiom for a signal channel — empty struct carries no data, zero-size. `close(done)` signals to **all** receivers (multiple `<-done` unblock on close); a send only unblocks one receiver.
-
-### Worker pool (preview, chapter 26)
-
-::code-wrapper{language="go"}
-```go
-jobs := make(chan Job, 100)
-results := make(chan Result, 100)
-
-for i := 0; i < numWorkers; i++ {
-	go worker(jobs, results)
+func main() {
+	ch := make(chan int)      // bidirectional
+	go producer(ch)           // implicitly converts to chan<- int
+	consumer(ch)              // implicitly converts to <-chan int
 }
-``
-::
+```
 
-### Fan-out/fan-in
+## Nil Channels in `select` — Dynamic Case Control
 
 ::code-wrapper{language="go"}
 ```go
-// Fan-out: multiple goroutines read from the same input channel
-out := make(chan int)
-for i := 0; i < 3; i++ {
-	go func(in <-chan int, out chan<- int) {
-		for v := range in {
-			out <- process(v)
+// A nil channel in select blocks that case FOREVER — effectively disabling it.
+// This is a pattern for dynamically enabling/disabling select cases.
+
+func dynamicSelect() {
+	var send chan<- int = nil  // disabled — this case never fires
+	var recv <-chan int = nil
+
+	if shouldSend {
+		send = someChannel  // enabled
+	}
+	if shouldReceive {
+		recv = someOtherChannel
+	}
+
+	select {
+	case send <- 42:     // only fires if send != nil
+	case v := <-recv:    // only fires if recv != nil
+		_ = v
+	case <-time.After(time.Second):
+		fmt.Println("timeout")
+	}
+}
+
+// ─── Production pattern: state machine with nil channels ───
+func stateMachine(input <-chan int, output chan<- int) {
+	var pending int
+	var hasPending bool
+	var out chan<- int = nil  // disabled until we have something to send
+
+	for {
+		select {
+		case v, ok := <-input:
+			if !ok {
+				return  // input closed
+			}
+			pending = v
+			hasPending = true
+			out = output  // enable the send case
+		case out <- pending:  // only fires when out != nil (we have pending)
+			hasPending = false
+			out = nil  // disable the send case until next input
 		}
-	}(in, out)
+	}
 }
-``
-::
+```
 
-## `nil` Channels in `select`
-
-A nil channel in `select` blocks that case forever — effectively disabling it. This is a pattern for dynamically enabling/disabling cases:
+## Signal/Done Channels — `chan struct{}`
 
 ::code-wrapper{language="go"}
 ```go
-var send chan<- int = nil   // disabled
-if shouldSend {
-	send = someChannel   // enabled
+// chan struct{} is the idiom for a signal channel — carries no data,
+// zero bytes. close(done) signals to ALL receivers (unlike a send which
+// only unblocks one receiver).
+
+func signalPattern() {
+	done := make(chan struct{})
+
+	// Worker goroutines listen for done:
+	for i := 0; i < 3; i++ {
+		go func(id int) {
+			select {
+			case <-done:
+				fmt.Printf("worker %d: shutting down\n", id)
+				return
+			case <-time.After(10 * time.Second):
+				fmt.Printf("worker %d: work done\n", id)
+			}
+		}(i)
+	}
+
+	// Signal all workers to stop:
+	close(done)  // ALL three <-done unblock simultaneously
+	time.Sleep(time.Second)
 }
-select {
-case send <- v:   // only fires if send != nil
-case <-done:
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ close(done) vs done <- struct{}{}                                     │
+// │   close: unblocks ALL receivers simultaneously (broadcast)           │
+// │   send:  unblocks ONE receiver (if multiple are waiting, random)     │
+// │                                                                        │
+// │ For "stop" signals, always use close — it's a broadcast.             │
+// │ For "pass a value", use send — it's point-to-point.                  │
+// └──────────────────────────────────────────────────────────────────────┘
+```
+
+## Buffer Sizing — Deliberate, Not Default
+
+::code-wrapper{language="go"}
+```go
+// Buffer size is a CONCURRENCY DECISION, not a performance optimization.
+//
+// Unbuffered (size 0): synchronous — sender and receiver rendezvous.
+//   Use when the sender must know the receiver got the value (handoff).
+//
+// Buffered (size N): asynchronous up to N — decouples sender/receiver.
+//   Use when rates differ (producer bursts, consumer processes steadily).
+//   Size = the burst size or the number of workers.
+
+// ❌ ANTI-PATTERN: using a buffer to "fix" a deadlock
+//   ch := make(chan int, 100)  // "it was deadlocking, so I buffered"
+//   The buffer DELAYS the deadlock, doesn't prevent it. Fix the design.
+
+// ✅ CORRECT: buffer sized to match workers
+func workerPool(jobs []Job, numWorkers int) {
+	jobsCh := make(chan Job, numWorkers)     // buffer = worker count
+	resultsCh := make(chan Result, numWorkers)
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobsCh {
+				resultsCh <- process(j)
+			}
+		}()
+	}
+
+	// Feed jobs (buffer prevents blocking if workers are slow)
+	for _, j := range jobs {
+		jobsCh <- j
+	}
+	close(jobsCh)
+
+	// Collect results
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+	for r := range resultsCh {
+		_ = r
+	}
 }
-``
-::
+```
+
+## Channel Memory Mechanics
+
+::code-wrapper{language="go"}
+```go
+// A channel is a pointer to a runtime hchan struct:
+//   type hchan struct {
+//       qcount   uint           // number of buffered elements
+//       dataqsiz uint           // buffer capacity
+//       buf      unsafe.Pointer // circular buffer (for buffered channels)
+//       elemsize uint16         // element size in bytes
+//       sendx    uint           // send index in circular buffer
+//       recvx    uint           // receive index in circular buffer
+//       recvq    waitq          // list of goroutines waiting to receive
+//       sendq    waitq          // list of goroutines waiting to send
+//       lock     mutex          // protects the hchan struct
+//   }
+//
+// Memory per channel:
+//   - hchan struct: ~96 bytes
+//   - Buffer (buffered): capacity × elementSize bytes
+//   - Each blocked goroutine: ~2KB stack (on the sendq/recvq)
+//
+// A channel with 1000 ints: 96 + 1000×8 = ~8KB
+// A channel with 1M structs (100 bytes each): 96 + 1M×100 = ~100MB
+//   — be careful with large buffers for big element types
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `chan struct{}` for signal/done channels — the empty struct carries no data and takes no space, signaling "I only care about the event, not a value." `close(done)` unblocks all receivers (multiple `<-done`), unlike a send which unblocks one.
-- **Idiom**: the **sender closes** the channel — the receiver never closes (it doesn't know if other senders exist). For multiple senders, coordinate closing via a separate shutdown channel or a `context` (the sender goroutine that observes the shutdown closes the data channel).
-- **Idiom**: use directional channel types in function signatures (`func f(in <-chan int, out chan<- int)`) — documents intent and lets the compiler enforce it (a send-only channel can't be received from). Convert a bidirectional channel to directional implicitly on call.
-- **Idiom**: use buffered channels to **decouple** producers and consumers when their rates differ — a buffer absorbs bursts. But don't use buffering to "fix" a deadlock; size the buffer deliberately (e.g., the number of workers, or the expected burst size).
-- **Idiom**: use a nil channel in `select` to disable a case dynamically — assigning `nil` to a channel variable makes that `select` case block forever (never fire), effectively turning it off. This is the pattern for conditionally sending/receiving in a loop.
+- **Idiom**: use `chan struct{}` for signal/done channels — zero bytes, signals "event only, no data." `close(done)` broadcasts to all receivers simultaneously.
+- **Idiom**: the sender closes the channel — the receiver never closes (it doesn't know if other senders exist). For multiple senders, use a coordinator (WaitGroup + close after all done).
+- **Idiom**: use directional channel types in function signatures (`func f(in <-chan int, out chan<- int)`) — documents intent, compiler enforces. Convert bidirectional to directional implicitly on call.
+- **Idiom**: use a nil channel in `select` to disable a case dynamically — assigning `nil` makes that case block forever (never fires). Pattern for state machines and conditional send/receive.
+- **Idiom**: use buffered channels to decouple producer/consumer when rates differ — a buffer absorbs bursts. Don't use buffering to "fix" a deadlock; size the buffer deliberately (worker count or expected burst).
+- **Debug**: `len(ch)` and `cap(ch)` are rarely useful for synchronization — the values change immediately as goroutines send/receive. Don't use them for sync logic. Use them only for monitoring/metrics.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Sending to a closed channel panics**: only the sender closes, and only after all sends. The receiver receiving from a closed channel is fine (gets zero value).
-- **Closing a closed channel panics**: double-close is a runtime panic.
-- **Closing a nil channel panics**: `var ch chan int; close(ch)` panics.
-- **Receiving from a nil channel blocks forever**: `var ch chan int; <-ch` hangs. Useful in `select` (disables the case) but a bug if unintended.
-- **Unbuffered channels are synchronous**: `ch <- v` blocks until a receiver is ready — a sender with no receiver deadlocks. Use a buffered channel or ensure a receiver is running.
-- **Buffered channels hide deadlocks temporarily**: a buffer full of sends with no receiver eventually deadlocks. The buffer delays, not prevents, the deadlock.
+- **Sending to a closed channel panics**: only the sender closes, and only after all sends. Receiving from a closed channel is fine (zero value, ok=false).
+- **Closing a closed channel panics**: double-close is a runtime panic. Use `sync.Once` if closing might be called multiple times.
+- **Closing a nil channel panics**: `var ch chan int; close(ch)` → panic.
+- **Receiving from a nil channel blocks forever**: `var ch chan int; <-ch` hangs. Useful in `select` (disables the case), a bug if unintended.
+- **Unbuffered channels are synchronous**: `ch <- v` blocks until a receiver is ready. A sender with no receiver deadlocks. Ensure a receiver is running or use a buffer.
+- **Buffered channels hide deadlocks temporarily**: a buffer full of sends with no receiver eventually deadlocks. The buffer delays, not prevents.
 - **`range` over a channel blocks until close**: `for v := range ch` never returns unless `ch` is closed. Forgetting to close leaves the range goroutine stuck.
-- **Multiple senders, one closer**: if multiple goroutines send to a channel, none should close it directly (another might still send). Use a coordinator (a separate goroutine that closes after all senders are done, or a `context`).
-- **Channel capacity is fixed**: `make(chan T, n)` — you can't resize. Pick the right capacity at creation.
-- **`len(ch)` and `cap(ch)`**: `len` is the number of buffered elements, `cap` is the capacity. These are rarely useful (the value changes immediately as goroutines send/receive) — don't use them for synchronization logic.
+- **Multiple senders, one closer**: if multiple goroutines send, none should close directly. Use a coordinator or `context` to signal shutdown.
+- **`len(ch)`/`cap(ch)` changes immediately**: the values are stale by the time you use them. Don't use for synchronization.
+- **Channel capacity is fixed**: `make(chan T, n)` — can't resize. Pick the right capacity at creation.
 
-## 🧠 Spot the Bug
-
-A developer creates a pipeline but it deadlocks:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
 func main() {
-	ch := make(chan int)
-	go func() {
-		for i := 0; i < 5; i++ {
-			ch <- i
-		}
-		close(ch)
-	}()
-	// (no receiver)
+	ch := make(chan int, 2)
+	ch <- 1
+	ch <- 2
+	close(ch)
+	v1, ok1 := <-ch
+	v2, ok2 := <-ch
+	v3, ok3 := <-ch
+	fmt.Println(v1, ok1)
+	fmt.Println(v2, ok2)
+	fmt.Println(v3, ok3)
 }
 ```
+
+What's printed?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-The goroutine sends to an **unbuffered channel** with no receiver. `ch <- i` blocks on the first send, waiting for a receiver that never exists (main doesn't receive). The goroutine is stuck, and if main were waiting on it (via WaitGroup), the whole program would deadlock.
-
-The fixes:
-1. **Add a receiver in main**:
-```go
-for v := range ch {
-	fmt.Println(v)
-}
 ```
-2. **Use a buffered channel** (if the sender should proceed without an immediate receiver):
-```go
-ch := make(chan int, 5)   // buffer holds all 5, sender doesn't block
+1 true
+2 true
+0 false
 ```
-3. **Both** — a buffered channel *and* a receiver (main consumes after the goroutine produces).
 
-**The lesson**: an unbuffered channel send blocks until a receiver is ready. A sender with no receiver deadlocks. Either add a receiver or use a buffered channel (but the buffer must be large enough, or the deadlock is just delayed).
+The channel has 2 buffered values. After `close(ch)`:
+- First receive: `v1=1, ok1=true` (buffered value)
+- Second receive: `v2=2, ok2=true` (buffered value)
+- Third receive: `v3=0, ok3=false` (buffer drained, channel closed → zero value, ok=false)
+
+`ok=false` is how you detect "channel closed and drained." This is why `range` over a channel works — it receives until `ok` is false, then stops.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now create unbuffered/buffered channels, send/receive, close (sender closes), range over channels, use directional types, and build signal/done patterns — while avoiding the send-to-closed-panic, deadlock-with-no-receiver, and multiple-sender-closing traps. Next: `select` for multiplexing channel operations.
+→ [18 — Select & Multiplexing](/go/18-select-and-multiplexing) — timeout patterns, fan-in, priority selects, and the `time.After` leak.

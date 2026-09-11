@@ -1,267 +1,344 @@
-# 12 — Generics
+---
+title: "Dart — Reified Generics, Bounds & Covariance"
+description: "Deep-dive into Dart's reified generics, bounded type parameters, covariance soundness, generic method inference, and runtime type checking patterns. Code-first engineering reference."
+---
 
-Generics enable type-safe, reusable code. Parameterize classes and functions with type parameters.
+# Dart — Reified Generics, Bounds & Covariance
 
-## Why Generics?
+## Reified Generics — Runtime Type Information
 
 ::code-wrapper{language="dart"}
 ```dart
-// Without generics (List<dynamic> — no type safety)
-var list = [1, 2, 3];
-list.add('four');   // ✓ allowed (dynamic)
-list[0].abs();      // ✗ runtime error: String has no abs()
+// Dart generics are REIFIED — type parameters exist at runtime.
+// Unlike Java's type erasure, you can check `is List<int>` at runtime.
 
-// With generics
-List<int> numbers = [1, 2, 3];
-// numbers.add('four');   // ✗ compile error
-numbers[0].abs();         // ✓ int has abs
+var list = <int>[1, 2, 3];
+print(list.runtimeType);  // List<int> — the type is preserved at runtime
+print(list is List<int>);  // true
+print(list is List<num>);  // true (covariance: List<int> is a List<num>)
+print(list is List<String>);  // false
+
+// Contrast with Java: `list instanceof List<Integer>` doesn't compile (erased).
+// Dart's reified generics enable runtime type dispatch.
+
+// Using reified types in practice:
+void processList(List<dynamic> items) {
+  if (items is List<int>) {
+    // items is promoted to List<int> here — reified check enables this.
+    print('Int list, sum: ${items.fold(0, (a, b) => a + b)}');
+  } else if (items is List<String>) {
+    print('String list: ${items.join(", ")}');
+  } else {
+    print('Unknown list type: ${items.runtimeType}');
+  }
+}
 ```
 ::
-Generics catch type errors at compile time and document intent.
 
-## Generic Classes
+## Generic Classes — Type-Safe Collections
 
 ::code-wrapper{language="dart"}
 ```dart
+// A generic Stack with type-safe push/pop.
 class Stack<T> {
-	final _items = <T>[];
+  final _items = <T>[];  // typed internal storage
 
-	void push(T item) => _items.add(item);
-	T pop() => _items.removeLast();
-	bool get isEmpty => _items.isEmpty;
+  void push(T item) => _items.add(item);  // only T accepted
+
+  T pop() {
+    if (_items.isEmpty) throw StateError('Stack is empty');
+    return _items.removeLast();  // returns T (not dynamic)
+  }
+
+  T peek() {
+    if (_items.isEmpty) throw StateError('Stack is empty');
+    return _items.last;
+  }
+
+  bool get isEmpty => _items.isEmpty;
+  int get length => _items.length;
+
+  // Generic method on a generic class — U is independent of T.
+  List<U> map<U>(U Function(T) fn) => _items.map(fn).toList();
 }
 
-var stack = Stack<String>();
+// T is inferred at construction:
+var stack = Stack<String>();  // T = String
 stack.push('hello');
-var item = stack.pop();   // String (typed)
+var item = stack.pop();  // item is String (typed, not dynamic)
+// stack.push(42);  // ✗ compile error: int is not String
+
+var intStack = Stack<int>();  // T = int
+intStack.push(42);
+var doubled = intStack.map((n) => n * 2);  // U = int, returns List<int>
+var asStrings = intStack.map((n) => n.toString());  // U = String, returns List<String>
 ```
 ::
-`T` is a type parameter (convention: single uppercase letters — `T`, `E`, `K`, `V`). `Stack<T>` is parameterized; `Stack<String>` instantiates with `T = String`.
 
-## Generic Functions
+## Bounded Type Parameters — Constraining T
 
 ::code-wrapper{language="dart"}
 ```dart
-T firstOf<T>(List<T> items) => items.first;
+// `T extends Model` — T must be a Model subtype. Inside the class,
+// you can call Model's methods on T values.
 
-var x = firstOf<int>([1, 2, 3]);        // 1 (int)
-var y = firstOf(['a', 'b']);            // 'a' (T inferred as String)
+abstract class Model {
+  int get id;
+  Map<String, dynamic> toJson();
+}
+
+class Repository<T extends Model> {
+  final List<T> _items = [];
+
+  void add(T item) => _items.add(item);
+
+  // Can call `item.id` because T extends Model.
+  T? findById(int id) {
+    for (var item in _items) {
+      if (item.id == id) return item;  // ✓ .id is available (from Model bound)
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> allJson() =>
+      _items.map((item) => item.toJson()).toList();  // ✓ .toJson() available
+}
+
+class User extends Model {
+  @override final int id;
+  final String name;
+  User(this.id, this.name);
+
+  @override
+  Map<String, dynamic> toJson() => {'id': id, 'name': name};
+}
+
+var repo = Repository<User>();  // ✓ User extends Model
+// var bad = Repository<String>();  // ✗ String doesn't extend Model
+repo.add(User(1, 'Alice'));
+print(repo.findById(1)?.name);  // 'Alice'
+
+// ── Self-bounded: T extends Comparable<T> ──
+// T must be comparable to itself — enables sorting.
+class SortedList<T extends Comparable<T>> {
+  final _items = <T>[];
+
+  void add(T item) {
+    _items.add(item);
+    _items.sort((a, b) => a.compareTo(b));  // ✓ compareTo available
+  }
+
+  List<T> get items => List.unmodifiable(_items);
+}
+
+// `T extends Object` — excludes Null (default bound is Object?).
+class Cache<T extends Object> {
+  final _cache = <String, T>{};
+  T? get(String key) => _cache[key];  // T is non-nullable (excludes Null)
+  void set(String key, T value) => _cache[key] = value;
+}
 ```
 ::
-Type parameters can be inferred from arguments. Explicit `<int>` is optional when inferable.
 
-## Generic Methods on Classes
+## Covariance — Convenience vs Soundness
 
 ::code-wrapper{language="dart"}
 ```dart
+// Dart generics are COVARIANT: List<Dog> is a subtype of List<Animal>.
+// This is convenient but UNSOUND — you could add a Cat to a List<Dog>
+// passed as List<Animal>. The runtime catches violations (TypeError).
+
+class Animal { String get name => 'Animal'; }
+class Dog extends Animal { @override String get name => 'Dog'; }
+class Cat extends Animal { @override String get name => 'Cat'; }
+
+void feedAll(List<Animal> animals) {
+  for (var a in animals) print('Feeding ${a.name}');
+}
+
+var dogs = <Dog>[Dog(), Dog()];
+feedAll(dogs);  // ✓ List<Dog> is a List<Animal> (covariance)
+
+// The soundness hole:
+void addCat(List<Animal> animals) {
+  animals.add(Cat());  // ✓ compiles — List<Animal> accepts Animal
+}
+
+var dogList = <Dog>[Dog()];
+// addCat(dogList);  // ✗ runtime TypeError: Cat is not a Dog
+// At runtime, the VM checks the actual type (List<Dog>) and rejects Cat.
+```
+
+### Covariance Anti-Pattern
+
+::code-wrapper{language="dart"}
+```dart
+// ❌ Anti-pattern: relying on covariance to add to a list.
+void addToDogs(List<Animal> animals) {
+  animals.add(Dog());  // seems fine — but if `animals` is actually List<Cat>...
+}
+
+var cats = <Cat>[Cat()];
+// addToDogs(cats);  // ✗ runtime TypeError: Dog is not a Cat
+
+// The runtime check catches it, but it's a design smell. If you're adding,
+// the parameter should be typed correctly. Covariance is safe for READS,
+// not WRITES.
+
+// ✓ For write-safe APIs, use `List<Animal>` (accepts any Animal subtype list
+// for reading). For writes, accept `List<Animal>` explicitly constructed.
+```
+::
+
+## Generic Methods — Independent Type Parameters
+
+::code-wrapper{language="dart"}
+```dart
+// A generic method has its own type parameter, independent of the class.
 class Cache {
-	final _cache = <String, Object>{};
+  final _cache = <String, Object>{};
 
-	T get<T>(String key, T Function() loader) {
-		if (_cache.containsKey(key)) {
-			return _cache[key] as T;
-		}
-		final value = loader();
-		_cache[key] = value;
-		return value;
-	}
+  // T is inferred from the `loader` return type at the call site.
+  T getOrCompute<T extends Object>(String key, T Function() loader) {
+    final cached = _cache[key];
+    if (cached is T) return cached;  // reified check — safe
+    final value = loader();
+    _cache[key] = value;
+    return value;
+  }
 }
 
 final cache = Cache();
-var user = cache.get('user', () => fetchUser());   // T inferred as User
-```
-::
-The method has its own type parameter `T`, independent of the class.
+var user = cache.getOrCompute('user', () => fetchUser());  // T = User
+var count = cache.getOrCompute('count', () => 42);  // T = int
 
-## Bounded Type Parameters
-
-Restrict `T` to a subtype:
-
-::code-wrapper{language="dart"}
-```dart
-class Repository<T extends Model> {
-	final List<T> items = [];
-	void add(T item) => items.add(item);
-	T find(int id) => items.firstWhere((i) => i.id == id);
+// ❌ Anti-pattern: `as T` blindly trusts the caller's type parameter.
+class BadCache {
+  final _cache = <String, Object>{};
+  T get<T>(String key) => _cache[key] as T;  // throws TypeError if wrong type
 }
 
-class User extends Model { ... }
-var repo = Repository<User>();   // ✓ User extends Model
-// var bad = Repository<String>(); // ✗ String doesn't extend Model
-```
-::
-`T extends Model` means `T` must be a `Model` subtype — you can use `Model`'s methods on `T` inside the class.
+void main() {
+  final c = BadCache();
+  c._cache['x'] = 42;
+  // c.get<String>('x');  // ✗ TypeError: 42 is not a String
+}
 
-### Multiple bounds
-
-::code-wrapper{language="dart"}
-```dart
-class SortedList<T extends Comparable<T>> {
-	final _items = <T>[];
-	void add(T item) {
-		_items.add(item);
-		_items.sort((a, b) => a.compareTo(b));
-	}
+// ✓ Correct: use `is T` (reified check) to validate before returning.
+class SafeCache {
+  final _cache = <String, Object>{};
+  T? get<T extends Object>(String key) {
+    final value = _cache[key];
+    if (value is T) return value;  // reified generics enable this
+    return null;  // type mismatch or missing — no crash
+  }
 }
 ```
 ::
-`T extends Comparable<T>` — `T` must be comparable to itself. `a.compareTo(b)` is available (from `Comparable`).
 
-## Generic Typedefs
-
-::code-wrapper{language="dart"}
-```dart
-typedef Callback<T> = void Function(T value);
-
-Callback<int> onInt = (n) => print(n);
-Callback<String> onString = (s) => print(s);
-```
-::
-## The `Object` bound
-
-By default, `T` is bounded by `Object?` (any type, including null). `T extends Object` excludes null:
+## Type Inference & `dynamic` Traps
 
 ::code-wrapper{language="dart"}
 ```dart
-class Box<T extends Object> { ... }   // T can't be Null
-```
-::
-## Reified Generics
+// Type inference from arguments:
+T firstOf<T>(List<T> items) => items.first;
 
-Dart generics are **reified** — type parameters are available at runtime (unlike Java's type erasure):
+var x = firstOf([1, 2, 3]);  // T inferred as int — x is int
+var y = firstOf(['a', 'b']);  // T inferred as String — y is String
+var z = firstOf<int>([1, 2]);  // explicit T — z is int
 
-::code-wrapper{language="dart"}
-```dart
-var list = <int>[1, 2, 3];
-print(list.runtimeType);   // List<int> (the type is preserved)
-print(list is List<int>);  // true
-```
-::
-You can check `is List<int>` at runtime — the type info is preserved. This is unlike Java (`List<Integer>.class` doesn't exist) and like C#.
+// ❌ Anti-pattern: dynamic list causes T to infer as dynamic.
+var mixed = <dynamic>[1, 'two', 3.0];
+var first = firstOf(mixed);  // T = dynamic — first is dynamic, no type safety
+first.abs();  // compiles (dynamic), throws NoSuchMethodError on 'two'
 
-## Covariance
+// ✓ Correct: use typed lists, or convert before passing.
+var typed = mixed.whereType<int>().toList();  // filters to List<int>
+var firstInt = firstOf(typed);  // T = int
 
-Dart generics are **covariant** — `List<Dog>` is a subtype of `List<Animal>`:
-
-::code-wrapper{language="dart"}
-```dart
-void feedAll(List<Animal> animals) { ... }
-var dogs = <Dog>[...];
-feedAll(dogs);   // ✓ List<Dog> is a List<Animal> (covariant)
-```
-::
-This is convenient but unsound (you could add a `Cat` to a `List<Dog>` passed as `List<Animal>`). Dart allows it for ergonomics; the runtime checks catch violations.
-
-### `List<Dog>` vs `List<Dog>?>`
-
-Covariance applies to the type parameter, not the nullability of the collection. `List<Dog>?` (nullable list) is different from `List<Dog?>` (list of nullable dogs).
-
-## `is` and `as` with generics
-
-::code-wrapper{language="dart"}
-```dart
-var list = [1, 2, 3];
-if (list is List<int>) {
-	print('int list');
+// Generic type parameters are not values — you can't use `T` as a Type:
+class Box<T> {
+  // print(T);  // ✗ T is not a value, it's a type
+  Type get type => T;  // ✓ T can be used as a Type in type context
+  bool isTypeOf(Object obj) => obj is T;  // ✓ reified check
 }
-var typed = list as List<int>;   // cast (throws if wrong)
 ```
 ::
-`is` and `as` work with generic types (reified). `is List<int>` is a runtime check.
-
-## Generic collections
-
-All built-in collections are generic:
-- `List<E>` — ordered, indexed.
-- `Set<E>` — unique.
-- `Map<K, V>` — key-value.
-- `Iterable<E>` — lazy sequence.
-- `Stream<E>` — async sequence.
-- `Future<T>` — async value.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use generics for type-safe collections and APIs — `List<int>`, `Stack<T>`, `Repository<T extends Model>`. They catch type errors at compile time and document intent. Prefer `List<int>` over `List<dynamic>`.
-- **Idiom**: use bounded type parameters (`T extends Model`) to access the bound's methods — inside `Repository<T extends Model>`, you can call `Model`'s methods on `T`. Use `T extends Comparable<T>` for sortable types.
-- **Idiom**: let type parameters be inferred when obvious — `firstOf([1,2,3])` infers `T = int`; explicit `firstOf<int>(...)` is redundant. Specify `<Type>` when inference is unclear or for readability at the call site.
-- **Idiom**: use reified generics for runtime type checks — `if (x is List<int>)` works at runtime (Dart's generics are reified, unlike Java's erased). Use for type dispatch, but prefer polymorphism when possible.
-- **Idiom**: use `T extends Object` to exclude `null` from a type parameter — by default `T` is `Object?` (nullable). `T extends Object` makes `T` non-nullable, useful for caches/containers that shouldn't hold null.
+- **Idiom**: use `is T` (not `as T`) for generic cache retrieval — `if (value is T) return value` uses reified generics for a safe runtime check. `as T` blindly trusts the caller and throws `TypeError` on mismatch. Return `null` (or a Result) on mismatch instead of crashing.
+- **Idiom**: `T extends Object` to exclude `Null` from a type parameter — the default bound is `Object?` (nullable). `T extends Object` makes `T` non-nullable, useful for caches/containers that shouldn't hold null.
+- **Idiom**: bounded type parameters (`T extends Model`) to access the bound's methods — inside `Repository<T extends Model>`, you can call `Model`'s methods on `T`. Use `T extends Comparable<T>` for sortable types (self-bounded).
+- **Idiom**: let type parameters be inferred when obvious — `firstOf([1,2,3])` infers `T = int`. Explicit `<int>` is redundant. Specify when inference is unclear or for readability at the call site.
+- **Idiom**: use reified generics for runtime type dispatch — `if (x is List<int>)` works at runtime (unlike Java's erased generics). Use for type-based processing, but prefer polymorphism when possible.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Dart generics are reified** (not erased): `List<int>.runtimeType` is `List<int>`; `is List<int>` works at runtime. Unlike Java, you have full runtime type info. This is like C#.
-- **Covariance is unsound but allowed**: `List<Dog>` is a `List<Animal>` (covariant). You could add a `Cat` to a `List<Dog>` passed as `List<Animal>` — a runtime check catches this (`TypeError`). Dart trades soundness for ergonomics.
-- **`List<int>` vs `List<num>`**: `List<int>` is a `List<num>` (covariance), but you can't add a `double` to a `List<int>` (runtime check: `List<int>` doesn't accept `double`). `List<num>` accepts both.
-- **Generic type parameters can't be used in static contexts directly**: a static method can't reference the class's `T` (no instance). Use a generic method with its own type parameter.
-- **`T` is not available at runtime by name**: `T` inside a function isn't a `Type` value. `print(T)` is invalid. Use `T` as a type annotation, not a value. To get the runtime type of an instance, use `runtimeType`.
+- **Dart generics are reified**: `List<int>.runtimeType` is `List<int>`; `is List<int>` works at runtime. Unlike Java's erased generics, full type info is preserved.
+- **Covariance is unsound but allowed**: `List<Dog>` is `List<Animal>` (covariant). Adding a `Cat` to a `List<Dog>` passed as `List<Animal>` → runtime `TypeError`. Dart trades soundness for ergonomics.
+- **`List<int>` is `List<num>` (covariance)**: but you can't add a `double` to a `List<int>` (runtime check rejects). `List<num>` accepts both.
+- **Generic type parameters can't be used in static contexts**: a static method can't reference the class's `T` (no instance). Use a generic method with its own type parameter.
+- **`T` is not a value**: `print(T)` is invalid. Use `T` as a type annotation, not a value. For the runtime type of an instance, use `runtimeType`.
 - **Default bound is `Object?`**: `T` without a bound is `Object?` — can be `Null`. Use `T extends Object` to exclude null.
-- **`is` with generic types works (reified)**: `x is List<int>` is a runtime check. But `x is List<dynamic>` is true for any `List` — be specific.
-- **Generic method inference**: `firstOf([1,2,3])` infers `T = int`. But `firstOf(<dynamic>[1, 'two'])` infers `T = dynamic` — be careful with `dynamic` lists.
-- **`super` bounds**: `T extends Animal` (upper bound) is common. Dart doesn't have `super` bounds (lower bounds) like Java's `? super T`.
+- **`as T` in a generic cache throws on mismatch**: `_cache[key] as T` blindly trusts the caller's type. Use `is T` (reified check) to validate, returning `null` on mismatch.
+- **`dynamic` lists cause `T` to infer as `dynamic`**: `firstOf(<dynamic>[1, 'two'])` infers `T = dynamic` — no type safety. Convert to a typed list first (`whereType<int>()`).
+- **No `super` bounds (lower bounds)**: Dart doesn't have `? super T` like Java. Only upper bounds (`T extends Animal`).
 - **Casting generic collections**: `list as List<int>` throws if `list` is `List<dynamic>` with non-ints. Use `list.cast<int>()` (lazy cast, checks on access) or `List<int>.from(list)` (eager copy).
 
 ## 🧠 Spot the Bug
 
-A developer creates a generic cache, but retrieving an item with the wrong type fails at runtime with a confusing error:
+A developer creates a generic cache and retrieves a value with the wrong type:
 
 ::code-wrapper{language="dart"}
 ```dart
 class Cache {
-	final _cache = <String, Object>{};
-
-	void put(String key, Object value) => _cache[key] = value;
-
-	T get<T>(String key) => _cache[key] as T;
+  final _cache = <String, Object>{};
+  void put(String key, Object value) => _cache[key] = value;
+  T get<T>(String key) => _cache[key] as T;
 }
 
 void main() {
-	final cache = Cache();
-	cache.put('count', 42);
-	final name = cache.get<String>('count');   // crashes
-	print(name);
+  final cache = Cache();
+  cache.put('count', 42);
+  final name = cache.get<String>('count');  // 💥
+  print(name);
 }
 ```
 ::
 
-What's the error?
+What happens and how to fix it?
 
 <details>
 <summary>Answer</summary>
 
-The cache stored `42` (an `int`) under `'count'`. `cache.get<String>('count')` does `_cache['count'] as String` — casting `42` (an `int`) to `String` throws `TypeError` at runtime: `type 'int' is not a subtype of type 'String'`.
+`cache.get<String>('count')` does `_cache['count'] as String` — casting `42` (an `int`) to `String` throws `TypeError` at runtime: `type 'int' is not a subtype of type 'String'`.
 
-The error is confusing because the caller asked for a `String`, but the stored value was an `int`. The `as T` cast blindly trusts the caller's type parameter, with no validation.
+The `as T` cast blindly trusts the caller's type parameter. There's no validation — the caller asks for a `String`, but the stored value is an `int`. The `TypeError` surfaces deep in the cache, with no context about what was stored vs. what was requested.
 
-The fix — handle the type mismatch gracefully (return `null` or throw a clearer error):
+The fix — use `is T` (reified check) to validate before returning:
 
 ```dart
 class Cache {
-	final _cache = <String, Object>{};
+  final _cache = <String, Object>{};
+  void put(String key, Object value) => _cache[key] = value;
 
-	void put(String key, Object value) => _cache[key] = value;
-
-	T? get<T extends Object>(String key) {
-		final value = _cache[key];
-		if (value is T) return value;
-		return null;   // type mismatch or missing key
-	}
+  T? get<T extends Object>(String key) {
+    final value = _cache[key];
+    if (value is T) return value;  // reified check — only returns if actually T
+    return null;  // type mismatch or missing key — no crash
+  }
 }
 
 void main() {
-	final cache = Cache();
-	cache.put('count', 42);
-	final count = cache.get<int>('count');    // 42
-	final name = cache.get<String>('count');   // null (type mismatch, no crash)
-	print(name);   // null
+  final cache = Cache();
+  cache.put('count', 42);
+  final count = cache.get<int>('count');    // 42
+  final name = cache.get<String>('count');  // null (type mismatch, no crash)
+  print(name);  // null — handle gracefully
 }
 ```
-::
-Using `if (value is T)` (a runtime check, thanks to reified generics) returns the value only if it's actually a `T`, else `null`. No `TypeError` — the caller handles the `null`.
 
-**The lesson**: `as T` in a generic cache blindly trusts the caller's type parameter and throws `TypeError` on mismatch. Use `is T` (reified check) to validate, returning `null` (or a clear error) on mismatch. Don't let type errors surface as confusing `TypeError`s deep in the cache.
+Using `is T` (enabled by reified generics) validates the type at runtime. If the stored value isn't a `T`, it returns `null` instead of throwing. The caller handles the `null` case — no opaque `TypeError` deep in the cache.
 
 </details>
-
-## Summary
-
-You can write generic classes (`Stack<T>`), functions (`firstOf<T>`), methods (`Cache.get<T>`), bounded type parameters (`T extends Model`, `T extends Comparable<T>`, `T extends Object`), generic typedefs, and use Dart's reified generics (`is List<int>` at runtime, `runtimeType` preserved) and covariance (`List<Dog>` is `List<Animal>`) — with the `as T`-throws-on-mismatch trap avoided via `is T`. Next: packages and libraries.

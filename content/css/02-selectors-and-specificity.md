@@ -1,176 +1,130 @@
-# 02 — Selectors & Specificity
+---
+title: "02 — Selectors, Specificity & the Cascade Algorithm"
+description: "Selector matching is right-to-left, specificity is a 4-tuple compared column-wise, and the cascade is origin→layer→specificity→order→inheritance. Code-first reference with cascade-layer architecture and the specificity arms-race anti-pattern."
+---
 
-Selectors target HTML elements for styling. Specificity and the cascade determine which rule wins when multiple apply.
+# 02 — Selectors, Specificity & the Cascade Algorithm
 
-## Selector Types
+The cascade is an algorithm, not a vibe. When N rules match an element, the engine computes a winner in this order: **origin/importance → cascade layer → specificity → source order → inheritance → initial value**. Misunderstanding any tier produces "why isn't my style applying?" Every selector you write is a specificity budget — spend it flat.
 
-::code-wrapper{language="css"}
-```css
-/* Type (element) */
-p { color: black; }
-
-/* Class */
-.highlight { background: yellow; }
-
-/* ID */
-#header { background: white; }
-
-/* Universal */
-* { box-sizing: border-box; }
-
-/* Attribute */
-[type="text"] { border: 1px solid gray; }
-a[href^="https"] { color: green; }   /* starts with https */
-a[href$=".pdf"] { color: red; }       /* ends with .pdf */
-a[href*="example"] { font-weight: bold; }  /* contains */
-
-/* Grouping */
-h1, h2, h3 { font-family: sans-serif; }
-```
-::
-
-## Combinators
+## Selector Inventory — with specificity cost
 
 ::code-wrapper{language="css"}
 ```css
-/* Descendant (any depth) */
-article p { margin: 1em 0; }
-
-/* Child (direct only) */
-ul > li { list-style: none; }
-
-/* Adjacent sibling (immediately after) */
-h1 + p { font-size: 1.2em; }
-
-/* General sibling (any following sibling) */
-h1 ~ p { color: gray; }
+/* specificity (a,b,c,d): a=style attr, b=ID count, c=class/attr/pseudo-class, d=type/pseudo-element */
+*                  { } /* (0,0,0,0) — universal: matches all, zero specificity. Safe for resets. */
+p                  { } /* (0,0,0,1) — type */
+.highlight         { } /* (0,0,1,0) — class (the production workhorse) */
+[type="text"]      { } /* (0,0,1,0) — attribute selector */
+a[href^="https"]   { } /* (0,0,1,1) — attr + type; ^= starts-with, $= ends-with, *= contains */
+#header            { } /* (0,1,0,0) — ID: avoid for styling (unoverridable by classes) */
+p::before          { } /* (0,0,0,2) — pseudo-element counts as a type */
+p:hover            { } /* (0,0,1,0) — pseudo-class counts as a class */
+:is(.a, #b, p)     { } /* takes the HIGHEST specificity in the list → (0,1,0,1) */
+:where(.a, #b)     { } /* always (0,0,0,0) — zero-specificity grouping, the override-friendly :is */
+:not(.error)       { } /* specificity of the ARGUMENT → (0,0,1,0), not of :not itself */
 ```
 ::
 
-## Specificity
-
-Specificity is a 4-part value `(a, b, c, d)`:
-- `a` — `style` attribute (inline) — 1 if present, else 0.
-- `b` — number of ID selectors.
-- `c` — number of class selectors, attribute selectors, and pseudo-classes.
-- `d` — number of type selectors and pseudo-elements.
-
-::code-wrapper{language="text"}
-```text
-*                 → (0,0,0,0)
-p                 → (0,0,0,1)
-.highlight        → (0,0,1,0)
-p.highlight       → (0,0,1,1)
-#header           → (0,1,0,0)
-#header .title    → (0,1,1,0)
-div#header .title → (0,1,1,1)
-style="..."       → (1,0,0,0)
-!important        → overrides specificity (but two !important compete by specificity)
-```
-::
-
-Compare left-to-right: `(0,1,0,0)` beats `(0,0,99,99)` — one ID beats any number of classes.
-
-### The specificity trap
-
-High-specificity selectors are hard to override. If you style with `#header .title`, overriding it requires `#header .title.highlight` or `!important` — a spiral. **Prefer class-based selectors** for most styling; reserve IDs for rare, truly-unique elements.
-
-## The Cascade
-
-When multiple rules apply to an element with equal specificity, **source order** wins — later rules override earlier. The full cascade order:
-
-1. **Origin & importance** — `!important` > normal; author (your CSS) > user > user-agent (browser default).
-2. **Specificity** — higher specificity wins.
-3. **Source order** — later wins (at equal specificity).
-4. **Inheritance** — if no rule applies, the property inherits from the parent (for inheritable properties like `color`, `font`).
-
-## Inheritance
-
-Some properties inherit (`color`, `font-*`, `line-height`, `text-align`, `list-style`); others don't (`border`, `margin`, `padding`, `width`, `height`). Set on a parent, inheritable properties apply to all descendants unless overridden.
+## Combinators — and what they cost the engine
 
 ::code-wrapper{language="css"}
 ```css
-body { font-family: sans-serif; color: #333; }   /* inherits to all text */
-div { border: 1px solid black; }                  /* doesn't inherit */
+/* The engine matches RIGHT-TO-LEFT. The rightmost selector is the "key" —
+   the engine finds all key matches, then walks UP the DOM checking ancestors.
+   Deep descendant chains = O(depth) per key match. BEM's flat single-class
+   selectors are O(1) by comparison. */
+article p            { } /* descendant: any <p> at any depth under <article> */
+ul > li              { } /* child: direct children only — tighter, faster */
+h1 + p               { } /* adjacent sibling: the <p> immediately after <h1> */
+h1 ~ p               { } /* general sibling: any <p> after <h1>, not nested */
 ```
 ::
-- `inherit` — explicitly inherit (`border: inherit;`).
-- `initial` — reset to the property's initial value.
-- `unset` — inherit if inheritable, else initial.
-- `revert` — reset to the browser default (not the spec initial).
 
-## Cascade Layers (modern)
+## The Specificity Trap — and the production escape
 
-`@layer` controls specificity between groups of rules — useful for taming third-party CSS:
+### Anti-pattern: ID selectors start an arms race
 
 ::code-wrapper{language="css"}
 ```css
-@layer reset, base, components, utilities;
+/* ❌ Once you use #id, classes can NEVER override it. You're forced into !important or more IDs. */
+#sidebar .btn { background: blue; }   /* (0,1,1,0) */
+.btn { background: green; }           /* (0,0,1,0) — loses forever, even with source order */
+.btn.green { background: green; }     /* (0,0,2,0) — still loses: 1 ID > any number of classes */
+```
+::
 
-@layer reset {
-	* { margin: 0; padding: 0; }
-}
+::code-wrapper{language="css"}
+```css
+/* ✓ PRODUCTION — flat class selectors + cascade layers. No IDs for styling. */
+@layer components, overrides;
 @layer components {
-	.card { /* ... */ }
+  .sidebar__btn { background: blue; }   /* (0,0,1,0) in `components` layer */
+}
+@layer overrides {
+  .sidebar__btn--green { background: green; }  /* later layer wins regardless of specificity */
 }
 ```
 ::
 
-Rules in later layers win over earlier layers (regardless of specificity within a layer). Unlayered rules have higher priority than layered rules. This is a modern way to manage specificity at scale (2023+ browser support).
+**Why:** `@layer` makes precedence a *declared order*, not a specificity shootout. A utility in the last layer beats a component in an earlier layer at (0,0,1,0) vs (0,0,10,0) — specificity is irrelevant *across* layers.
+
+## Cascade Layers in Practice — taming third-party CSS
+
+::code-wrapper{language="css"}
+```css
+@layer reset, third-party, base, components, utilities;
+/* third-party (framework, design system) is an EARLY layer → your base/components override it
+   for FREE, no matter how specific their selectors are. The end of !important wars. */
+@layer third-party {
+  @import url("bootstrap.css") layer(framework);  /* if you must @import, scope it to a layer */
+}
+```
+::
+
+## Inheritance vs Non-Inherited Properties
+
+::code-wrapper{language="css"}
+```css
+body { color: #333; border: 1px solid black; }
+/* `color` INHERITS → every descendant text node gets #333 unless overridden.
+   `border` does NOT inherit → only <body> gets a border. */
+.card { border: inherit; }    /* explicitly inherit a non-inherited property */
+.badge { all: revert; }       /* reset EVERYTHING to UA defaults (nuclear) */
+/* unset  = inherit if the property is inheritable, else initial.
+   revert = UA default (not the spec initial — e.g. `display: revert` → inline for <span>).
+   initial = the spec's initial value (display: initial → inline for everything). */
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: prefer class selectors (`.card`, `.title`) over ID selectors (`#header`) — classes are reusable, lower-specificity (easier to override), and not constrained to one element. Reserve IDs for genuinely unique elements (and JavaScript hooks).
-- **Idiom**: keep specificity low and flat — prefer single-class selectors (`.btn`) over chained (`.card .btn`, `#header .btn`). Low specificity is easy to override; high specificity starts an arms race toward `!important`.
-- **Idiom**: use BEM (`.block__element--modifier`) or similar naming to keep specificity flat — `.card__title--large` is a single class (specificity 0,0,1,0), not `.card .title.large` (0,0,2,1). Flat specificity avoids override battles.
-- **Idiom**: use `@layer` to manage third-party CSS — `@layer reset, base, third-party, components, utilities;` puts third-party styles in a layer that your component layer overrides, regardless of their specificity. No more `!important` wars with frameworks.
-- **Debug**: when a style isn't applying, check the Styles pane in DevTools — it shows all matching rules (struck-through if overridden) and the computed value. The specificity of each rule is visible; the winner is at the top. This reveals whether the issue is specificity, a typo, or a missing rule.
+- **Idiom**: use `:where()` for zero-specificity grouping — `.card :where(h1, h2, h3) { }` styles headings inside `.card` at specificity (0,0,1,0), so a single `.prose-h2` class can override it. `:is()` would hoist `h2`'s type specificity into the group.
+- **Idiom**: use BEM (`.block__element--modifier`) to keep every selector at (0,0,1,0) — flat specificity means source order and layers are the only precedence levers, exactly as intended.
+- **Idiom**: reserve IDs for JS hooks (`#submit-btn`) and fragment links, never styling. If you must target an ID, wrap it: `.app #header` is still (0,1,1,0) — better to refactor to a class.
+- **Idiom**: `@layer` is the modern specificity strategy — declare order once, put utilities last, and you never need `!important` or chained selectors for overrides.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **IDs beat any number of classes**: `#x` (0,1,0,0) beats `.a.b.c.d.e` (0,0,5,0). Don't try to override an ID selector with classes — use an ID or `!important` (or restructure).
-- **`!important` is a trap**: once you use it, overriding it requires higher specificity + `!important`. It cascades into more `!important`. Reserve for genuine overrides (third-party styles you can't edit).
-- **Specificity isn't decimal**: (0,0,10,0) doesn't "roll over" to (0,1,0,0) — 10 classes still lose to 1 ID. Compare each column independently.
-- **Inline styles beat stylesheet rules**: `style="color: red"` (1,0,0,0) beats `#id` (0,1,0,0). Only `!important` in a stylesheet overrides inline.
-- **Inherited properties vs non-inherited**: `color` inherits; `border` doesn't. Setting `border` on `body` doesn't give all elements a border. Use `inherit`/`unset` explicitly if needed.
-- **Universal selector `*` has zero specificity**: `* { box-sizing: border-box; }` is (0,0,0,0) — it doesn't override anything but also isn't overridden by anything specific. Safe for resets.
-- **`:not()` has the specificity of its argument**: `:not(.x)` has specificity (0,0,1,0) (the class inside), not (0,0,1,0) for the `:not` itself plus the argument. Modern `:not()` (with a selector list) takes the highest.
-- **Pseudo-elements (`::before`, `::after`) add specificity like a type**: `p::before` is (0,0,0,2). Pseudo-classes (`:hover`) add like a class: (0,0,1,0).
-- **Cascade layers change the specificity comparison**: a rule in a later layer wins over an earlier layer regardless of specificity. Unlayered rules beat layered rules. This is a deliberate escape hatch from the specificity hierarchy.
+- **Specificity is NOT decimal**: (0,0,10,0) does not "roll over" to (0,1,0,0). Ten classes still lose to one ID. Compare each column independently, left-to-right.
+- **`!important` reverses origin but keeps specificity**: two `!important` rules compete by specificity. `#x { color: red !important }` beats `.a.b.c { color: blue !important }`. It's a trap that forces *more* `!important`.
+- **`:not()` takes its argument's specificity**: `:not(.x)` is (0,0,1,0), `:not(#x)` is (0,1,0,0). A `:not()` with an ID inside is an ID-strength selector.
+- **Unlayered rules beat ALL layered rules**: a bare `.btn { }` outside `@layer` beats `.btn { }` in `@layer utilities`. This is the escape hatch — and the reason to layer *everything* or nothing.
+- **Pseudo-elements (`::before`) count as a type** (0,0,0,1); pseudo-classes (`:hover`) count as a class (0,0,1,0). `p::first-line:hover` is (0,0,1,2).
+- **`inherit`/`initial`/`unset`/`revert` are values, not properties**: `color: revert` resets to UA default; `all: unset` nukes everything. `revert` ≠ `initial` for UA-styled elements (`<button>`).
 
 ## 🧠 Spot the Bug
 
-A developer styles a button, then a later rule doesn't override it:
-
 ::code-wrapper{language="css"}
 ```css
-#sidebar .btn { background: blue; }       /* (0,1,1,0) */
-.btn { background: green; }               /* (0,0,1,0) — loses */
+#sidebar .btn { background: blue; }
+.btn { background: green; }
 ```
 ::
-
-The button stays blue. Why?
 
 <details>
 <summary>Answer</summary>
 
-`#sidebar .btn` has specificity (0,1,1,0) — one ID (`#sidebar`) plus one class (`.btn`). `.btn` has specificity (0,0,1,0) — one class. The ID-based selector wins, so the button stays blue, even though `.btn { background: green }` comes later in the source.
-
-Specificity beats source order. To override, the green rule needs specificity ≥ (0,1,1,0):
-
-```css
-#sidebar .btn { background: blue; }
-#sidebar .btn.green { background: green; }  /* (0,1,2,0) — wins */
-/* or */
-#sidebar .btn { background: green; }         /* same specificity, later in source — wins */
-```
-::
-The deeper fix: avoid ID selectors for styling. If `#sidebar` were `.sidebar` (a class), the specificity would be (0,0,2,0) vs (0,0,1,0), and adding a class (`.btn.green`) would override cleanly. IDs in selectors create override battles.
-
-**The lesson**: an ID in a selector gives it specificity that classes can't override. Use class-based selectors for styling to keep specificity flat and overridable.
+`#sidebar .btn` is (0,1,1,0); `.btn` is (0,0,1,0). Specificity beats source order, so the button stays blue. Ten `.btn`-class rules stacked later still lose. Fix: remove the ID (`--sidebar` as a class → (0,0,2,0), overridable by adding a class) or use `@layer` to declare precedence by layer, not specificity. The root cause: an ID in a selector makes it unoverridable by the class-based architecture the rest of the codebase uses.
 
 </details>
-
-## Summary
-
-You can now use type/class/ID/attribute selectors, combinators (descendant/child/sibling), understand specificity (the 4-part value) and the cascade (importance → specificity → source order → inheritance), use `inherit`/`initial`/`unset`/`revert`, and manage specificity with `@layer` — while preferring low-specificity class selectors over IDs. Next: the box model.

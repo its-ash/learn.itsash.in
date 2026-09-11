@@ -1,313 +1,285 @@
+---
+title: "06 — useEffect & Lifecycle"
+description: "Effect lifecycle, dependency array mechanics, cleanup functions, async race conditions, stale closures, and production data-fetching patterns with AbortController. Code-first reference for mid-to-senior React engineers."
+---
+
 # 06 — `useEffect` & Lifecycle
 
-## What Effects Are For
+## The Effect Lifecycle
 
-`useEffect` lets a component synchronize with something **outside** React's rendering model: network requests, subscriptions, timers, manually interacting with the DOM, third-party widget libraries, logging/analytics. The mental model is not "run this after render" so much as **"keep this external system in sync with these reactive values."**
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="effect_lifecycle.js"}
 ```javascript
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 
-function DocumentTitleUpdater({ unreadCount }) {
+// useEffect runs AFTER the browser paints (asynchronous — not during render).
+// The dependency array controls WHICH phases of the lifecycle trigger the effect:
+
+// ┌─────────────────────────────────────────────────────────────────────┐
+// │  deps array   │  when the effect runs                               │
+// ├───────────────┼─────────────────────────────────────────────────────┤
+// │  [a, b]       │  on mount + when a or b changes (Object.is compare)  │
+// │  []           │  on mount ONLY (never on update)                     │
+// │  (omitted)    │  after EVERY render (mount + every update)           │
+// └─────────────────────────────────────────────────────────────────────┘
+
+function DataViewer({ resourceId }) {
+  const [data, setData] = useState(null)
+
   useEffect(() => {
-    document.title = unreadCount > 0 ? `(${unreadCount}) Inbox` : 'Inbox'
-  }, [unreadCount])
+    // Effect body runs AFTER paint
+    fetchData(resourceId).then(setData)
 
-  return null
+    // Optional cleanup: runs BEFORE the next effect AND on unmount
+    return () => {
+      console.log('cleanup: resourceId changed or component unmounting')
+    }
+  }, [resourceId])  // runs on mount + when resourceId changes
+
+  // LIFECYCLE SEQUENCE for resourceId changing from 1 → 2:
+  // 1. Render with resourceId=2 (new state/props trigger re-render)
+  // 2. Browser paints with new resourceId
+  // 3. Cleanup from PREVIOUS effect runs (resourceId was 1)
+  // 4. NEW effect body runs (resourceId is now 2)
+  // → cleanup → effect → cleanup → effect → ... → final cleanup on unmount
 }
 ```
 ::
 
-## Effect Timing: When Does It Run?
+## Dependency Array: Object.is Comparison
 
-1. React renders the component (calls the function, computes JSX).
-2. React commits the resulting changes to the real DOM.
-3. The browser paints the screen.
-4. **After** the paint, React runs your effect (asynchronously, not blocking paint).
-
-This is fundamentally different from a class component's `componentDidMount`/`componentDidUpdate`, which run synchronously during the commit phase, before the browser paints. `useEffect`'s deferred timing is usually what you want (it doesn't block visual updates), but for certain DOM measurements (avoiding a visible flicker), you need `useLayoutEffect` instead, which runs synchronously before paint — covered later in this chapter.
-
-## The Dependency Array
-
-The second argument controls *when* the effect re-runs. This is the single most misunderstood part of `useEffect`.
-
-| Dependency array | Behavior |
-|---|---|
-| Omitted entirely | Runs after **every** render — rarely what you want. |
-| `[]` (empty) | Runs **once**, after the initial render only — analogous to `componentDidMount`. |
-| `[a, b]` | Runs after the initial render, and again whenever `a` or `b` changes between renders (compared with `Object.is`). |
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="deps_comparison.js"}
 ```javascript
-useEffect(() => {
-  console.log('Runs after every single render')
-})
+// React compares each dep with Object.is(prevDep, nextDep).
+// If ANY dep fails Object.is, the effect re-runs.
 
-useEffect(() => {
-  console.log('Runs once, after mount only')
-}, [])
+// Object.is works for primitives (strings, numbers, booleans):
+useEffect(() => { /* runs when id changes */ }, [id])  // ✓ id=1 vs id=2 → re-runs
 
+// Object.is FAILS for new object/array/function references:
+useEffect(() => { /* runs every render! */ }, [{ page: 1 }])
+// { page: 1 } !== { page: 1 } — new object literal every render → always different
+
+useEffect(() => { /* runs every render! */ }, [() => doSomething()])
+// New function reference every render → always different
+
+// THIS IS WHY useMemo/useCallback EXIST:
+const config = useMemo(() => ({ page: 1 }), [])  // stable reference
+const handler = useCallback(() => doSomething(), [doSomething])  // stable reference
+useEffect(() => { /* runs only when config or handler reference changes */ }, [config, handler])
+// Now the effect only re-runs when the memoized values actually change.
+```
+::
+
+## Async Race Conditions
+
+::code-wrapper{language="javascript" filename="race_condition.js"}
+```javascript
+// ANTI-PATTERN: no cancellation — stale responses overwrite fresh data
+function BadProfile({ userId }) {
+  const [profile, setProfile] = useState(null)
+  useEffect(() => {
+    fetch(`/api/users/${userId}`)
+      .then(res => res.json())
+      .then(data => setProfile(data))
+  }, [userId])
+  // BUG: user switches from userId=1 to userId=2 quickly.
+  // Request 2 fires, then request 1 (slow) resolves LAST → overwrites
+  // profile with userId=1's data while userId=2 is the active prop.
+  return <div>{profile?.name}</div>
+}
+
+// PRODUCTION: AbortController for cancellation
+function GoodProfile({ userId }) {
+  const [profile, setProfile] = useState(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch(`/api/users/${userId}`, { signal: controller.signal })
+      .then(res => res.json())
+      .then(data => setProfile(data))
+      .catch(err => {
+        if (err.name !== 'AbortError') throw err  // re-throw real errors
+      })
+    return () => controller.abort()  // cancels the in-flight request on cleanup
+  }, [userId])
+  // When userId changes: cleanup aborts the old request → no stale overwrite.
+  return <div>{profile?.name}</div>
+}
+
+// ALTERNATIVE: stale flag (if you can't use AbortController)
 useEffect(() => {
-  console.log('Runs after mount, and again whenever userId changes')
+  let isStale = false
+  fetch(`/api/users/${userId}`).then(res => res.json()).then(data => {
+    if (!isStale) setProfile(data)  // only set if this effect is still current
+  })
+  return () => { isStale = true }
 }, [userId])
 ```
 ::
 
-### The Dependency Array Is Not a Suggestion — It's a Contract
+## Debouncing via useEffect
 
-React's ESLint plugin (`eslint-plugin-react-hooks`, `exhaustive-deps` rule) enforces that every reactive value read inside the effect appears in the dependency array. This isn't stylistic pedantry — omitting a dependency means the effect's closure captures a **stale** value from whatever render it was created in.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="debounce_effect.js"}
 ```javascript
-// BUG: missing `query` in the dependency array
-function SearchResults({ query }) {
-  const [results, setResults] = useState([])
+// The canonical debounce pattern: useEffect + setTimeout + cleanup
+function SearchBox({ onSearch }) {
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
-    fetchResults(query).then(setResults)
-  }, [])  // <- query is used inside but not listed; effect never re-runs when query changes
+    if (query === '') return
+    const timeoutId = setTimeout(() => onSearch(query), 300)
+    // Cleanup runs BEFORE the next effect: clears the timer if query changes
+    // within 300ms → the API call only fires 300ms after the user STOPS typing.
+    return () => clearTimeout(timeoutId)
+  }, [query, onSearch])
 
-  return <ResultsList results={results} />
+  return <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…" />
 }
+// SEQUENCE for typing "abc" (3 keystrokes within 300ms):
+// keystroke "a" → effect → setTimeout(300ms)
+// keystroke "b" → cleanup (clears timeout) → effect → setTimeout(300ms)
+// keystroke "c" → cleanup (clears timeout) → effect → setTimeout(300ms)
+// 300ms passes → onSearch("abc") fires ONCE
 ```
 ::
 
-::code-wrapper{language="javascript"}
+## Production Data Fetching Pattern
+
+::code-wrapper{language="javascript" filename="production_fetch.js"}
 ```javascript
-// Fixed: query is listed, so the effect re-fires whenever it changes
-function SearchResults({ query }) {
-  const [results, setResults] = useState([])
+function useFetch(url) {
+  const [state, setState] = useState({ data: null, loading: true, error: null })
 
   useEffect(() => {
-    fetchResults(query).then(setResults)
-  }, [query])
+    if (!url) return
 
-  return <ResultsList results={results} />
+    const controller = new AbortController()
+    setState(prev => ({ ...prev, loading: true, error: null }))
+
+    fetch(url, { signal: controller.signal })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then(data => setState({ data, loading: false, error: null }))
+      .catch(err => {
+        if (err.name === 'AbortError') return  // ignore cancellation
+        setState(prev => ({ ...prev, loading: false, error: err.message }))
+      })
+
+    return () => controller.abort()
+  }, [url])
+
+  return state
 }
+
+// Usage: const { data, loading, error } = useFetch('/api/users/1')
+// Handles: loading state, error state, cancellation on URL change,
+// and avoids the stale-response race condition.
 ```
 ::
 
-## Cleanup Functions
+## Anti-Pattern: Effects for Derived State
 
-Returning a function from the effect registers a **cleanup** that runs before the effect re-runs, and again on unmount. This is how you prevent leaked subscriptions, dangling timers, and stale network responses from clobbering fresh state.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="anti_pattern_derived.js"}
 ```javascript
-function ChatRoom({ roomId }) {
+// ANTI-PATTERN: using an effect to compute a value from props/state
+function BadProductList({ products, filter }) {
+  const [filtered, setFiltered] = useState(products)
   useEffect(() => {
-    const connection = createConnection(roomId)
-    connection.connect()
+    setFiltered(products.filter(p => p.category === filter))
+  }, [products, filter])
+  // This causes an EXTRA render: render → effect → setState → re-render.
+  // The user sees a flash of the unfiltered list before the effect runs.
 
-    return () => {
-      connection.disconnect()  // runs before reconnecting to a new roomId, and on unmount
-    }
-  }, [roomId])
-
-  return <div>Connected to {roomId}</div>
+  return <ul>{filtered.map(p => <li key={p.id}>{p.name}</li>)}</ul>
 }
-```
-::
 
-The cleanup-then-effect cycle on every dependency change is: **cleanup(old) → effect(new)**. So switching `roomId` from `"lobby"` to `"general"` disconnects from `"lobby"` first, then connects to `"general"` — never leaving two connections open simultaneously.
-
-### Race Conditions: The Classic Data-Fetching Bug
-
-Fetching data in an effect without cleanup can let a slow, stale request's response overwrite a newer one, because network responses can arrive out of order relative to when the requests were fired.
-
-::code-wrapper{language="javascript"}
-```javascript
-// BUG: if the user changes userId quickly (A -> B), and A's request is
-// slower than B's, A's response arrives LAST and overwrites B's correct data.
-function UserProfile({ userId }) {
-  const [user, setUser] = useState(null)
-
-  useEffect(() => {
-    fetchUser(userId).then(setUser)
-  }, [userId])
-
-  return user ? <Profile user={user} /> : <Spinner />
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Fixed: a cancellation flag ignores stale responses
-function UserProfile({ userId }) {
-  const [user, setUser] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-
-    fetchUser(userId).then(data => {
-      if (!cancelled) setUser(data)
-    })
-
-    return () => { cancelled = true }
-  }, [userId])
-
-  return user ? <Profile user={user} /> : <Spinner />
-}
-```
-::
-
-Chapter 17 covers the full production pattern (loading/error states, `AbortController`, and why libraries like React Query exist largely to solve this class of problem once and for all).
-
-## Common Mistake: The Infinite Loop
-
-If an effect sets state that is itself (directly or via a derived value) in its own dependency array without a stable identity, you get an infinite render loop.
-
-::code-wrapper{language="javascript"}
-```javascript
-// BUG: `options` is a NEW object literal every render, so the dependency
-// array "changes" every render even though its contents look the same,
-// causing the effect to fire every render, forever.
-function SearchPanel({ query }) {
-  const options = { caseSensitive: false, maxResults: 20 }  // new reference each render
-
-  const [results, setResults] = useState([])
-
-  useEffect(() => {
-    search(query, options).then(setResults)
-  }, [query, options])  // options never === the previous options
-
-  return <ResultsList results={results} />
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Fixed: move the stable object outside the component, or memoize it (chapter 9),
-// or — simplest here — inline only the primitive values the effect actually needs.
-const DEFAULT_OPTIONS = { caseSensitive: false, maxResults: 20 }
-
-function SearchPanel({ query }) {
-  const [results, setResults] = useState([])
-
-  useEffect(() => {
-    search(query, DEFAULT_OPTIONS).then(setResults)
-  }, [query])
-
-  return <ResultsList results={results} />
-}
-```
-::
-
-A related and even more direct version of this bug: setting state unconditionally inside an effect that depends on that same state.
-
-::code-wrapper{language="javascript"}
-```javascript
-// BUG: infinite loop. Every render sets `count`, which is a dependency,
-// which triggers the effect again, which sets `count` again, forever.
-function Broken() {
-  const [count, setCount] = useState(0)
-  useEffect(() => {
-    setCount(count + 1)
-  }, [count])
-  return <p>{count}</p>
-}
-```
-::
-
-## Effects vs. Layout Effects
-
-`useLayoutEffect` has an identical API to `useEffect` but runs **synchronously after DOM mutations, before the browser paints**. Use it only when you must measure or mutate the DOM in a way that would otherwise cause a visible flicker with the deferred `useEffect` timing.
-
-::code-wrapper{language="javascript"}
-```javascript
-import { useLayoutEffect, useRef, useState } from 'react'
-
-function Tooltip({ text, anchorRef }) {
-  const tooltipRef = useRef(null)
-  const [position, setPosition] = useState({ top: 0, left: 0 })
-
-  useLayoutEffect(() => {
-    // Measuring and repositioning must happen BEFORE paint, or the user
-    // briefly sees the tooltip in the wrong place before it "jumps."
-    const anchorRect = anchorRef.current.getBoundingClientRect()
-    const tooltipRect = tooltipRef.current.getBoundingClientRect()
-    setPosition({
-      top: anchorRect.bottom,
-      left: anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2,
-    })
-  }, [text])
-
-  return <div ref={tooltipRef} className="tooltip" style={position}>{text}</div>
-}
-```
-::
-
-**Rule of thumb**: default to `useEffect`. Reach for `useLayoutEffect` only when you have a concrete, observed flicker caused by a DOM read/write that needs to happen before paint — it blocks the browser from painting until it finishes, so overusing it costs perceived performance.
-
-## Lifecycle Mapping (For Class-Component Literacy)
-
-You'll encounter this mapping in older codebases and migration guides. It's an approximation, not an exact equivalence — effects are fundamentally a different model (synchronization, not lifecycle phases).
-
-| Class lifecycle method | Function component equivalent |
-|---|---|
-| `componentDidMount` | `useEffect(() => { ... }, [])` |
-| `componentDidUpdate` | `useEffect(() => { ... }, [dep1, dep2])` |
-| `componentWillUnmount` | the cleanup function returned from `useEffect` |
-| `componentDidMount` + `componentWillUnmount` combined | `useEffect(() => { setup(); return () => teardown() }, [])` |
-
-## A Realistic Effect: Subscribing to a Browser API
-
-::code-wrapper{language="javascript"}
-```javascript
-function OnlineStatusBanner() {
-  const [isOnline, setIsOnline] = useState(navigator.onLine)
-
-  useEffect(() => {
-    function handleOnline() { setIsOnline(true) }
-    function handleOffline() { setIsOnline(false) }
-
-    window.addEventListener('online', handleOnline)
-    window.addEventListener('offline', handleOffline)
-
-    return () => {
-      window.removeEventListener('online', handleOnline)
-      window.removeEventListener('offline', handleOffline)
-    }
-  }, [])
-
-  if (isOnline) return null
-  return <div className="banner banner--warning">You are offline. Changes will sync later.</div>
+// PRODUCTION: compute during render (React handles it efficiently)
+function GoodProductList({ products, filter }) {
+  const filtered = useMemo(
+    () => products.filter(p => p.category === filter),
+    [products, filter]
+  )
+  // No extra render. useMemo avoids recomputing on unrelated re-renders.
+  // For truly simple derivations, even useMemo is optional — just:
+  // const filtered = products.filter(p => p.category === filter)
+  return <ul>{filtered.map(p => <li key={p.id}>{p.name}</li>)}</ul>
 }
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Debug** — Install and enable `eslint-plugin-react-hooks`'s `exhaustive-deps` rule and treat its warnings as errors, not suggestions — the overwhelming majority of "why is my effect using an old value" bugs are exactly the case this rule catches, and silencing it with a `// eslint-disable-next-line` comment should be rare and deliberate, not routine.
-- **Idiom** — Think of the dependency array as answering "what reactive values does this effect read," not "when do I want this to run" — if you find yourself wanting to omit a value just to control timing, that's a sign the logic belongs in an event handler instead of an effect.
-- **Performance** — Default to `useEffect`; only switch to `useLayoutEffect` when you have observed actual visual flicker from a DOM measurement — `useLayoutEffect` blocks the paint until it finishes, so using it by default (rather than when needed) costs real perceived performance across the whole app.
-- **Debug** — When debugging "double effect firing," check for `<StrictMode>` first (chapter 1) — it deliberately mounts, cleans up, and re-mounts every effect once in development to catch missing/incorrect cleanup, and this is invisible in production builds.
-- **Idiom** — Not everything needs an effect. Deriving a value from props/state during render (`const fullName = first + ' ' + last`) doesn't need `useEffect` at all — reach for an effect only when synchronizing with something *outside* React (the network, the DOM, a subscription, browser storage), not for pure calculations.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Think of useEffect as "sync this external thing with these props/state,"
+// not as a lifecycle method. It's NOT componentDidMount + componentDidUpdate.
+// It's: "after render, make sure X is in sync with [deps]."
+
+// [Debug] If your effect runs more often than expected, check for inline
+// objects/functions in the deps array. {} !== {} every render → infinite effect.
+
+// [Performance] For expensive derivations from props/state, use useMemo during
+// render — NOT useEffect + setState. Effects for derived state cause an extra
+// render and a flash of stale data.
+
+// [Idiom] The cleanup function is not optional for effects that create
+// subscriptions, timers, or network requests. Always return a cleanup that
+// tears down what the effect set up.
+
+// [Debug] eslint-plugin-react-hooks' exhaustive-deps rule catches missing
+// dependencies. Don't silence it with eslint-disable — fix the underlying issue
+// (usually by memoizing the dep with useCallback/useMemo, or restructuring).
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Omitting the dependency array runs the effect after every render** — easy to do by accident when refactoring; unlike `[]` (mount-only) or `[dep]` (mount + when dep changes), no array at all means "always," which is rarely intentional and often devastating for effects that make network calls or set up subscriptions.
-- **New object/array/function literals as dependencies break memoized dependency comparisons** — `useEffect(() => {...}, [{ id }])` or `[() => {}]` creates a brand-new reference every render, so the dependency "changes" every time by reference even when its contents are identical — causing the effect to fire every render despite an apparently-correct array.
-- **Effects run on the client only — they never run during server rendering** — code that must run isomorphically (or that specifically needs to run before hydration) cannot live in `useEffect`; this becomes directly relevant once server components/SSR enter the picture (chapter 22).
-- **The cleanup function captures the *same* closure as its effect, not a fresh one** — if an effect's cleanup references a value from props/state, it sees that render's value, not whatever is current when the cleanup actually executes; this is the same stale-closure mechanism as `useState` (chapter 4), applied to the teardown path specifically.
-- **Cleanup runs BEFORE the next effect, not after** — for `[roomId]` changing from `"a"` to `"b"`, the sequence is cleanup(`"a"`) then effect(`"b"`), never effect(`"b"`) then cleanup(`"a"`) — code that assumes the old resource is still around when the new effect starts will find it's already been torn down.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] useEffect runs AFTER paint. If you need to measure/modify DOM BEFORE
+// paint (to avoid flicker), use useLayoutEffect instead. It runs synchronously
+// after DOM mutations but before the browser paints.
+
+// [Gotcha] Empty deps [] means "run once on mount" — but the closure inside
+// captures values from the FIRST render forever. If you reference state/props
+// inside, they'll be stale. Use refs or functional updates to access fresh values.
+
+// [Gotcha] The cleanup function runs on unmount AND before the next effect.
+// It does NOT only run on unmount. If your deps change 5 times, cleanup runs
+// 5 times (before each new effect) plus once on unmount.
+
+// [Gotcha] StrictMode double-invokes effects in dev: mount → unmount → mount.
+// An effect that opens a WebSocket without cleanup → TWO connections in dev.
+// Always implement cleanup, even if you think the effect runs "once."
+
+// [Gotcha] Calling setState inside an effect that depends on that same state
+// creates an infinite loop: effect → setState → re-render → effect → ...
+// Break the cycle by removing the state from deps, or use a ref instead.
+
+// [Safety] Never call a setter from a different component's effect. React throws
+// "Cannot update a component while rendering a different component." If two
+// components need to share state, lift it up to a common parent or use context.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A component is supposed to log the current `filter` value exactly three seconds after the user changes it, but debounced. Instead, it always logs the filter value from when the component first mounted.
+A component fetches data on mount but the response seems to never arrive — the loading spinner stays forever, even though the network tab shows the response:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
-function FilterLogger({ filter }) {
-  useEffect(() => {
-    const id = setTimeout(() => {
-      console.log('Filter settled on:', filter)
-    }, 3000)
-    return () => clearTimeout(id)
-  }, [])
+function Profile({ userId }) {
+  const [profile, setProfile] = useState(null)
 
-  return null
+  useEffect(() => {
+    fetch(`/api/users/${userId}`)
+      .then(res => res.json())
+      .then(setProfile)
+  }, [])  // ← empty deps
+
+  if (!profile) return <Spinner />
+  return <div>{profile.name}</div>
 }
 ```
 ::
@@ -315,17 +287,43 @@ function FilterLogger({ filter }) {
 <details>
 <summary>Answer</summary>
 
-The dependency array is `[]`, so the effect runs exactly once, on mount, and never again — meaning the `setTimeout` closure it creates captures `filter`'s value from that very first render, forever. Even though `filter` changes on every parent re-render, this effect never re-runs to pick up the new value or reset its timer, so the logged value is permanently frozen at the initial one.
+The dependency array is `[]` (empty), meaning the effect runs **only on mount** and captures `userId` from the first render. If `userId` changes, the effect **never re-runs** — the component shows stale data (or keeps loading if the first fetch hasn't resolved yet for a different user). The empty deps also cause a **stale closure**: even if the fetch succeeds, it fetches the *original* `userId`, not the current one.
 
-**The lesson**: any reactive value read inside an effect (here, `filter`) belongs in the dependency array — `[filter]` would make the effect re-run (canceling the old timeout via cleanup and starting a fresh one) every time `filter` actually changes, which is exactly the debounce behavior intended.
+**Fix**: include `userId` in the dependency array:
+
+```javascript
+useEffect(() => {
+  const controller = new AbortController()
+  fetch(`/api/users/${userId}`, { signal: controller.signal })
+    .then(res => res.json())
+    .then(setProfile)
+    .catch(err => { if (err.name !== 'AbortError') throw err })
+  return () => controller.abort()
+}, [userId])  // re-runs when userId changes, with cancellation
+```
 
 </details>
 
 ## Key Takeaways
 
-- `useEffect` synchronizes a component with something outside React (network, DOM, subscriptions, timers) — it runs after paint, not during render.
-- The dependency array is a contract: every reactive value the effect reads must be listed, or the effect's closure goes stale. Trust `exhaustive-deps` lint warnings.
-- Returning a cleanup function handles unsubscribing/canceling; it runs before every re-run of the effect and on unmount, in the order cleanup(old) → effect(new).
-- Fetching data in an effect without a cancellation guard is subject to race conditions where a slower, stale request overwrites fresher data.
-- New object/array/function literals as dependencies (or in the effect body) are a leading cause of "effect fires every render" and infinite-loop bugs.
-- `useLayoutEffect` is a rare, deliberate escape hatch for DOM measurements that must happen before paint — default to `useEffect` otherwise.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. useEffect runs AFTER paint. deps=[a,b] → runs on mount + when a or b
+//    changes (Object.is comparison). deps=[] → mount only. deps omitted → every render.
+
+// 2. Cleanup runs BEFORE the next effect AND on unmount — not just unmount.
+//    Always clean up subscriptions, timers, and network requests.
+
+// 3. Deps compare with Object.is — inline objects/functions create new refs
+//    every render → effect runs every time. Use useMemo/useCallback to stabilize.
+
+// 4. Async effects need cancellation (AbortController or stale flag) to prevent
+//    race conditions where a stale response overwrites fresh data.
+
+// 5. Don't use effects for derived state — compute during render (useMemo or
+//    inline). Effects for derived state cause an extra render + flash of stale data.
+
+// 6. Empty deps [] captures stale values forever. If you reference props/state
+//    inside, include them in deps, or use refs/functional updates for fresh access.
+```
+::

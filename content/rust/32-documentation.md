@@ -1,345 +1,287 @@
-# 32 — Documentation
+# 32 — Documentation as API Contract
 
-Documentation is part of the Rust culture. `rustdoc` produces HTML docs from `///` comments; doc-tests run examples.
+Junior engineers treat documentation as an afterthought — prose bolted onto finished code. Senior engineers treat it as **part of the API surface**: a doc comment's `# Panics`/`# Errors`/`# Safety` sections are a contract callers rely on, a doctest is a compiled, version-checked example that participates in your semver guarantees, and missing or stale docs are a production-incident vector, not a style nit. This chapter treats `rustdoc` as toolchain infrastructure, not a formatting convention.
 
-## Doc Comments
+## Under-the-Hood Mechanics
+
+### How `rustdoc` actually processes your crate
 
 ::code-wrapper{language="rust"}
 ```rust
-/// Adds two integers.
-///
-/// Returns `a + b`, panicking on overflow in debug builds.
-///
-/// # Examples
-///
+// rustdoc uses the compiler's OWN name resolution — not text parsing —
+// so intra-doc links resolve per-item, scoped to what's in scope there.
+mod inner {
+    pub struct Widget;
+}
+use inner::Widget;
+
+/// Builds a new [`Widget`]. Resolves because `Widget` is `use`d above,
+/// in THIS module — the same link written inside `mod inner` without
+/// its own `use` would fail to resolve, even though it's the same type.
+pub fn make() -> Widget { Widget }
+```
+::
+
+### Doctests are compiled, separate binaries
+
+::code-wrapper{language="rust"}
+```rust
 /// ```
+/// // This block is extracted, wrapped in fn main(), compiled as its
+/// // OWN crate, and run under `cargo test` — NOT under `cargo doc`.
 /// use my_crate::add;
 /// assert_eq!(add(2, 2), 4);
 /// ```
-///
-/// # Panics
-///
-/// Panics if `a + b` overflows in debug mode.
 pub fn add(a: i32, b: i32) -> i32 { a + b }
 ```
 ::
 
-- `///` for items (functions, types, modules).
-- `//!` for the enclosing item (crate root, module — used for top-level docs).
+Consequences: no implicit crate access (must `use` like an external consumer), full compile-link cost per example (hundreds of doctests can dominate `cargo test` wall-clock time), and `cargo doc` never runs them — only `cargo test`/`cargo test --doc` does.
+
+### Semver and doctests
 
 ::code-wrapper{language="rust"}
 ```rust
-//! # My Crate
-//!
-//! This crate provides wonderful things.
+/// ```
+/// use my_crate::parse;
+/// assert_eq!(parse("5s").unwrap().as_secs(), 5); // asserts the INVARIANT, not just "compiles"
+/// ```
+pub fn parse(s: &str) -> Option<std::time::Duration> { /* ... */ None }
+
+// Rename this fn, or change its signature -> every doctest calling it
+// fails to COMPILE, immediately, catching a breaking change before a
+// patch release ships it. A silent behavior change (same signature,
+// different result) is NOT caught unless the assertion checks the
+// actual value, not just that the call compiles.
 ```
 ::
 
-## Standard Sections
+## Cost, Performance, and Trade-Offs
 
-### Why each section exists
+| Practice | Build/CI cost | Payoff |
+|---|---|---|
+| Doctests on every public fn | Slower `cargo test` (separate compile per example) | Executable contract; renames/signature changes fail loudly |
+| `#![warn(missing_docs)]` early | None at introduction; retrofitting later is expensive | Forces documentation debt to zero at each commit instead of accumulating |
+| `#![doc = include_str!("../README.md")]` | One extra doctest-adjacent compile if README has code blocks | Single source of truth; README and docs.rs never drift apart |
+| `cargo doc --document-private-items` in CI | Marginal | Catches broken intra-doc links in internal modules before they ship |
+| Full `cargo test --doc` on every CI run | Meaningfully slower CI for large crates | Only way to guarantee published examples still compile against HEAD |
 
-Rust doc sections aren't arbitrary — each documents a **contract** callers need:
+::code-wrapper{language="yaml"}
+```yaml
+# Fast stage: gates every push, no doctests.
+- run: cargo test --lib --bins --tests
 
-- **`# Examples`** — runnable usage (executed as doc tests, so they stay correct). Reach for one per public function.
-- **`# Panics`** — documents **non-`Result` failure modes**: conditions under which the function panics. Callers must know these to avoid panics (they can't `?` a panic). Mandatory for functions that *can* panic.
-- **`# Errors`** — for `Result`-returning functions: which `Err` variants and what they mean. Callers handle errors based on this.
-- **`# Safety`** — for `unsafe` functions: the **invariants** the caller must uphold (e.g., "pointer must be valid for `len` bytes"). Without this, `unsafe` callers can't reason about soundness.
-- **`# Arguments` / `# Returns`** — parameter/return docs (often redundant with prose; use when type/behavior isn't obvious).
-- **`# Notes`** — extra info that doesn't fit elsewhere.
+# Slower stage: gates merge to main — this is the ONLY place a renamed
+# public fn's stale doc example gets caught before it ships to docs.rs.
+- run: cargo test --doc
+```
+::
 
-The order convention (Examples, Panics, Errors, Safety) puts the most useful (examples) first and the most critical (safety contracts) prominently.
+## Standard Sections and What Each One Guarantees
 
-| Section | Purpose |
+| Section | Guarantee to the caller |
 |---|---|
-| `# Examples` | Usage examples (run as doc tests). |
-| `# Panics` | When the function panics. |
-| `# Errors` | For `Result`-returning functions: which `Err` variants. |
-| `# Safety` | For `unsafe` functions: required invariants. |
-| `# Arguments` | Parameter docs (sometimes redundant with prose). |
-| `# Returns` | Return value docs. |
-| `# Notes` | Extra info. |
-
-The order convention: Examples, Panics, Errors, Safety.
-
-## Cross-References
+| `# Examples` | Compiles and runs against the current API — the only living proof the API works as claimed |
+| `# Panics` | Every documented panic condition is exhaustive; an *undocumented* panic in a function without a `# Panics` section is arguably a bug, not just a doc gap |
+| `# Errors` | Enumerates `Err` variants and their meaning — callers write `match`/`?`-based handling from this, not from reading your implementation |
+| `# Safety` | The precise invariants an `unsafe fn` caller must uphold — this is the *actual* soundness contract; get it wrong or incomplete and every caller's `unsafe` block is unsound without their knowledge |
+| `# Notes` | Non-contractual context — the one section that's advisory, not a promise |
 
 ::code-wrapper{language="rust"}
 ```rust
-/// See [`std::fs::read`] for reading a file.
-/// Uses [`OtherType::method`] internally.
-/// Implements [`MyTrait`].
-```
-::
-
-Backticks create hyperlinks. rustdoc resolves intra-doc links.
-
-::code-wrapper{language="rust"}
-```rust
-/// [`OtherType`] is in scope.
-/// [`crate::sub::Thing`]
-```
-::
-
-## Building Docs
-
-::code-wrapper{language="bash"}
-```bash
-cargo doc                  # generate for the crate
-cargo doc --open           # generate and open in browser
-cargo doc --no-deps        # skip dependencies
-cargo doc --workspace      # all crates in workspace
-cargo doc --document-private-items  # include private items (rare)
-```
-::
-
-Output goes to `target/doc/`.
-
-## Doc Tests (Recap)
-
-::code-wrapper{language="rust"}
-```rust
-/// ```
-/// use my_crate::add;
-/// assert_eq!(add(2, 2), 4);
-/// ```
-```
-::
-
-- `cargo test` runs them.
-- `no_run`: compile but don't execute.
-- `ignore`: skip.
-- `compile_fail`: assert it doesn't compile (negative test).
-- `rust,edition2018`: pin edition.
-- `# use ...` lines are hidden in rendered docs but executed in tests.
-
-::code-wrapper{language="rust"}
-```rust
-/// ```
-/// # use my_crate::add;
-/// assert_eq!(add(2, 2), 4);
-/// ```
-```
-::
-
-## Doc Attributes
-
-::code-wrapper{language="rust"}
-```rust
-#[doc(hidden)]            // hide from docs (still public)
-#[doc(alias = "another")] // search alias
-#[doc = "raw text"]      // alternative to /// for non-string content
-#[doc(inline)]           // inline re-exports
-#[doc(no_inline)]        // don't inline
-#[doc(cfg(feature = "..."))]  // show "Available on feature only" banner
-```
-::
-
-## Lints
-
-### Why these matter and when to enable
-
-Doc lints enforce **documentation as a gate, not a reminder**:
-
-- **`missing_docs`** — every public item must have docs; turns "forgot to document" into a build error. Reach for it in **libraries** where the public API *is* the product — it prevents silently shipping undocumented items. Enable in `lib.rs` with `#![warn(missing_docs)]` (or `deny` for strict libraries).
-- **`missing_debug_implementations`** — every public type must impl `Debug` (derive or manual). `Debug` is essential for diagnostics; this lint catches types you forgot to derive it on.
-- **`rustdoc::broken_intra_doc_links`** — intra-doc links that don't resolve (a renamed item, a typo) become errors. Reach for it so stale links surface immediately, not after a docs.rs build.
-- **`rustdoc::missing_crate_level_docs`** — requires the `//!` crate-level doc comment (the landing page). Reach for it so every crate has an intro.
-
-Enable these as a library matures — early prototypes can `allow`, but a published library should `warn`/`deny` them so the docs stay complete and correct.
-
-::code-wrapper{language="rust"}
-```rust
-#![warn(missing_docs)]
-#![warn(missing_debug_implementations)]
-#![warn(rustdoc::broken_intra_doc_links)]
-#![warn(rustdoc::missing_crate_level_docs)]
-```
-::
-
-`missing_docs` forces every public item to have docs — good for libraries.
-
-## Crate-Level Docs
-
-::code-wrapper{language="rust"}
-```rust
-// src/lib.rs
-//! # My Crate
-//!
-//! This crate does X for Y.
-//!
-//! ## Quick Start
-//! ```
-//! use my_crate::*;
-//! ```
-```
-::
-
-Include a quick-start at the crate root.
-
-## `README.md` Inclusion
-
-::code-wrapper{language="rust"}
-```rust
-#![doc = include_str!("../README.md")]
-```
-::
-
-Treats the README as crate-level docs. Common for projects that want one source of truth.
-
-## Style Guide
-
-- Write prose, not telegrams. Sentences with verbs.
-- Document the *why*, not just the *what*.
-- Examples for every public function that's not obvious.
-- Use `# Panics` and `# Errors` sections consistently.
-- Cross-reference related items.
-- Keep examples small and self-contained.
-- Avoid docs on trivial getters/setters; document the field instead.
-
-## Examples
-
-### Good
-
-::code-wrapper{language="rust"}
-```rust
-/// Computes the Fibonacci number at position `n`.
-///
-/// Uses an iterative algorithm with O(n) time and O(1) space.
+/// Divides `numerator` by `denominator`, rounding toward zero.
 ///
 /// # Examples
 ///
 /// ```
-/// use my_crate::fib;
-/// assert_eq!(fib(0), 0);
-/// assert_eq!(fib(10), 55);
+/// use my_crate::checked_div;
+/// assert_eq!(checked_div(10, 3), Some(3));
+/// assert_eq!(checked_div(10, 0), None);
 /// ```
 ///
 /// # Panics
 ///
-/// Panics if `n` is large enough to overflow `u64`.
-pub fn fib(n: u64) -> u64 { /* ... */ 0 }
+/// Never panics — division by zero returns `None` instead. Contrast with
+/// the `/` operator, which panics on integer division by zero.
+pub fn checked_div(numerator: i64, denominator: i64) -> Option<i64> {
+    numerator.checked_div(denominator)
+}
 ```
 ::
 
-### Bad
+## Safety Documentation for `unsafe fn` — the highest-stakes doc comment you'll write
 
 ::code-wrapper{language="rust"}
 ```rust
-/// fib function
-pub fn fib(n: u64) -> u64 { 0 }
+/// Reads `len` bytes from `ptr` and returns them as a `Vec<u8>`.
+///
+/// # Safety
+///
+/// The caller must ensure:
+/// - `ptr` is valid for reads of `len` bytes.
+/// - The memory referenced by `ptr` is initialized for the full `len`.
+/// - `ptr` is not concurrently mutated for the duration of this call
+///   (no aliasing `&mut` access exists elsewhere).
+/// - `len * size_of::<u8>()` does not overflow `isize`.
+pub unsafe fn read_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
+    std::slice::from_raw_parts(ptr, len).to_vec()
+}
 ```
 ::
 
-## Hidden Examples for Complex Setup
+An incomplete `# Safety` section is a soundness gap, not a doc gap — an omitted invariant (say, alignment) lets correct-looking caller code trigger real UB, with the bug report landing nowhere near this function.
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: documentation that describes the implementation, not the contract
 
 ::code-wrapper{language="rust"}
 ```rust
-/// ```
-/// # use std::sync::Arc;
-/// # use std::sync::Mutex;
-/// # let state = Arc::new(Mutex::new(0));
-/// let _v = state.lock().unwrap();
-/// ```
+/// Loops through the vector and sums the elements using a for loop.
+pub fn sum(items: &[i32]) -> i32 {
+    items.iter().sum()
+}
 ```
 ::
 
-Setup lines prefixed with `#` are hidden in the rendered doc but executed.
+Describes *how* it works today (a lie the moment someone refactors to `fold`/SIMD) and says nothing about what actually matters: overflow behavior, empty-slice result. Contract-coupled docs survive rewrites; implementation-coupled docs rot on the first one.
 
-## Doc Test Pitfalls
-
-- **External crate imports**: doc tests need `extern crate` or `use` lines.
-- **Top-level `use` shadowing**: each doc test is its own crate.
-- **`compile_fail`** must be on a fenced block, and the block must actually fail to compile.
-- **`no_run` with `main`**: works; `no_run` compiles but skips execution.
-- **Doc tests are slow**: skip in CI with `cargo test --lib --bins --tests`.
-
-## `mdbook` for Standalone Docs
-
-For guides/books, `mdbook` is the standard tool:
-
-::code-wrapper{language="bash"}
-```bash
-cargo install mdbook
-mdbook init docs
-mdbook serve docs
+::code-wrapper{language="rust"}
+```rust
+/// Returns the sum of `items`, or `0` for an empty slice.
+///
+/// # Panics
+///
+/// Panics on `i32` overflow in debug builds; wraps silently in release
+/// builds (standard Rust integer-overflow semantics).
+pub fn sum(items: &[i32]) -> i32 {
+    items.iter().sum()
+}
 ```
 ::
 
-Many major Rust projects (`rust-lang/rust`, `tokio`, `bevy`) have mdbook guides alongside rustdoc.
+### Anti-pattern: `#[doc(hidden)]` used as an access-control mechanism
 
-## Publishing Docs
+::code-wrapper{language="rust"}
+```rust
+// "This is internal, nobody should call it" — enforced only by convention.
+#[doc(hidden)]
+pub fn internal_reset_state() {
+    // ...
+}
+```
+::
 
-- **docs.rs**: auto-builds and hosts docs for crates published to crates.io. Configure with `[package.metadata.docs.rs]`:
+**Why it fails at scale**: `#[doc(hidden)]` hides an item from rendered documentation — it does **not** change visibility. `internal_reset_state` is still fully `pub`, fully callable by any downstream crate, and fully covered by your semver guarantees whether you intended that or not. Teams that rely on `#[doc(hidden)]` as a soft-private convention eventually get bug reports from a downstream crate that depended on the "hidden" function, and discover they can't remove or change it without a major version bump — the hiding never was the access control they assumed. The production-grade fix is `pub(crate)` for genuine internal APIs, and `#[doc(hidden)]` reserved for items that must be `pub` for technical reasons (macro-generated glue) but were never meant to be part of the public contract — documented as such in a crate-level policy, not assumed.
+
+### Anti-pattern: docs.rs build succeeding locally, failing in production
+
+::code-wrapper{language="rust"}
+```rust
+#[cfg(feature = "async")]
+/// Spawns a background worker using the configured async runtime.
+///
+/// ```
+/// # #[cfg(feature = "async")]
+/// # async fn example() {
+/// use my_crate::spawn_worker;
+/// spawn_worker().await;
+/// # }
+/// ```
+pub async fn spawn_worker() { /* ... */ }
+```
+::
+
+**Why it fails at scale**: `cargo doc` locally builds with whatever features you happen to have enabled in your shell session — often all of them, out of habit. docs.rs builds with **default features only**, unless `[package.metadata.docs.rs]` explicitly opts into more. A feature-gated item like `spawn_worker` silently disappears from the *published* docs (or the doctest silently doesn't run) with no local signal that anything is wrong, because your local environment happened to have the feature on. The fix is explicit configuration, checked into the repo, not left to the ambient state of a developer's machine:
 
 ::code-wrapper{language="toml"}
 ```toml
 [package.metadata.docs.rs]
-features = ["full", "all-feature-flags"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 ```
 ::
 
-- **GitHub Pages**: deploy `target/doc/` via Actions.
-- **`cargo-docs-rs`**: preview docs.rs rendering locally.
-
-## Cross-Crate Doc Links
+## Architectural Application
 
 ::code-wrapper{language="rust"}
 ```rust
-/// See the [`serde`] crate for serialization.
-/// See [`tokio::sync::mpsc`] for channels.
+// A doc coverage gate is the same category of guardrail as a type system —
+// it converts "someone forgot to document this" into a compile-time failure.
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+
+/// Missing this doc comment: COMPILE ERROR under #![deny(missing_docs)].
+pub fn public_api() {}
 ```
 ::
 
-rustdoc can resolve links to external crates if they're in your `Cargo.toml`.
+An incomplete `# Safety` produces unsound-but-compiling caller code crate-wide, discovered only via Miri or production UB. An incomplete `# Errors` produces callers that `match` a subset of variants and mishandle the rest. The crate-level `//!` doc comment is the onboarding document for every engineer who depends on it:
 
-## Common Pitfalls
+::code-wrapper{language="rust" filename="src/lib.rs"}
+```rust
+//! # payment-ledger
+//!
+//! Append-only, double-entry ledger core used by the billing service.
+//!
+//! ## Quick Start
+//!
+//! ```
+//! use payment_ledger::{Ledger, Entry};
+//! let mut ledger = Ledger::new();
+//! ledger.record(Entry::credit("acct_1", 500))?;
+//! # Ok::<(), payment_ledger::LedgerError>(())
+//! ```
+//!
+//! ## Invariants
+//!
+//! Every [`Entry`] recorded via [`Ledger::record`] is immutable once
+//! committed — see [`Ledger::record`]'s `# Errors` section for the
+//! conditions under which a record is rejected instead of committed.
 
-- **Broken intra-doc links**: rustdoc warns; turn into errors with `#![warn(rustdoc::broken_intra_doc_links)]`.
-- **Missing crate-level docs**: `#![warn(rustdoc::missing_crate_level_docs)]`.
-- **Examples don't compile**: CI runs doc tests; broken examples break releases.
-- **`#[doc(hidden)]` on re-exports**: hides the re-export but not the original.
-- **Hidden `#` lines visible in source**: they're hidden in HTML but visible in `.rs` source.
-- **`#![doc(html_logo_url = "...")]`**: branding on docs.
-- **`#![doc(html_root_url = "https://docs.rs/crate/1.0")]`**: helps intra-doc link resolution.
+#![warn(missing_docs)]
+#![warn(rustdoc::broken_intra_doc_links)]
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `cargo doc --open` after any doc-comment change is the fastest feedback loop — rendering catches malformed intra-doc links and broken Markdown that reading the raw `///` comments won't reveal.
-- **Idiom**: use hidden `# ` setup lines liberally in doc examples (`# use my_crate::Thing;`) — they keep the *rendered* example focused on the interesting part while still compiling and running as a real doc test with all necessary imports.
-- **Debug**: `cargo test --doc -- --nocapture` shows `println!` output from inside doc tests, useful when a doc example is supposed to demonstrate output but you can't tell if it's actually producing what the prose claims.
-- **Idiom**: write the `# Examples` section *first*, before the prose — if you can't write a compiling example quickly, that's often a sign the API itself needs simplifying, not just better docs.
-- **Performance**: doc tests compile as separate binaries and meaningfully slow down `cargo test` on large crates — many projects run `cargo test --lib --bins --tests` in fast CI stages and reserve full doc-test runs (`cargo test --doc`) for a slower, separate job.
-- **Clippy/lint**: turn on `#![warn(missing_docs)]` early in a library's life, not late — retrofitting documentation onto a large, already-public API surface is a much bigger task than requiring docs as each item is added.
+- **Debug**: `cargo doc --open` after any doc-comment edit is the fastest feedback loop — rendering surfaces malformed intra-doc links and broken Markdown that reading raw `///` comments won't reveal.
+- **Idiom**: write the `# Examples` section *first*, before the prose. If you can't write a compiling example quickly, that's a signal the API needs simplifying, not just better docs.
+- **Performance**: doc tests compile as separate binaries and meaningfully slow `cargo test` on large crates — split CI into a fast stage (`cargo test --lib --bins --tests`) and a slower `cargo test --doc` stage.
+- **Debug**: `cargo test --doc -- --nocapture` shows `println!` output from inside doctests — useful when an example is meant to demonstrate output but you can't confirm it's producing what the prose claims.
+- **Idiom**: use hidden `# ` setup lines liberally (`# use my_crate::Thing;`) to keep the *rendered* example focused while the doctest still compiles with full imports.
+- **Clippy/lint**: enable `#![warn(missing_docs)]` at a library's inception, not late — retrofitting documentation onto an already-public, already-large API surface is a materially bigger task than requiring docs as each item is added.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **A broken doc example fails `cargo test`, not just `cargo doc`**: doc tests are compiled and executed by `cargo test` by default — a renamed function that isn't updated in a doc comment's example doesn't just produce stale documentation, it breaks the build, which surprises contributors who think of docs as "just comments."
-- **Hidden `#` lines are invisible in rendered HTML but fully visible in the `.rs` source file**: anyone reading the source directly (not the generated docs) sees every hidden setup line — don't hide anything security-sensitive or misleading there, since "hidden" only means hidden from the doc viewer.
-- **`compile_fail` doc tests can pass for the wrong reason**: a `compile_fail` block only asserts the code *fails to compile* — it doesn't check *why*. A typo that produces an unrelated syntax error still satisfies `compile_fail`, silently defeating the intent of demonstrating a specific type error.
-- **`#[doc(hidden)]` hides an item from docs but does not make it private**: a `#[doc(hidden)] pub fn` is still fully callable by any downstream crate — hiding it from documentation is not an access-control mechanism, just a visibility hint for doc generation, a distinction that matters for semver (you can still break callers of a "hidden" function).
-- **Intra-doc links resolve based on what's in scope at that exact item, not the whole crate**: `[MyType]` inside a doc comment on a function in module `a` won't resolve if `MyType` isn't imported or reachable from module `a`'s scope, even if it's a well-known type used everywhere else in the crate — the link-breakage is per-item, not global.
-- **`cargo doc` succeeding locally doesn't guarantee docs.rs succeeds**: docs.rs builds with specific feature flags and sometimes a pinned toolchain; a crate that needs `all-features = true` or a `docsrs`-specific `cfg` and doesn't declare it in `[package.metadata.docs.rs]` can fail or render incompletely on docs.rs while looking fine with a plain local `cargo doc`.
-- **Platform-independent trap — doc tests run with the crate's default features only, unless configured**: a doc example that references a feature-gated type without the feature enabled compiles fine when that feature happens to be a default, then breaks the moment someone changes the crate's default-features set, since doc tests don't automatically enable every feature.
+- **A broken doc example fails `cargo test`, not just `cargo doc`**: a renamed function left stale in a doc comment's example doesn't produce stale documentation — it breaks the build, which surprises contributors who mentally file docs under "just comments."
+- **Hidden `#` lines are invisible in rendered HTML but fully visible in the `.rs` source**: don't hide anything security-sensitive or misleading there — "hidden" means hidden from the doc viewer, not from anyone reading source.
+- **`compile_fail` doctests can pass for the wrong reason**: the block only asserts *failure to compile*, not *why* — an unrelated typo satisfies `compile_fail` just as well as the specific type error you intended to demonstrate.
+- **`#[doc(hidden)]` hides an item from docs, not from callers**: a `#[doc(hidden)] pub fn` is fully callable by downstream crates and fully covered by semver — hiding it from documentation is a rendering choice, not an access-control mechanism.
+- **Intra-doc links resolve per-item, not crate-wide**: `` [MyType] `` on a function in module `a` fails to resolve if `MyType` isn't in scope at that exact item, even if it's ubiquitous elsewhere in the crate.
+- **A locally-succeeding `cargo doc` doesn't guarantee docs.rs succeeds**: docs.rs builds with default features only (plus whatever `[package.metadata.docs.rs]` declares) and sometimes a pinned toolchain — a crate needing `all-features` and not declaring it can fail or render incompletely there while looking fine locally.
 
 ## 🧠 Spot the Bug
 
-Why does `cargo test` fail here, even though the function itself is correct and `cargo build` succeeds?
+A team ships a minor version bump. CI (unit tests only) is green. A downstream consumer immediately reports their build is broken. What did the fast CI stage miss?
 
 ::code-wrapper{language="rust"}
 ```rust
-/// Doubles a number.
+// v1.2.0 → v1.3.0 diff (unit tests unaffected — internal rename only touched signature)
+
+/// Parses a duration string like `"5s"` or `"3m"`.
 ///
 /// # Examples
 ///
 /// ```
-/// let result = double(21);
-/// assert_eq!(result, 42);
+/// use my_crate::parse_duration;
+/// let d = parse_duration("5s").unwrap();
+/// assert_eq!(d.as_secs(), 5);
 /// ```
-pub fn double(n: i32) -> i32 {
-    n * 2
+-pub fn parse_duration(input: &str) -> Result<Duration, ParseError> {
++pub fn parse_duration_str(input: &str) -> Result<Duration, ParseError> {
+    // ...
 }
 ```
 ::
@@ -347,16 +289,14 @@ pub fn double(n: i32) -> i32 {
 <details>
 <summary>Answer</summary>
 
-The doc test fails to compile: `error[E0425]: cannot find function \`double\` in this scope`.
+CI ran `cargo test --lib --bins --tests` as its fast stage — the team had deliberately excluded doctests from the PR-gating pipeline to keep it quick, deferring `cargo test --doc` to a slower nightly job. The rename from `parse_duration` to `parse_duration_str` is a breaking public API change with no deprecation shim, and the crate's own `# Examples` section still calls the old name — which would have failed to compile immediately under `cargo test --doc`, catching the break before publish. Because the doctest stage didn't run in the gating pipeline, the broken example (and, more importantly, the undocumented breaking rename) shipped in what was tagged as a minor version, violating semver and breaking every downstream consumer who upgraded expecting only additive changes.
 
-Every fenced code block in a doc comment is compiled as its **own separate crate** — it does not automatically have access to the items of the crate it's documenting, no matter how "obviously nearby" the function looks in the source file. The example calls `double(21)` directly, but from that isolated doc-test crate's perspective, `double` doesn't exist unless it's explicitly brought into scope with a `use` statement, exactly as any external consumer of the published crate would have to do: `use my_crate::double;`. This is easy to miss because `cargo build` never runs doc tests at all — only `cargo test` (or `cargo test --doc`) compiles and executes them, so the mistake can sit unnoticed through every `cargo build`/`cargo check` cycle during development.
-
-**The lesson**: doc tests are independent crates with no implicit access to the crate they document — always `use` the item you're demonstrating, ideally as a hidden `# use` line to keep the rendered example clean.
+**The lesson**: deferring doctests out of the fast CI path is a legitimate speed trade-off, but only if a doctest run gates the actual publish/release step, not just a background nightly job — otherwise the exact safety net doctests exist to provide (catching public-API breaks before they ship) is the thing you disabled.
 
 </details>
 
 ## Summary
 
-Write doc comments (`///`, `//!`) with standard sections (Examples, Panics, Errors, Safety). Run `cargo doc` and `cargo test` (doc tests). Use hidden `#` lines for setup. Cross-reference with backticks. Enable `missing_docs` for libraries. Publish to docs.rs. Use `mdbook` for guides.
+Doc comments aren't prose decoration — `# Panics`/`# Errors`/`# Safety` are contracts, and doctests are compiled, executed proof that your public API matches what you claim about it. `rustdoc` reuses the compiler's own name resolution, which is why intra-doc links are scoped per-item, not global. Doctests are a real, non-trivial cost to `cargo test` wall-clock time on large crates — split CI into a fast unit-test stage and a slower doctest stage, but never let the doctest stage disappear from the actual release gate. `#[doc(hidden)]` is a rendering choice, not access control — use `pub(crate)` for genuine internal APIs. Configure `[package.metadata.docs.rs]` explicitly; don't rely on a local `cargo doc` success as proof docs.rs will succeed.
 
 Next: Rust ecosystem tour.

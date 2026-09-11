@@ -1,456 +1,451 @@
+---
+title: Vue 3 Engineering Reference — Design Patterns
+description: Store pattern, renderless components, composable composition, higher-order composables, provider/consumer DI, observer pattern with reactive state, and feature-based module organization.
+---
+
 # 23 — Design Patterns
 
-## Composables: What Makes One Actually Good
+## Store Pattern — Module-Scoped Singleton
 
-Chapter 07 introduced composables mechanically — a function starting with `use` that calls other composition APIs. This chapter is about the judgment calls that separate a composable that ages well from one that becomes a tangled dependency the moment a second component needs a slightly different variant of it.
+::code-wrapper{language="typescript" filename="patterns/store.ts"}
+```typescript
+import { ref, readonly, computed, type Ref, type ComputedRef } from 'vue'
 
-### Return a plain object, not a `reactive` one
+// ── Store pattern: module-scoped reactive state + controlled mutations ──
+// Lightweight alternative to Pinia for simple global state.
+// State is private (module scope); only the returned API is public.
 
-::code-wrapper{language="javascript"}
-```javascript
-// WRONG — returning a single reactive object looks convenient, but
-// destructuring it at the call site immediately breaks reactivity
-// (the exact destructuring trap from chapter 03), since the destructured
-// variables are plain, disconnected values, not refs
-import { reactive, onMounted } from 'vue'
-
-export function useMousePosition() {
-  const state = reactive({ x: 0, y: 0 })
-
-  onMounted(() => {
-    window.addEventListener('mousemove', (e) => {
-      state.x = e.clientX
-      state.y = e.clientY
-    })
-  })
-
-  return state
+interface Todo {
+  id: string
+  text: string
+  done: boolean
+  createdAt: number
 }
-```
-::
 
-::code-wrapper{language="javascript"}
-```javascript
-// RIGHT — return an object of individual refs; destructuring at the
-// call site preserves reactivity because each property IS a ref,
-// not a plain value snapshotted out of a reactive object
-import { ref, onMounted, onUnmounted } from 'vue'
+// ── Private state (module scope — not exported) ──────────
+const _todos: Ref<Todo[]> = ref([])
+const _filter: Ref<'all' | 'active' | 'done'> = ref('all')
 
-export function useMousePosition() {
-  const x = ref(0)
-  const y = ref(0)
+// ── Private mutation function (not exported) ────────────
+function _addTodo(text: string): void {
+  _todos.value.push({
+    id: crypto.randomUUID(),
+    text,
+    done: false,
+    createdAt: Date.now(),
+  })
+}
 
-  function update(e) {
-    x.value = e.clientX
-    y.value = e.clientY
+// ── Public API (exported composable) ────────────────────
+export function useTodoStore() {
+  return {
+    // ── Read-only state: consumers can't mutate directly ──
+    todos: readonly(_todos),
+    filter: readonly(_filter),
+
+    // ── Computed getters: derived from state ──
+    filtered: computed(() => {
+      switch (_filter.value) {
+        case 'active': return _todos.value.filter(t => !t.done)
+        case 'done': return _todos.value.filter(t => t.done)
+        default: return _todos.value
+      }
+    }) as ComputedRef<Todo[]>,
+
+    remaining: computed(() => _todos.value.filter(t => !t.done).length),
+    total: computed(() => _todos.value.length),
+
+    // ── Actions: the ONLY way to mutate state ────────────
+    add(text: string) { _addTodo(text) },
+    toggle(id: string) {
+      const todo = _todos.value.find(t => t.id === id)
+      if (todo) todo.done = !todo.done
+    },
+    remove(id: string) {
+      _todos.value = _todos.value.filter(t => t.id !== id)
+    },
+    setFilter(f: 'all' | 'active' | 'done') { _filter.value = f },
+    clearDone() {
+      _todos.value = _todos.value.filter(t => !t.done)
+    },
   }
-
-  onMounted(() => window.addEventListener('mousemove', update))
-  onUnmounted(() => window.removeEventListener('mousemove', update))
-
-  return { x, y }
 }
+
+// ── Why readonly: ──────────────────────────────────────
+// Consumers can read but can't write: todos.value.push(...) throws in dev.
+// Forces all mutations through the action API → traceable, debuggable.
+// All state changes go through known functions (add, toggle, remove, etc.).
 ```
 ::
 
-This is the single most consequential composable-design convention in the Vue ecosystem — every official and community composable (VueUse included) follows the "return an object of refs" shape specifically so that `const { x, y } = useMousePosition()` at the call site works correctly, without callers needing to know or care about the implementation detail of how the composable stores its internal state.
+## Renderless Component — Logic via Scoped Slots
 
-### Always clean up what you set up
-
-The `useMousePosition` example above pairs `onMounted` with `onUnmounted` deliberately — a composable that adds a global listener, starts a timer, or opens a subscription without a matching teardown leaks that resource for the lifetime of the page, not just the lifetime of the component that called the composable:
-
-::code-wrapper{language="javascript"}
-```javascript
-export function usePolling(fn, intervalMs) {
-  let handle = null
-
-  onMounted(() => {
-    handle = setInterval(fn, intervalMs)
-  })
-
-  onUnmounted(() => {
-    clearInterval(handle)   // without this, the interval keeps firing
-                             // and calling `fn` even after the component
-                             // that requested it has been destroyed
-  })
-}
-```
-::
-
-A composable used across dozens of components multiplies a missing-cleanup bug by every mount/unmount cycle of every component that uses it — this is exactly the kind of subtle, easy-to-miss leak that's cheap to prevent at the composable's definition and expensive to track down later once it's causing a real production memory/performance issue.
-
-### Accept refs or plain values, consistently
-
-::code-wrapper{language="javascript"}
-```javascript
-import { unref, watch, ref } from 'vue'
-
-// accepting `unref`-wrapped parameters lets callers pass either a plain
-// value OR a ref/computed, and the composable reacts correctly either way
-export function useDebouncedValue(source, delayMs = 300) {
-  const debounced = ref(unref(source))
-  let timeout = null
-
-  watch(
-    () => unref(source),
-    (newValue) => {
-      clearTimeout(timeout)
-      timeout = setTimeout(() => { debounced.value = newValue }, delayMs)
-    }
-  )
-
-  return debounced
-}
-
-// works whether the caller passes a plain string or a reactive ref
-useDebouncedValue('static text')
-useDebouncedValue(searchQuery)   // a ref, updates flow through automatically
-```
-::
-
-This flexibility is a deliberate VueUse convention (they call the type `MaybeRef<T>`) — a composable that only accepts a ref forces every caller to wrap plain values pointlessly (`useDebouncedValue(ref('static text'))`), while one that only accepts a plain value can't react to a caller's changing state at all; supporting both via `unref`/`toValue` costs a few extra characters and meaningfully improves how pleasant the composable is to actually use.
-
-## Container/Presentational Components
-
-This pattern predates Vue (it's a longstanding React community pattern too) but maps directly onto Vue components: separate *what data a component needs and how it gets it* from *how that data is displayed*.
-
-::code-wrapper{language="vue" filename="UserProfileCard.vue"}
+::code-wrapper{language="vue" filename="RenderlessToggle.vue"}
 ```vue
 <script setup>
-// PRESENTATIONAL — receives everything via props, emits everything via
-// events, has no idea where its data comes from or where its events go.
-// No API calls, no store access, no routing logic — purely a function
-// of its props, which makes it trivially reusable and trivially testable
-defineProps({
-  user: { type: Object, required: true },
-  loading: { type: Boolean, default: false }
-})
+import { ref, computed } from 'vue'
 
-defineEmits(['edit', 'delete'])
+// ── Renderless component: provides state, renders nothing itself ──
+// Parent has 100% control over the template via the scoped slot.
+const isOpen = ref(false)
+
+function open() { isOpen.value = true }
+function close() { isOpen.value = false }
+function toggle() { isOpen.value = !isOpen.value }
 </script>
 
 <template>
-  <div class="card">
-    <p v-if="loading">Loading…</p>
-    <template v-else>
-      <h3>{{ user.name }}</h3>
-      <p>{{ user.email }}</p>
-      <button @click="$emit('edit', user.id)">Edit</button>
-      <button @click="$emit('delete', user.id)">Delete</button>
-    </template>
-  </div>
-</template>
-```
-::
-
-::code-wrapper{language="vue" filename="UserProfileContainer.vue"}
-```vue
-<script setup>
-// CONTAINER — owns data fetching, store access, and routing, and passes
-// the results down to a presentational child. All of the "how do we get
-// this data" concern lives here, isolated from "how does it look"
-import { useRoute, useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
-import { storeToRefs } from 'pinia'
-import UserProfileCard from './UserProfileCard.vue'
-
-const route = useRoute()
-const router = useRouter()
-const userStore = useUserStore()
-const { currentUser, loading } = storeToRefs(userStore)
-
-userStore.fetchUser(route.params.id)
-
-function handleEdit(id) {
-  router.push(`/users/${id}/edit`)
-}
-
-async function handleDelete(id) {
-  await userStore.deleteUser(id)
-  router.push('/users')
-}
-</script>
-
-<template>
-  <UserProfileCard
-    :user="currentUser"
-    :loading="loading"
-    @edit="handleEdit"
-    @delete="handleDelete"
+  <!-- ── Slot receives: state + actions ──────────────────── -->
+  <slot
+    :is-open="isOpen"
+    :open="open"
+    :close="close"
+    :toggle="toggle"
   />
 </template>
 ```
-::
 
-The payoff is concrete, not just architectural tidiness: `UserProfileCard` can be dropped into a Storybook-style component catalog, unit-tested with plain prop objects and no store/router mocking at all (chapter 18's testing patterns become dramatically simpler against a presentational component), and reused in a completely different container (a search-results page showing the same card shape from different data) without any modification.
-
-### Composables have mostly absorbed this pattern's original role
-
-In practice, a lot of what used to require a container component is now handled by extracting the "how do we get this data" logic into a composable instead, called directly from a single component:
-
-::code-wrapper{language="vue" filename="UserProfile.vue"}
+::code-wrapper{language="vue" filename="RenderlessUsage.vue"}
 ```vue
-<script setup>
-import { useRoute } from 'vue-router'
-import { useUser } from '@/composables/useUser'
-import UserProfileCard from './UserProfileCard.vue'
-
-const route = useRoute()
-const { user, loading, deleteUser } = useUser(route.params.id)
-</script>
-
 <template>
-  <UserProfileCard :user="user" :loading="loading" @delete="deleteUser" />
+  <!-- ── Parent: full control over rendering ── -->
+  <RenderlessToggle v-slot="{ isOpen, toggle, close }">
+    <div>
+      <button @click="toggle">{{ isOpen ? 'Close' : 'Open' }}</button>
+
+      <div v-if="isOpen" class="panel">
+        <p>Panel content</p>
+        <button @click="close">Close X</button>
+      </div>
+    </div>
+  </RenderlessToggle>
+
+  <!-- ── Same logic, different template: ── -->
+  <RenderlessToggle v-slot="{ isOpen, toggle }">
+    <details :open="isOpen" @toggle="toggle">
+      <summary>Click to {{ isOpen ? 'collapse' : 'expand' }}</summary>
+      <p>Content</p>
+    </details>
+  </RenderlessToggle>
 </template>
 ```
 ::
 
-Both approaches achieve the same separation of concerns; composables tend to win for single-purpose data-fetching logic since there's no extra component-instance overhead, while a true container component still earns its place when it's coordinating *multiple* children, or handling layout/conditional-rendering decisions that don't belong inside a data-fetching composable at all.
+## Composable Composition — Higher-Order Composables
 
-## Renderless Components, Revisited
+::code-wrapper{language="typescript" filename="composable-composition.ts"}
+```typescript
+import { ref, computed, type Ref, type MaybeRefOrGetter } from 'vue'
 
-Chapter 13 introduced renderless components as a scoped-slot mechanism. The design-pattern lens on the same technique: a renderless component is the cleanest way to share *stateful behavior with markup-relevant timing* (not just plain reactive state) across wildly different visual presentations.
-
-::code-wrapper{language="vue" filename="MouseTracker.vue"}
-```vue
-<script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-
-const x = ref(0)
-const y = ref(0)
-
-function update(e) {
-  x.value = e.clientX
-  y.value = e.clientY
+// ── Base composable: useFetch ───────────────────────────
+function useFetch<T>(url: MaybeRefOrGetter<string>) {
+  const data: Ref<T | null> = ref(null) as Ref<T | null>
+  const loading = ref(false)
+  const error = ref<Error | null>(null)
+  // ... fetch logic ...
+  return { data, loading, error }
 }
 
-onMounted(() => window.addEventListener('mousemove', update))
-onUnmounted(() => window.removeEventListener('mousemove', update))
-</script>
+// ── Higher-order composable: wraps useFetch with caching ──
+function useCachedFetch<T>(url: MaybeRefOrGetter<string>, ttl = 60_000) {
+  const { data, loading, error } = useFetch<T>(url)
+  const lastFetch = ref(0)
+  const isStale = computed(() => Date.now() - lastFetch.value > ttl)
 
-<template>
-  <slot :x="x" :y="y" />
-</template>
-```
-::
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <!-- one behavior, two totally different presentations, zero duplication
-       of the mousemove-listener logic itself -->
-  <MouseTracker v-slot="{ x, y }">
-    <p>{{ x }}, {{ y }}</p>
-  </MouseTracker>
-
-  <MouseTracker v-slot="{ x, y }">
-    <div class="cursor-dot" :style="{ left: `${x}px`, top: `${y}px` }" />
-  </MouseTracker>
-</template>
-```
-::
-
-### Composable vs. renderless component — the actual decision rule
-
-This exact `useMousePosition` logic was written as a composable earlier in this chapter, and as a renderless component here — they're not competing solutions to different problems, they're the same underlying state exposed two different ways, and the deciding question is genuinely simple: **does consuming code need to control markup structure around the behavior, or just read reactive values from it?**
-
-- Need the values in `<script setup>` to combine with other logic, feed into a `computed`, or use in a way that isn't primarily template markup → composable.
-- Need per-consumer-controlled markup, conditional rendering, or multiple named slots driven by the same underlying state → renderless component (or `<component :is>` with a scoped slot).
-
-A composable can always be wrapped in a thin renderless component when markup-level flexibility is later needed (the renderless component's `<script setup>` just calls the composable and forwards its return value into `<slot>` bindings) — so the pragmatic default for genuinely new logic is to write the composable first, and reach for the renderless wrapper only once an actual template-flexibility need shows up, rather than guessing upfront.
-
-## Provide/Inject as a Lightweight Dependency Injection Pattern
-
-Chapter 06 covered `provide`/`inject` mechanically. The pattern-level use: a deeply nested component tree (a `<Form>` with many nested `<FormField>`s, none of which are direct children) can share coordination state without prop-drilling it through every intermediate layer:
-
-::code-wrapper{language="javascript" filename="composables/useForm.js"}
-```javascript
-import { provide, inject, reactive } from 'vue'
-
-const FormContextKey = Symbol('form-context')
-
-export function provideFormContext() {
-  const errors = reactive({})
-
-  function registerError(field, message) {
-    errors[field] = message
+  async function refresh() {
+    if (!isStale.value && data.value) return data.value
+    // ... refetch ...
+    lastFetch.value = Date.now()
   }
 
-  const context = { errors, registerError }
-  provide(FormContextKey, context)
-  return context
+  return { data, loading, error, isStale, refresh }
 }
 
-export function useFormContext() {
-  const context = inject(FormContextKey)
-  if (!context) {
-    throw new Error('useFormContext() called without a parent <Form> providing context')
+// ── Composing multiple composables: useUserWithPosts ──
+function useUserWithPosts(userId: MaybeRefOrGetter<number>) {
+  // ── Compose two fetches into one composable ──
+  const user = useCachedFetch(() => `/api/users/${toValue(userId)}`)
+  const posts = useCachedFetch(() => `/api/users/${toValue(userId)}/posts`)
+
+  const isLoading = computed(() => user.loading.value || posts.loading.value)
+  const hasError = computed(() => !!user.error.value || !!posts.error.value)
+
+  return {
+    user: user.data,
+    posts: posts.data,
+    isLoading,
+    hasError,
+    refreshUser: user.refresh,
+    refreshPosts: posts.refresh,
   }
-  return context
 }
 ```
 ::
 
-The `Symbol` key (rather than a plain string like `'form'`) avoids collisions with an unrelated `provide('form', ...)` elsewhere in a large codebase, and the explicit `throw` in `useFormContext` converts a silent `undefined`-context bug (a `<FormField>` mistakenly used outside a `<Form>`) into an immediate, clear error at the point of misuse rather than a confusing failure somewhere downstream when `context.errors` turns out to be undefined.
+## Provider/Consumer — Typed Dependency Injection
 
-## Compound Components via Provide/Inject
+::code-wrapper{language="typescript" filename="provider-consumer.ts"}
+```typescript
+import { provide, inject, ref, readonly, type Ref, type InjectionKey } from 'vue'
 
-Combining the above with slots produces a compound-component pattern — several components that only make sense used together, sharing implicit state:
+// ── InjectionKey: typed symbol for type-safe DI ──────────
+const NotificationContextKey: InjectionKey<{
+  notifications: Readonly<Ref<Notification[]>>
+  notify: (message: string, type?: 'info' | 'error') => void
+  dismiss: (id: string) => void
+}> = Symbol('notifications')
 
-::code-wrapper{language="vue" filename="Tabs.vue"}
-```vue
-<script setup>
-import { ref, provide } from 'vue'
+// ── Provider: set up at app or component root ──────────
+export function provideNotifications() {
+  const notifications = ref<Notification[]>([])
 
-const activeTab = ref(0)
-provide('tabs', { activeTab, setActive: (i) => (activeTab.value = i) })
-</script>
+  function notify(message: string, type: 'info' | 'error' = 'info') {
+    const id = crypto.randomUUID()
+    notifications.value.push({ id, message, type, timestamp: Date.now() })
+    setTimeout(() => dismiss(id), 5000)  // auto-dismiss after 5s
+  }
 
-<template>
-  <div class="tabs"><slot /></div>
-</template>
+  function dismiss(id: string) {
+    notifications.value = notifications.value.filter(n => n.id !== id)
+  }
+
+  const context = {
+    notifications: readonly(notifications),  // read-only for consumers
+    notify,
+    dismiss,
+  }
+
+  provide(NotificationContextKey, context)
+  return context  // provider also gets the mutable API
+}
+
+// ── Consumer: use in any descendant ─────────────────────
+export function useNotifications() {
+  const ctx = inject(NotificationContextKey)
+  if (!ctx) {
+    throw new Error('useNotifications() must be used within a component that calls provideNotifications()')
+  }
+  return ctx
+}
+
+// ── Usage in root component: ────────────────────────────
+// provideNotifications()
+// ── Usage in any descendant: ────────────────────────────
+// const { notify, dismiss, notifications } = useNotifications()
+// notify('Saved!', 'info')  → adds a notification, auto-dismisses in 5s
 ```
 ::
 
-::code-wrapper{language="vue" filename="Tab.vue"}
-```vue
-<script setup>
-import { inject, computed } from 'vue'
+## Observer Pattern — Reactive Event Bus
 
-const props = defineProps({ index: { type: Number, required: true } })
-const { activeTab, setActive } = inject('tabs')
-const isActive = computed(() => activeTab.value === props.index)
-</script>
+::code-wrapper{language="typescript" filename="event-bus.ts"}
+```typescript
+import { ref, type Ref } from 'vue'
 
-<template>
-  <button :class="{ active: isActive }" @click="setActive(props.index)">
-    <slot />
-  </button>
-</template>
+// ── Event bus: for cross-component communication without Pinia ──
+// Use sparingly — prefer Pinia for state, provide/inject for DI.
+// Event bus is for ephemeral events (notifications, toasts), not state.
+
+type EventHandler<T = any> = (payload: T) => void
+
+class EventBus {
+  private handlers = new Map<string, Set<EventHandler>>()
+
+  on<T>(event: string, handler: EventHandler<T>): () => void {
+    if (!this.handlers.has(event)) {
+      this.handlers.set(event, new Set())
+    }
+    this.handlers.get(event)!.add(handler as EventHandler)
+
+    // ── Return unsubscribe function (composable cleanup pattern) ──
+    return () => this.handlers.get(event)?.delete(handler as EventHandler)
+  }
+
+  emit<T>(event: string, payload: T): void {
+    this.handlers.get(event)?.forEach(handler => handler(payload))
+  }
+
+  off(event: string): void {
+    this.handlers.delete(event)
+  }
+}
+
+export const bus = new EventBus()
+
+// ── Usage in composable with cleanup: ───────────────────
+import { onScopeDispose } from 'vue'
+
+export function useEventBus(event: string, handler: EventHandler) {
+  const unsubscribe = bus.on(event, handler)
+  onScopeDispose(() => unsubscribe())  // auto-cleanup on component unmount
+}
+
+// ── Emitting: ──────────────────────────────────────────
+// bus.emit('user:login', { id: 42, name: 'Ada' })
+// ── Listening: ──────────────────────────────────────────
+// useEventBus('user:login', (payload) => { console.log(payload) })
 ```
 ::
 
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <!-- <Tab> never receives activeTab as an explicit prop — it's implicit,
-       shared coordination state, exactly the compound-component pattern
-       from libraries like Headless UI or React's Radix -->
-  <Tabs>
-    <Tab :index="0">Overview</Tab>
-    <Tab :index="1">Settings</Tab>
-    <Tab :index="2">Billing</Tab>
-  </Tabs>
-</template>
+## Feature-Based Module Organization
+
+::code-wrapper{language="bash" filename="feature-modules.sh"}
+```bash
+# ── Feature-based: group by business domain, not by file type ──
+# Each feature is self-contained: components, composables, stores, types.
+
+src/
+├── features/
+│   ├── auth/
+│   │   ├── components/
+│   │   │   ├── LoginForm.vue
+│   │   │   └── AuthGuard.vue
+│   │   ├── composables/
+│   │   │   └── useAuth.ts
+│   │   ├── stores/
+│   │   │   └── authStore.ts
+│   │   ├── types/
+│   │   │   └── auth.ts
+│   │   └── index.ts          # public API: export only what other features need
+│   ├── products/
+│   │   ├── components/
+│   │   │   ├── ProductList.vue
+│   │   │   └── ProductDetail.vue
+│   │   ├── composables/
+│   │   │   └── useProducts.ts
+│   │   ├── stores/
+│   │   │   └── productStore.ts
+│   │   ├── types/
+│   │   │   └── product.ts
+│   │   └── index.ts
+│   └── checkout/
+│       └── ...
+├── shared/                   # cross-feature utilities, types, components
+│   ├── components/
+│   │   └── BaseButton.vue
+│   ├── composables/
+│   │   └── useFetch.ts
+│   └── utils/
+└── app/                      # app-level config, routing, providers
+    ├── App.vue
+    └── router.ts
+```
+
+::code-wrapper{language="typescript" filename="features/auth/index.ts"}
+```typescript
+// ── Feature barrel: export only the public API ──────────
+// Other features import from the index, not internal files.
+export { useAuth } from './composables/useAuth'
+export { useAuthStore } from './stores/authStore'
+export type { User, Credentials } from './types/auth'
+export { default as LoginForm } from './components/LoginForm.vue'
+
+// ── Internal files are NOT exported — they're implementation details ──
+// This creates a clear boundary: features communicate through their public API.
+// Other features: import { useAuth } from '@/features/auth' (not from auth/composables/useAuth)
 ```
 ::
-
-The tradeoff to state plainly: compound components are ergonomic for the consumer (no prop-drilling, reads naturally as nested markup) but couple `Tab` tightly to being used inside a `Tabs` ancestor — the explicit `inject` failure check from the previous section matters even more here, since `<Tab>` used standalone would otherwise fail confusingly rather than with a clear error message.
-
-## Choosing Between Patterns — A Practical Summary
-
-| Need | Reach for |
-|---|---|
-| Shared reactive logic, no markup opinions | A composable |
-| Shared logic where the consumer controls markup/layout | A renderless component |
-| Separating data-fetching from presentation | Container/presentational split, or a composable |
-| Deeply nested components needing shared implicit state | `provide`/`inject` |
-| Several components that only make sense used together | Compound components (slots + `provide`/`inject`) |
-
-None of these patterns are mutually exclusive in a real codebase — a typical non-trivial feature ends up using several at once: a composable for data fetching, injected into a container component, which passes props down to presentational children, one of which happens to be a compound-component tab set.
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Default new composables to accepting `MaybeRef`-style parameters (via `unref`/`toValue`) from the start — retrofitting this later means auditing every existing call site to confirm they still behave correctly, while designing for it upfront costs almost nothing.
-- **Idiom** — Write the composable first for new shared logic; only wrap it in a renderless component once a concrete need for consumer-controlled markup actually appears — this avoids over-engineering markup flexibility that may never be used.
-- **Debug** — An explicit `throw` in an `inject`-consuming composable (rather than silently returning `undefined`) turns a confusing "cannot read property of undefined" three function calls later into an immediate, clear error naming the actual misuse.
-- **Idiom** — Use a `Symbol` for `provide`/`inject` keys in any library-style or widely-shared code — plain string keys are a real collision risk in a large codebase with multiple teams independently choosing keys like `'context'` or `'state'`.
-- **Performance** — A presentational component with no store/router/composable dependencies of its own is also the cheapest kind of component to unit test — favor pushing logic into containers/composables specifically because it makes the resulting presentational layer nearly free to cover with tests.
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. Store pattern vs Pinia: use Pinia for anything non-trivial ──
+// Store pattern is for 1-2 pieces of simple state. Pinia for: DevTools,
+// persistence, SSR, multiple stores, getters with parameters.
 
-## ⚠️ Edge Cases & Gotchas
+// ── 2. Renderless components vs composables: prefer composables ──
+// Composables are lighter (no component instance). Renderless components
+// shine when you need slot-based template injection (parent controls markup).
 
-- **A composable that returns a `reactive()` object instead of individual refs silently breaks the moment a caller destructures it** — This is the exact destructuring trap from chapter 03, resurfacing specifically at the composable-authoring boundary — the composable "works" in every manual test where the caller uses `result.x` instead of `const { x } = result`, and only breaks for callers who destructure, which is the overwhelmingly common calling convention in the ecosystem.
-- **Forgetting `onUnmounted` cleanup in a composable is invisible in a small app and increasingly severe as the composable is reused more widely** — A single component using a leaky composable might never accumulate enough leaked listeners/intervals to notice; the same composable used in a `v-for`-rendered list, or across many route navigations in an SPA, accumulates leaks proportionally, and the resulting slowdown is easy to misattribute to something else entirely.
-- **`inject` without a default value or explicit error check returns `undefined` with no warning when used outside its expected provider** — Vue does not throw automatically; a compound-component child rendered accidentally outside its parent (a common mistake during a refactor) fails downstream, at whatever line first tries to use the injected value, rather than at the actual point of misuse.
-- **The container/presentational split can be taken too far, producing a "container" that does nothing but pass every single prop straight through unchanged** — When a container's entire body is fetch-then-forward with no actual coordination logic, a composable called directly from one component is simpler and has one fewer file/layer to navigate — the pattern is a tool for genuine complexity, not a default structure to impose on every component regardless of size.
-- **Compound components sharing state via `provide`/`inject` can behave unexpectedly with `v-for`** — Rendering multiple `<Tabs>` instances in a loop each correctly gets its own `provide` scope (provide/inject is per-component-instance, not global), but a common mistake is hoisting the `provide` call to a shared ancestor above the loop, which then makes all looped instances incorrectly share one `activeTab` state instead of having independent state each.
+// ── 3. EventBus: use for ephemeral events, NOT for state ──
+// State belongs in Pinia. EventBus is for: toasts, notifications, analytics.
+// If you're storing data in the event bus, you've reinvented a bad Pinia.
 
-## 🧠 Spot the Bug
+// ── 4. Feature modules: index.ts as the public API boundary ──
+// Only export what other features should use. Internal files are private.
+// This prevents tight coupling between features' internal implementations.
 
-A team extracts a `useFetchState` composable meant to be reused across many components for basic loading/error/data state.
-
-::code-wrapper{language="javascript" filename="composables/useFetchState.js"}
-```javascript
-import { reactive } from 'vue'
-
-export function useFetchState() {
-  const state = reactive({
-    data: null,
-    loading: false,
-    error: null
-  })
-
-  async function run(fetcher) {
-    state.loading = true
-    state.error = null
-    try {
-      state.data = await fetcher()
-    } catch (err) {
-      state.error = err
-    } finally {
-      state.loading = false
-    }
-  }
-
-  return { ...state, run }
-}
+// ── 5. readonly on injected/provided state: prevents external mutation ──
+// Forces consumers to use the action API → all mutations are traceable.
 ```
 ::
 
-A component using it finds that `loading` and `error` never update in its template, even though network requests are clearly succeeding and failing correctly in the Network tab.
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Module-scoped store leaks state on SSR ──
+// Server: module scope persists across requests → data leak.
+// Fix: use Pinia (request-scoped) or reset module state in server entry.
+
+// ── 2. EventBus without cleanup = memory leak ───────────
+// Listeners persist after component unmount if not unsubscribed.
+// Always return an unsubscribe function and call it in onScopeDispose.
+
+// ── 3. Renderless component: slot can only have ONE default slot ──
+// Named slots are possible but complex. For multiple "slots", use multiple
+// composables or pass multiple render functions.
+
+// ── 4. Composable returning refs: must return refs, not values ──
+// return { count: ref(0) } → reactive. return { count: 0 } → static snapshot.
+
+// ── 5. Feature barrel: circular imports if two features import each other ──
+// If auth imports from products and products imports from auth → circular.
+// Fix: extract shared types to a common module, or use lazy imports.
+
+// ── 6. readonly() is shallow — nested objects are still mutable ──
+// readonly(state).nested.prop = x → allowed (readonly only protects top level).
+// Use readonly(reactive(...)) for deep, or accept shallow readonly.
+```
+::
+
+## 🧠 Spot the Bug
+
+An event bus listener keeps firing after the component unmounts, causing errors.
+
+::code-wrapper{language="typescript" filename="EventBusBug.ts"}
+```typescript
+import { onMounted } from 'vue'
+import { bus } from './eventBus'
+
+export default {
+  setup() {
+    onMounted(() => {
+      // ❌ Listener added but never removed — persists after unmount
+      bus.on('user:login', (user) => {
+        // After unmount, this still fires → errors if it references unmounted state
+        console.log('User logged in:', user.name)
+      })
+    })
+  },
+}
+```
+::
 
 <details>
 <summary>Answer</summary>
 
-`return { ...state, run }` spreads the `reactive` object's *current* property values into a new plain object at the moment `useFetchState()` is called — `data`, `loading`, and `error` become plain, disconnected snapshots at that instant, not refs or reactive references to the ongoing state. When `run` later mutates the original `state.loading` internally, nothing about the object already destructured and returned to the caller changes — the caller is holding onto stale, frozen values from the moment of the initial call, forever.
+The event listener is registered in `onMounted` but never unsubscribed. When the component unmounts, the listener remains in the bus's handler set, still firing on future events. If the handler references component state (refs, DOM elements), it errors or leaks memory.
 
-::code-wrapper{language="javascript" filename="composables/useFetchState.js"}
-```javascript
-import { ref } from 'vue'
+**Fix** — use `onScopeDispose` for automatic cleanup:
 
-export function useFetchState() {
-  const data = ref(null)
-  const loading = ref(false)
-  const error = ref(null)
+::code-wrapper{language="typescript" filename="EventBusFixed.ts"}
+```typescript
+import { onScopeDispose } from 'vue'
+import { bus } from './eventBus'
 
-  async function run(fetcher) {
-    loading.value = true
-    error.value = null
-    try {
-      data.value = await fetcher()
-    } catch (err) {
-      error.value = err
-    } finally {
-      loading.value = false
-    }
-  }
+export function useUserEvents() {
+  const unsubscribe = bus.on('user:login', (user) => {
+    console.log('User logged in:', user.name)
+  })
 
-  return { data, loading, error, run }
+  // ── onScopeDispose: runs when the hosting scope stops (component unmount) ──
+  onScopeDispose(() => unsubscribe())  // removes the listener automatically
 }
 ```
 ::
 
-Returning individual refs means the caller's destructured `const { data, loading, error, run } = useFetchState()` holds live refs, whose `.value` Vue continues to track and update reactively — exactly the "return an object of refs, not a reactive object" convention from the start of this chapter, and exactly why that convention exists.
-
-**The lesson**: `{ ...someReactiveObject }` looks like it forwards reactivity but actually performs a one-time value copy — the spread operator has no special awareness of Vue's reactivity system, so it silently converts every property into a frozen snapshot the instant it runs.
+**The lesson**: every event bus subscription, observer, or external listener registered in a component or composable must be unsubscribed on cleanup. `onScopeDispose` automates this — the returned unsubscribe function is called when the component unmounts.
 
 </details>
-
-## Key Takeaways
-
-- Return an object of individual refs from a composable, never a single `reactive` object — destructuring a `reactive` object (directly or via spread) silently disconnects the caller from future updates.
-- Always pair setup (event listeners, timers, subscriptions) inside a composable with matching teardown in `onUnmounted` — a missing cleanup leaks proportionally to how widely the composable gets reused.
-- Container/presentational splits (or an equivalent composable-based split) isolate "how do we get this data" from "how does it look," making the presentational half trivially reusable and testable — but don't force the split onto components with no real coordination complexity.
-- A renderless component and a composable can express identical logic — choose based on whether the consumer needs to control markup structure (renderless component) or just read reactive values (composable); a composable can always be wrapped in a renderless component later.
-- Use `Symbol` keys and an explicit error check for `provide`/`inject` in shared/library code — silent `undefined` injection turns a clear misuse into a confusing downstream failure.
-- Compound components (slots plus shared `provide`/`inject` state) read ergonomically as nested markup but couple children tightly to their parent — that coupling is a deliberate tradeoff, not a free convenience.

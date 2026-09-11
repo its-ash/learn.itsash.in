@@ -1,138 +1,108 @@
-# 18 — Architecture & Methodology
+---
+title: "18 — Architecture: BEM, OOCSS, ITCSS, Atomic & Cascade Layers"
+description: "BEM flat-specificity naming, OOCSS structure/skin separation, ITCSS inverted-triangle ordering, Atomic/Tailwind utility-first, and @layer as the native architecture primitive. Code-first reference with the modifier-needs-base trap."
+---
 
-CSS architecture methodologies (BEM, OOCSS, SMACSS, ITCSS, Atomic) bring order to large stylesheets — consistent naming, separation of concerns, and maintainability.
+# 18 — Architecture: BEM, OOCSS, ITCSS, Atomic & Cascade Layers
 
-## The Problem
+Without architecture, CSS rots: specificity wars, dead code, inconsistent naming. Methodologies bring order through naming conventions and organizational rules. The modern approach: BEM for flat specificity + `@layer` for explicit precedence. This is the architecture that scales.
 
-Without structure, CSS devolves into:
-- Specificity wars (`!important` everywhere).
-- Dead code (afraid to delete — might break something).
-- Non-reusable components.
-- Inconsistent naming (`.btn`, `.button`, `.Button`, `.btn-primary`).
-
-Methodologies solve this with naming conventions and organizational rules.
-
-## BEM (Block, Element, Modifier)
-
-BEM is the most popular naming convention:
+## BEM — Block, Element, Modifier
 
 ::code-wrapper{language="html"}
 ```html
+<!-- Block: standalone component. Element: part of the block (__). Modifier: variation (--). -->
 <div class="card card--featured">
-	<img class="card__image" src="...">
-	<h3 class="card__title">Title</h3>
-	<p class="card__body">Body text</p>
-	<button class="card__button card__button--disabled">Click</button>
+  <img class="card__image" src="...">
+  <h3 class="card__title">Title</h3>
+  <button class="card__button card__button--disabled">Click</button>
 </div>
 ```
 ::
+
 ::code-wrapper{language="css"}
 ```css
-.card { ... }
-.card--featured { ... }
-.card__image { ... }
-.card__title { ... }
-.card__body { ... }
-.card__button { ... }
-.card__button--disabled { ... }
+.card { /* ... */ }                    /* (0,0,1,0) — block */
+.card--featured { /* ... */ }          /* (0,0,1,0) — modifier (used WITH the block) */
+.card__image { /* ... */ }            /* (0,0,1,0) — element */
+.card__button { /* ... */ }           /* (0,0,1,0) — element */
+.card__button--disabled { /* ... */ } /* (0,0,1,0) — element modifier */
+/* Every selector is a SINGLE class → flat specificity (0,0,1,0). No specificity wars.
+   No nesting: .card .card__title is WRONG (creates (0,0,2,0)). Use .card__title alone. */
 ```
 ::
-- **Block** (`.card`) — a standalone component.
-- **Element** (`.card__title`) — a part of the block (double underscore).
-- **Modifier** (`.card--featured`) — a variation or state (double hyphen).
 
-### Rules
-- Elements (`__`) are always prefixed with their block.
-- Modifiers (`--`) are always used with the block/element they modify (`class="card card--featured"`, not just `card--featured`).
-- No nesting of elements in the class name (`.card__title__text` ❌ — use `.card__text` or a sub-block).
+### Anti-pattern: modifier without the base
 
-### Benefits
-- Flat specificity (all single-class selectors, 0,1,0).
-- Clear ownership (every class knows its block).
-- No specificity wars.
-
-## OOCSS (Object-Oriented CSS)
-
-Two principles:
-1. **Separate structure from skin** — layout (structure) separate from visual (skin).
-2. **Separate container from content** — components shouldn't be location-specific.
+::code-wrapper{language="html"}
+```html
+<!-- ❌ Only btn--disabled — missing the base btn. Modifier only sets DIFFERENCES. -->
+<button class="btn--disabled">Click</button>
+```
+::
 
 ::code-wrapper{language="css"}
 ```css
-/* Structure */
-.media { display: flex; }
+/* The modifier only overrides; it doesn't carry base styles. Button is unstyled (no padding, no color). */
+.btn { padding: 0.5rem 1rem; background: blue; color: white; }
+.btn--disabled { background: gray; }  /* only the difference */
+```
+::
+
+::code-wrapper{language="html"}
+```html
+<!-- ✓ Both classes: base provides the foundation, modifier overrides. -->
+<button class="btn btn--disabled">Click</button>
+```
+::
+
+## OOCSS — separate structure from skin
+
+::code-wrapper{language="css"}
+```css
+/* Structure (layout) and skin (visual) are separate classes → compose, don't couple. */
+.media { display: flex; }              /* structure */
 .media__img { margin-inline-end: 1rem; }
 .media__body { flex: 1; }
-
-/* Skin */
-.skin-card { background: white; border-radius: 8px; padding: 1rem; box-shadow: ...; }
-.skin-dark { background: #333; color: #eee; }
+.skin-card { background: white; border-radius: 8px; box-shadow: ...; }  /* skin */
+.skin-dark { background: #333; color: #eee; }                            /* skin */
 ```
 ::
-::code-wrapper{language="html"}
-```html
-<div class="media skin-card">
-	<img class="media__img" src="...">
-	<div class="media__body">...</div>
-</div>
-```
-::
-Combine a structure class (`media`) with a skin class (`skin-card`) — the media layout works regardless of the visual skin.
-
-## SMACSS (Scalable and Modular Architecture)
-
-Categorizes CSS into five types:
-1. **Base** — element selectors (`body`, `a`, `h1`).
-2. **Layout** — structural (`#header`, `.l-grid`, `.container`).
-3. **Module** — components (`.card`, `.nav`).
-4. **State** — states (`.is-active`, `.is-hidden`, `.is-collapsed`).
-5. **Theme** — theme overrides (`.theme-dark`).
-
-Organizes files by category (`base.css`, `layout.css`, `modules/`, `states.css`, `theme.css`). The naming convention prefixes classes by category (`.l-` for layout, `.is-` for state, `.has-` for state).
-
-## ITCSS (Inverted Triangle)
-
-Organizes CSS by specificity, from broad to narrow:
-1. **Settings** — variables (`--color`, `--font`).
-2. **Tools** — mixins, functions.
-3. **Generic** — resets, `box-sizing`.
-4. **Elements** — bare element selectors (`body`, `a`).
-5. **Objects** — layout patterns (`.media`, `.container`).
-6. **Components** — UI components (`.card`, `.nav`).
-7. **Utilities** — single-purpose (`.text-center`, `.mt-4`).
-
-Each layer is more specific and explicit than the one above. Import in order — later layers can override earlier. Maps well to cascade layers (`@layer`).
-
-## Atomic / Utility-First CSS
-
-Atomic CSS uses single-purpose utility classes (`.mt-4`, `.text-center`, `.flex`). Tailwind CSS is the popular implementation:
 
 ::code-wrapper{language="html"}
 ```html
-<button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-	Button
-</button>
+<!-- Combine a structure class with a skin class — same layout, any visual. -->
+<div class="media skin-card"><img class="media__img"><div class="media__body">...</div></div>
 ```
 ::
-### Pros
-- No naming — compose utilities directly in HTML.
-- Small file size (with purging) — only used utilities ship.
-- Consistent spacing/colors (design system enforced).
-- No context switching (HTML to CSS).
 
-### Cons
-- HTML is verbose (long class lists).
-- Learning the utility names.
-- Hard to extract components without `@apply` or a component framework.
+## ITCSS — the inverted triangle by specificity
 
-### When to use
-- Projects with a design system and component framework (React/Vue) — utilities compose well in JSX.
-- Teams that prefer in-HTML styling.
-- Avoid for simple sites or if the verbose HTML bothers you.
+::code-wrapper{language="text"}
+```text
+Settings    → variables (--color, --font)           least specific
+Tools       → mixins, functions
+Generic     → resets, box-sizing
+Elements    → bare element selectors (body, a)
+Objects     → layout patterns (.media, .container)
+Components  → UI components (.card, .nav)
+Utilities   → single-purpose (.text-center, .mt-4)   most specific
+```
+::
 
-## Cascade Layers for Architecture
+Each layer is more specific/explicit than the one above. Import in order → later layers override earlier. Maps directly to `@layer`.
 
-Modern CSS `@layer` formalizes the ITCSS-like ordering:
+## Atomic / Utility-First (Tailwind)
+
+::code-wrapper{language="html"}
+```html
+<button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Button</button>
+```
+::
+
+No naming — compose utilities in HTML. Small file size with purging. Verbose HTML. Best for component-heavy apps (React/Vue) with a design system.
+
+## `@layer` — the native architecture primitive
 
 ::code-wrapper{language="css"}
 ```css
@@ -140,84 +110,43 @@ Modern CSS `@layer` formalizes the ITCSS-like ordering:
 
 @layer reset { * { box-sizing: border-box; margin: 0; } }
 @layer base { body { font-family: sans-serif; } }
-@layer layout { .container { max-width: 1200px; margin: 0 auto; } }
-@layer components { .card { ... } .btn { ... } }
-@layer utilities { .text-center { text-align: center; } .mt-4 { margin-top: 1rem; } }
+@layer layout { .container { max-width: 1200px; margin-inline: auto; } }
+@layer components { .card { /* ... */ } .btn { /* ... */ } }
+@layer utilities { .text-center { text-align: center; } .mt-4 { margin-block-start: 1rem; } }
+/* Layer order = precedence. utilities (last) beats components regardless of specificity.
+   This is the modern ITCSS, native and reliable. */
 ```
 ::
-The layer order sets precedence — `utilities` beats `components` beats `layout`, regardless of specificity. This makes the architecture explicit and reliable.
-
-## Choosing a Methodology
-
-| Methodology | Best for |
-|---|---|
-| BEM | Most projects — clear, simple, no tooling |
-| OOCSS | Reusable structure/skin separation |
-| SMACSS | Categorization guidance |
-| ITCSS | Large-scale, enterprise |
-| Atomic/Tailwind | Component-heavy apps (React/Vue) |
-
-For most projects, **BEM + a layer structure (ITCSS-style or `@layer`)** is a solid default. Use Tailwind if the team prefers utility-first.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use BEM (`.block`, `.block__element`, `.block--modifier`) for most projects — flat specificity (all 0,1,0), clear ownership, no specificity wars. The double underscore (element) and double hyphen (modifier) are instantly recognizable.
-- **Idiom**: use `@layer` to formalize architecture — `@layer reset, base, layout, components, utilities;` makes the precedence explicit: utilities beat components regardless of specificity. This is the modern ITCSS, native and reliable.
-- **Idiom**: separate structure from skin (OOCSS) — a `.media` layout class combined with a `.skin-card` visual class lets the same layout work with any skin, and the same skin apply to any layout. Compose, don't couple.
-- **Idiom**: use state classes (`.is-active`, `.is-hidden`, `.is-loading`) for JS-driven state — a clear contract: JS toggles state classes, CSS styles them. Don't use visual classes (`active`, `hidden`) for state — reserve `.is-`/`.has-` for state.
-- **Idiom**: use utility classes sparingly with BEM — a few utilities (`.mt-4`, `.text-center`) for one-off tweaks, but components in BEM. Pure utility-first (Tailwind) is a valid choice for component-heavy apps, but mixing BEM components with a few utilities is a pragmatic middle ground.
+- **Idiom**: BEM (`.block`, `.block__element`, `.block--modifier`) for most projects — flat specificity (all 0,0,1,0), clear ownership, no specificity wars. Double underscore (element), double hyphen (modifier).
+- **Idiom**: `@layer` to formalize architecture — `@layer reset, base, components, utilities;` makes precedence explicit: utilities beat components regardless of specificity. The end of `!important`.
+- **Idiom**: separate structure from skin (OOCSS) — a `.media` layout class + a `.skin-card` visual class → same layout, any skin; same skin, any layout. Compose, don't couple.
+- **Idiom**: state classes (`.is-active`, `.is-loading`) for JS-driven state — a clear contract: JS toggles state classes, CSS styles them. Reserve `.is-`/`.has-` for state, not presentation.
+- **Idiom**: pick ONE methodology and be consistent. BEM + `@layer` is the solid default for most projects. Tailwind is valid for component-heavy apps. Mixing methodologies creates inconsistency.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **BEM element names shouldn't nest**: `.card__title__text` is wrong — it creates a chain. Use `.card__text` (flat) or split into a sub-block (`.card .text-block__text`).
-- **BEM modifiers are used *with* the base**: `class="card card--featured"`, not `class="card--featured"` alone (the modifier only sets the differences).
-- **Specificity still matters in BEM**: `.card .card__title` (0,2,0) beats `.card__title` (0,1,0). BEM's rule is *don't nest* — use `.card__title` alone, not `.card .card__title`.
-- **`@layer` changes the cascade**: unlayered styles beat layered styles. If your utilities are in `@layer utilities` and your override is unlayered, the override wins. This is usually desired (overrides), but can surprise.
-- **State classes (`is-active`) shouldn't have visual styles directly**: separate state from presentation — `.is-active` is a state, the component styles it (`.tab.is-active { ... }`). Don't make `.is-active { display: block; }` a global visual rule.
-- **Atomic CSS file size without purging**: Tailwind generates thousands of utilities. Without purging unused ones (via `content` config), the CSS file is huge. Always configure purging.
-- **Mixing methodologies is confusing**: pick one (BEM, or Tailwind, or OOCSS) and be consistent. Mixing BEM with Tailwind in the same project leads to inconsistency.
-- **Deeply nested selectors are a smell**: `.card .body .title .text` — in BEM, this should be `.card__text` (flat). Nesting indicates you're not using the methodology correctly.
-- **`@apply` in Tailwind**: `@apply mt-4;` in a CSS file mixes utility-first with traditional CSS. Use sparingly — it couples your CSS to Tailwind's specific utilities, reducing portability.
-- **IE doesn't support `@layer`**: for legacy browser support, use ITCSS file ordering (import order sets precedence) instead of `@layer`. `@layer` is modern browsers only.
+- **BEM element names shouldn't nest**: `.card__title__text` is wrong (a chain). Use `.card__text` (flat) or split into a sub-block.
+- **BEM modifiers are used WITH the base**: `class="btn btn--disabled"`, not `class="btn--disabled"` alone. The modifier only sets differences.
+- **Specificity still matters in BEM**: `.card .card__title` (0,0,2,0) beats `.card__title` (0,0,1,0). BEM's rule: don't nest — use `.card__title` alone.
+- **Unlayered rules beat layered rules**: if your utilities are in `@layer utilities` and your override is unlayered, the override wins. Layer everything or nothing.
+- **State classes shouldn't have global visual styles**: `.is-active { display: block; }` as a global rule is wrong — the component should style it (`.tab.is-active { }`).
+- **Atomic CSS needs purging**: Tailwind generates thousands of utilities. Without purging (via `content` config), the CSS file is huge. Always configure purging.
+- **`@apply` in Tailwind couples CSS to Tailwind**: `@apply mt-4;` makes your CSS dependent on Tailwind's utilities. Use sparingly; prefer composing in JSX/HTML.
 
 ## 🧠 Spot the Bug
-
-A developer uses BEM but finds their modifier doesn't apply:
 
 ::code-wrapper{language="html"}
 ```html
 <button class="btn--disabled">Click</button>
 ```
-:: 
-
-::code-wrapper{language="css"}
-```css
-.btn { padding: 0.5rem 1rem; background: blue; color: white; }
-.btn--disabled { background: gray; }
-```
 ::
-
-What's wrong?
 
 <details>
 <summary>Answer</summary>
 
-The button only has `class="btn--disabled"` — it's missing the base `btn` class. In BEM, a modifier is used *with* the base: `class="btn btn--disabled"`. The modifier only sets the *differences* (here, `background: gray`); it doesn't include the base styles (padding, color, the original background).
-
-With only `btn--disabled`, the button gets `background: gray` but no padding, no `color: white`, no base styling — it looks broken.
-
-The fix — include both classes:
-
-```html
-<button class="btn btn--disabled">Click</button>
-```
-::
-Now `.btn` provides the base (padding, blue background, white text), and `.btn--disabled` overrides the background to gray.
-
-**The lesson**: BEM modifiers are always used with their base block/element. A modifier alone doesn't carry the base styles — it only sets the differences. Always include the base class: `class="btn btn--disabled"`.
+The button only has `btn--disabled` — it's missing the base `btn` class. In BEM, a modifier is used *with* the base: `class="btn btn--disabled"`. The modifier only sets the *differences* (`background: gray`); it doesn't include the base styles (padding, color, the original background). With only `btn--disabled`, the button gets `background: gray` but no padding, no `color: white`, no base styling → broken. Fix: `class="btn btn--disabled"`. The base provides the foundation; the modifier overrides. Always include the base class with a modifier.
 
 </details>
-
-## Summary
-
-You know BEM (`.block`, `.block__element`, `.block--modifier`), OOCSS (structure/skin separation), SMACSS (base/layout/module/state/theme), ITCSS (inverted triangle by specificity), Atomic/Tailwind (utility-first), and how `@layer` formalizes architecture — with the modifier-needs-base trap avoided. Next: CSS performance.

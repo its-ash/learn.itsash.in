@@ -1,96 +1,113 @@
 ---
-title: Learn Lua — From Scratch to Advanced
-description: A comprehensive Lua curriculum covering fundamentals, tables, functions, metatables, modules, and practical patterns. Master Lua from beginner to advanced developer. Includes edge cases, best practices, and real-world examples.
+title: Learn Lua — Zero to Hero
+description: A comprehensive, code-first Lua curriculum for mid-to-senior engineers. Covers the runtime architecture, types, functions, tables, metatables, coroutines, I/O, performance, testing, and capstone projects. Production-grade examples with edge cases, anti-patterns, and real-world system patterns.
 ---
 
-# 📖 Learn Lua — From Scratch to Advanced
+# 📖 Learn Lua — Zero to Hero
 
-A comprehensive, edge-case-covering Lua curriculum. Each document is self-contained and covers its concept deeply enough that a careful reader can go from beginner to advanced Lua developer.
+A code-first, production-grade Lua curriculum. Every chapter is structured around annotated code blocks: complex implementations, anti-patterns with fixes, performance tips, edge cases, and debugging challenges. Minimal prose, maximum signal.
 
-Lua is a lightweight, embeddable scripting language used in game engines (Roblox, Garry's Mod), configuration (Neovim, Awesome), streaming apps, and embedded systems. This course teaches idiomatic Lua with emphasis on practical patterns and surprising behaviors.
+Lua is a lightweight, embeddable scripting language with a register-based VM, used in game engines (Roblox, Garry's Mod, Defold), configuration (Neovim, AwesomeWM), databases (Redis), networking (OpenResty, Nginx), and embedded systems. Its entire runtime is a C library — the `lua` executable is a 200-line wrapper.
 
 ## How to Use This Course
 
-1. **Read sequentially** for a structured path (01 → 10).
-2. **Jump to a chapter** as a reference when you hit a concept in the wild.
-3. **Run the examples** in each chapter using `lua script.lua` or the interactive prompt.
-4. **Experiment**: Lua's REPL is perfect for learning. Type `lua` to start.
+1. **Read sequentially** (01 → 16) for a structured path from runtime architecture to capstone projects.
+2. **Jump to a chapter** as a reference when you hit a concept in production.
+3. **Run every code example** — they're written as self-contained, executable scripts.
+4. **Solve the Spot the Bug challenges** before reading the answers.
 
 ## Prerequisites
 
-- A computer with Lua installed (macOS: `brew install lua`, Linux: `apt install lua5.4`, Windows: download from lua.org).
-- A text editor (VS Code, Vim, etc.).
-- Curiosity about how lightweight languages work.
+- Lua 5.4+ installed (`brew install lua` / `apt install lua5.4`), or LuaJIT 2.1+.
+- `luarocks` for package management (`brew install luarocks`).
+- `luacheck` for linting (`luarocks install luacheck`).
+- Comfort with at least one other dynamic language (Python, JS, Ruby).
 
 ## Curriculum
 
-### Part I — Foundations
+### Part I — Foundations & Execution Model
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 01 | [Getting Started](/lua/01-getting-started) | Installation, REPL, first program, standard library overview. |
-| 02 | [Variables & Data Types](/lua/02-variables-and-data-types) | Scoping, falsy values, 1-indexed strings, tables as only composite type. |
-| 03 | [Functions](/lua/03-functions) | Declarations, closures, varargs, tail call optimization. |
-| 04 | [Control Flow](/lua/04-control-flow) | If/else, loops (no block scope!), pattern matching idioms. |
+| 01 | [Runtime Architecture & Execution](/lua/01-getting-started) | Chunk compilation, `load`/`loadfile`/`require` pipeline, `_G` registry, sandboxing, hot-reload. |
+| 02 | [Types, Scoping & Memory](/lua/02-variables-and-data-types) | 8-type system, integer/float duality, `_ENV` mechanics, upvalue cells, table reference semantics, weak tables. |
+| 03 | [Functions, Closures & TCO](/lua/03-functions) | First-class functions, MRV truncation rules, varargs with `select`/`pack`, proper tail calls, state machines. |
+| 04 | [Control Flow & Iterators](/lua/04-control-flow) | `if` as statement, numeric/generic `for` with the iterator protocol, table dispatch as `switch`, `goto` for state machines. |
 
-### Part II — Tables & Objects
-
-| # | Topic | Why It Matters |
-|---|---|---|
-| 05 | [Tables & Objects](/lua/05-tables-and-objects) | Array operations, dictionaries, object patterns, copying semantics. |
-| 06 | [String Manipulation](/lua/06-string-manipulation) | Methods, patterns (regex-like), formatting, byte operations. |
-
-### Part III — Advanced Features
+### Part II — Tables & Data Structures
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 07 | [Metatables & Metamethods](/lua/07-metatables-and-metamethods) | Operator overloading, custom behavior, OOP patterns via `__index`. |
-| 08 | [Modules & Packages](/lua/08-modules-and-packages) | `require()`, module patterns, circular dependencies, organization. |
+| 05 | [Tables, OOP & Data Structures](/lua/05-tables-and-objects) | Array/hash internals, reference vs value, shallow/deep copy with cycles, OOP via `__index`, mixins, linked list, ring buffer, object pool. |
+| 06 | [Strings, Patterns & Binary](/lua/06-string-manipulation) | Immutable interned strings, Lua pattern engine (not regex), captures, frontier `%f`, UTF-8, `string.byte`/`char` for binary protocols. |
 
-### Part IV — Robustness
+### Part III — Metaprogramming & Concurrency
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 09 | [Error Handling](/lua/09-error-handling) | `pcall()`/`xpcall()`, assertions, debugging, cleanup patterns. |
-| 10 | [I/O & Files](/lua/10-io-and-files) | File operations, binary data, paths, JSON workflows. |
+| 07 | [Metatables & Metamethods](/lua/07-metatables-and-metamethods) | Full metamethod reference, operator overloading, `__index`/`__newindex` proxies, read-only tables, `__gc`/`__close` for resources. |
+| 08 | [Modules & Packages](/lua/08-modules-and-packages) | `require` cache, `package.searchers`/`preload`, circular dependency resolution, hot-reload, dependency injection, `luarocks`. |
+| 11 | [Coroutines & Generators](/lua/11-coroutines) | `create`/`resume`/`yield` protocol, stackful yielding, generators as iterators, producer-consumer pipelines, cooperative scheduler. |
+
+### Part IV — Robustness & I/O
+
+| # | Topic | Why It Matters |
+|---|---|---|
+| 09 | [Error Handling](/lua/09-error-handling) | `error` levels, `pcall`/`xpcall`, structured errors with metatables, retry with backoff, circuit breaker, `<close>` cleanup. |
+| 10 | [I/O, Files & Binary](/lua/10-io-and-files) | File handle lifecycle, streaming with `:lines()`, `seek`/`tell`, binary I/O, `io.popen` subprocess, atomic writes, CSV/INI parsers. |
+
+### Part V — Standard Library & Performance
+
+| # | Topic | Why It Matters |
+|---|---|---|
+| 12 | [Standard Library Deep-Dive](/lua/12-standard-library) | `math` (random/precision/integer), `os` (time/date/env), `table` (sort/move/pack), `debug` (introspection/hooks), `package` (searchers/preload). |
+| 13 | [Performance & LuaJIT](/lua/13-performance) | Global vs local cost, table rehash avoidance, `table.concat` vs `..`, closure allocation, `collectgarbage` profiling, LuaJIT FFI. |
+
+### Part VI — Engineering & Capstone
+
+| # | Topic | Why It Matters |
+|---|---|---|
+| 14 | [Testing & Mocking](/lua/14-testing) | Assertion library, parametric/table-based tests, `package.preload` mocking, dependency injection, coverage with `debug.sethook`, `busted`. |
+| 15 | [Best Practices & Patterns](/lua/15-best-practices) | Strict mode, module design, error architecture, RAII via `<close>`, config layering, logging, anti-patterns catalog. |
+| 16 | [Capstone Projects](/lua/16-exercises-and-projects) | JSON parser, coroutine pipeline, ORM query builder, plugin sandbox system, LRU cache, binary search, type checker, mini-REPL. |
 
 ## Learning Path Suggestions
 
-### If you're new to programming
-
-1. Read 01–04 in order (fundamentals are different from mainstream languages).
-2. Read 05 (Tables) carefully — this is the heart of Lua.
-3. Read 09 (Error Handling) before writing production code.
-4. Experiment in the REPL as you go.
-
 ### If you're coming from Python/Ruby
 
-You already know dynamic languages. Focus on:
-- **02** (no block scope is the biggest surprise)
-- **05** (tables are different from dicts/hashes)
-- **07** (metatables are unique to Lua)
-- Skip straightforward parts like functions.
+Focus on:
+- **02** — `_ENV` and integer/float duality are unique to Lua
+- **05** — tables are not dicts; array/hash duality
+- **07** — metatables are not `__getattr__`; `__index`/`__newindex` as proxies
+- **11** — coroutines are stackful (can yield from nested calls)
 
 ### If you're coming from JavaScript
 
-You know closures and dynamic types. Be aware:
-- **1-indexed arrays** (not 0-indexed)
-- **No `null`** — Lua uses `nil`
-- **No built-in regex** — Lua patterns are simpler
-- **Metatables** for operator overloading (like JS's Proxy but older)
+Focus on:
+- **01** — `load()` with custom env is like `new Function()` + `with`
+- **02** — 1-indexed arrays, only `nil`/`false` are falsy (0 and "" are truthy)
+- **06** — Lua patterns are NOT regex (no `|`, no lookahead, `%` instead of `\`)
+- **07** — metatables are like `Proxy` but older and more limited
+- **11** — coroutines are like generators but stackful (no `yield*` needed)
 
-### If you're embedding Lua in C/Game Engine
+### If you're embedding Lua in C / a game engine
 
-Read all chapters, then learn the **Lua C API** (separate topic). Focus on:
-- 01 (how Lua runs)
-- 02 (types map to C types)
-- 05 (tables are key to passing data)
-- 07 (metatables for custom types)
-- 08 (modules for organization)
+Read all chapters, then focus on:
+- **01** — `load()` with sandbox env is your security boundary
+- **02** — types map to C types (table → `lua_Table`, userdata → C object)
+- **05** — tables are the data interchange format with C
+- **07** — metatables for custom C types and operator overloading
+- **08** — `package.preload` for embedded modules (no filesystem)
+- **15** — strict mode for catching bugs in untrusted scripts
 
 ### If you're a senior engineer
 
-Skim 01–04. Read 05 (Tables — the data model), 07 (Metatables — the extension mechanism), 08 (Modules), and 09 (Error Handling) closely. Use 10 (I/O) as a reference.
+Skim 01–04. Read deeply:
+- **05** (Tables — the data model)
+- **07** (Metatables — the extension mechanism)
+- **11** (Coroutines — the concurrency primitive)
+- **13** (Performance — where LuaJIT changes the game)
+- **16** (Capstone — integration of all concepts)
 
 ## Key Differences from Other Languages
 
@@ -98,110 +115,27 @@ Skim 01–04. Read 05 (Tables — the data model), 07 (Metatables — the extens
 |---|---|---|---|
 | Array indexing | 1-based | 0-based | 0-based |
 | Falsy values | `nil`, `false` only | `0`, `""`, `null`, `false` | `0`, `""`, `None`, `False` |
-| Block scope | ❌ No (function-scoped) | ✅ Yes (lexically scoped) | ✅ Yes (with quirks) |
-| String escape | `%d`, `%s` (patterns) | `\d`, `\s` (regex) | `\d`, `\s` (regex) |
-| Null/Nothing | `nil` | `null`, `undefined` | `None` |
-| Table access | `t[1]`, `t.key` | `arr[0]`, `obj.key` | `list[0]`, `dict[key]` |
+| Composite type | Table (only) | Object/Array/Map | dict/list/tuple/set |
+| Regex | Lua patterns (simpler) | Full regex | `re` module |
+| Inheritance | `__index` chain | Prototype chain | Class-based |
+| Concurrency | Coroutines (cooperative) | `async`/`await` (event loop) | `asyncio` (event loop) |
+| Ternary | `a and b or c` (trap!) | `a ? b : c` | `b if a else c` |
+| Block scope | `local` in blocks | `let`/`const` in blocks | Yes (functions/classes) |
+| Tail calls | Guaranteed (PTC) | No (most engines) | No (recursion limit) |
+| String interning | Yes (all strings) | Some (interned literals) | Some (interned literals) |
+| Module system | `require` + `package.loaded` | `import`/`require` | `import`/`__import__` |
 
-## Companion Resources
+## Tooling
 
-- [Lua.org Official Docs](https://www.lua.org/manual/5.4/) — the definitive reference.
-- [Lua Patterns](https://www.lua.org/pil/20.2.html) — regular expression-like patterns in Lua.
-- [Programming in Lua](https://www.lua.org/pil/) — the book (chapters online free).
-- [LuaRocks](https://luarocks.org) — package manager for Lua libraries.
-- [Awesome Lua](https://github.com/LewisJEllis/awesome-lua) — curated Lua resources.
-- [Lua Game Dev](https://love2d.org) — LÖVE 2D game framework (Lua-based).
-
-## Tooling to Install
-
-::code-wrapper{language="bash"}
-```bash
-# Lua (choose one)
-# macOS
-brew install lua
-
-# Ubuntu/Debian
-sudo apt-get install lua5.4
-
-# Or build from source
-curl https://www.lua.org/ftp/lua-5.4.6.tar.gz | tar xz
-cd lua-5.4.6
-make macosx  # or 'make linux', 'make mingw'
-sudo make install
-
-# Lua linter (optional, but recommended)
-luarocks install luacheck
-
-# Run linter
-luacheck script.lua
-
-# Interactive REPL
-lua
-```
-::
-
-## Testing in Lua
-
-Lua doesn't have a built-in testing framework like Jest or pytest, but you can:
-
-::code-wrapper{language="lua"}
-```lua
--- Simple test framework
-local function assert_equal(actual, expected, message)
-  if actual ~= expected then
-    error(string.format("Expected %s but got %s: %s", expected, actual, message))
-  end
-end
-
--- Usage
-local function test_add()
-  assert_equal(2 + 2, 4, "basic addition")
-  assert_equal(10 + 20, 30, "larger numbers")
-end
-
-test_add()
-print("All tests passed!")
-```
-::
-
-Or use **Busted** (BDD testing framework for Lua):
-
-::code-wrapper{language="bash"}
-```bash
-luarocks install busted
-
-# Write tests
-cat > spec/math_spec.lua << 'EOF'
-describe("Math", function()
-  it("adds numbers", function()
-    assert.are.equal(2 + 2, 4)
-  end)
-end)
-EOF
-
-# Run tests
-busted
-```
-::
-
-## Common Use Cases
-
-1. **Game modding** (Roblox, Garry's Mod) → Learn tables, functions, events.
-2. **Game engine scripting** (LÖVE, Defold) → Learn all (Lua is the primary language).
-3. **Neovim configuration** → Learn modules, tables, Neovim API.
-4. **Embedded systems** → Learn core language, C API if embedding.
-5. **Standalone scripts** → Learn I/O, modules, error handling.
-
-## Next Steps After This Course
-
-- **LÖVE 2D**: Build a game with Lua. Very welcoming for beginners.
-- **Neovim scripting**: Configure your editor in Lua (modern alternative to Vimscript).
-- **Roblox Studio**: Build games on the Roblox platform.
-- **Embedding Lua in C**: Use Lua as a scripting layer in C programs (advanced).
-- **LuaRocks packages**: Explore real-world Lua libraries.
-
-## License
-
-These notes are yours to use, share, and modify.
-
-📖
+| Tool | Purpose | Install |
+|---|---|---|
+| `lua` | Reference interpreter (PUC-Rio) | `brew install lua` |
+| `luajit` | JIT compiler (10-100x faster) | `brew install luajit` |
+| `luarocks` | Package manager | `brew install luarocks` |
+| `luacheck` | Static analyzer (globals, shadowing) | `luarocks install luacheck` |
+| `busted` | BDD test framework | `luarocks install busted` |
+| `luaunit` | Lightweight test framework | `luarocks install luaunit` |
+| `lfs` | LuaFileSystem (directory access) | `luarocks install luafilesystem` |
+| `lpeg` | Parsing Expression Grammars | `luarocks install lpeg` |
+| `cjson` | Fast JSON (C-backed) | `luarocks install lua-cjson` |
+| `luasocket` | Networking (TCP/UDP/HTTP) | `luarocks install luasocket` |

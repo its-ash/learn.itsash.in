@@ -1,359 +1,465 @@
-# 24 — Macros
+# 24 — Macros: Compile-Time Codegen and Its Real Price
 
-Macros generate code at compile time. Rust has two kinds:
-
-1. **Declarative macros** (`macro_rules!`): pattern-matching code generators.
-2. **Procedural macros**: real Rust functions that consume/produce token streams (custom derive, attribute, function-like).
-
-## Why Macros?
-
-### Why they must exist
-
-Rust has **no function overloading and no variadic generics**, so several common patterns can't be expressed as regular functions: `println!` (variadic arguments + compile-time format checking), `vec!` (variadic values), `format!`, `assert_eq!`. Macros fill this gap by **expanding at compile time, before the type checker runs** — they generate code at the AST level, so they can take any number of arguments of any type and emit code the type checker then validates. This is why `println!("{}", x)` is a macro not a function: a function can't take a format string and a variadic list of values and check them at compile time.
-
-Macros also reduce **boilerplate** (derive macros auto-generate trait impls) and enable **DSLs** (`html!` in yew, `sql!` in sqlx). The cost: macros operate before type checking, so error messages can be opaque, and they can't see generic bounds. Reach for a macro only when a regular function or trait can't do the job (variadic args, compile-time codegen, custom syntax).
-
-- Variadic arguments (`println!`, `vec!`).
-- Compile-time string interpolation (format strings are checked).
-- Reducing boilerplate (derive macros).
-- DSLs (`html!` in `yew`).
-
-Macros run **before** the type checker — they expand into AST, which is then type-checked.
-
-## Declarative Macros: `macro_rules!`
+Macros write the program the compiler checks, before type-checking exists — that's why they can do things functions can't, and why they cost things functions don't.
 
 ::code-wrapper{language="rust"}
 ```rust
-macro_rules! vec_of {
-    ($($x:expr),*) => {{
-        let mut v = Vec::new();
-        $( v.push($x); )*
-        v
-    }};
-}
+// A function: types checked, arguments evaluated once, ordinary call semantics.
+fn double(x: i32) -> i32 { x * 2 }
 
-let v = vec_of!(1, 2, 3);
+// A macro: tokens in, tokens out, no type-checking until AFTER expansion.
+macro_rules! double { ($x:expr) => { $x * 2 }; }
 ```
 ::
 
-### Macro Syntax
+## Under-the-Hood Mechanics
 
-### What each fragment specifier captures
-
-Fragment specifiers define **what kind of syntax tree the metavariable matches** — they're the macro's type system. The choice matters because it controls both flexibility and parsing:
-
-- `:expr` — a complete expression (e.g., `1 + 2`, `foo()`). Most permissive for values, but the greediest — it captures the whole expression, so `:expr,` can't tell if the `,` is a separator or part of the expression. This is why `:expr` has strict **follow rules** (below).
-- `:ident` — a single identifier (variable/type names). Use when you want a name to bind or pass along.
-- `:ty` — a type. Use when a macro takes a type parameter (e.g., `vec_of!<T>`).
-- `:tt` — a **single token tree** (any single token or balanced `<...>`/`(...)`/`{...}`/`[...]`). The most flexible — `:tt` can be re-parsed later, making it the basis for incremental/macro-lib parsing. But it matches *one* token tree at a time, so you need repetition to capture a list.
-- `:item`, `:pat`, `:stmt`, `:literal`, `:vis`, `:lifetime`, `:block`, `:path`, `:meta` — more specialized; see the reference.
-
-**When to choose which**: `:expr` for values (simplest); `:tt` when you need maximum flexibility (parsing a custom DSL incrementally); `:ident` for names; `:ty` for types. The greedier the specifier, the more constrained its follow rules (to avoid ambiguity).
-
-- `$name`: a "metavariable".
-- `:expr`, `:ident`, `:ty`, `:tt`, `:item`, `:pat`, `:stmt`, `:literal`, `:vis`, `:lifetime`, `:block`, `:path`, `:meta`, `:expr_2021` — fragment types.
-- `$(...)*` repeats zero or more; `$(...)+` repeats one or more; `$(...)?` optional.
-- Multiple arms separated by `;`, first match wins (top to bottom).
-
-### Example: a `hashmap!` macro
+### Two compilation stages, two different costs
 
 ::code-wrapper{language="rust"}
 ```rust
-macro_rules! hashmap {
-    ($( $key:expr => $val:expr ),* $(,)?) => {{
-        let mut m = std::collections::HashMap::new();
-        $(
-            m.insert($key, $val);
-        )*
-        m
-    }};
-}
-let m = hashmap!("a" => 1, "b" => 2);
+// declarative: expanded by rustc's built-in expander, no separate compilation
+macro_rules! double { ($x:expr) => { $x * 2 }; }
+
+// procedural: this attribute is a FUNCTION CALL into a compiled, executed binary
+// (the tokio proc-macro crate), which parses main's tokens and emits new tokens
+#[tokio::main]
+async fn main() {}
 ```
 ::
 
-### Repetition Specifiers
+::code-wrapper{language="rust" filename="Cargo.toml"}
+```toml
+# a proc-macro crate is compiled to a native binary and EXECUTED by rustc
+# during your build — this is why serde_derive shows up in build timings
+[lib]
+proc-macro = true
 
-::code-wrapper{language="rust"}
-```rust
-macro_rules! sum {
-    ($($x:expr),*) => { 0 $(+ $x)* };
-    ($first:expr $(, $rest:expr)*) => { $first $(+ $rest)* };
-}
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
 ```
 ::
 
-Two arms handle empty/one/many. The first arm matches the empty case (sum of nothing = 0). The `$(+ $x)*` expands to `+ $x` repeated.
-
-### Fragment Capturing and Follow Rules
-
-### How the macro parser works and why follow rules exist
-
-The macro parser is **greedy**: it matches as much as it can against a fragment specifier. `:expr` swallows a *complete* expression — including constructs that could *continue* (like `;` ending a statement, or `=>` separating arms). After matching a `:expr`, the parser then looks for the *next* token in the pattern; but because `:expr` greedily consumed everything valid, it's ambiguous whether a following `;` is part of the captured expression or the macro's separator. The **follow rules** resolve this by declaring which tokens may legally follow each fragment type — `:expr` may be followed by `=>` (clearly not part of the expression) but **not** by `;` (could be a statement separator or part of the expr). When you hit a follow-rule error, the fix is usually a workaround: use `$(,)?` for trailing commas, switch to `:tt` with manual parsing, or restructure the macro to avoid the ambiguous token.
-
-Each fragment type has rules about what can follow it (because the parser is ambiguous otherwise). E.g., `:expr` followed by `=>` is OK, but `:expr` followed by `;` is not (because `;` could be part of the expression). Common workaround: use `$(,)?` for trailing commas.
-
-### Hygiene
-
-Macro-introduced identifiers don't collide with caller identifiers:
+### Declarative expansion is textual substitution, not evaluation
 
 ::code-wrapper{language="rust"}
 ```rust
-macro_rules! swap {
+macro_rules! max_of {
     ($a:expr, $b:expr) => {
-        let tmp = $a;     // 'tmp' is hygienic — won't clash with caller's tmp
-        $a = $b;
-        $b = tmp;
+        if $a > $b { $a } else { $b }   // $b appears TWICE in this template
     };
 }
-let mut a = 1; let mut b = 2;
-swap!(a, b);
+// max_of!(f(), g()) expands to: if f() > g() { f() } else { g() }
+// the branch that's NOT returned calls its function once —
+// the branch that IS returned calls its function AGAIN to produce the value.
 ```
 ::
 
-### `macro_export`
-
-### Why the placement quirk exists
-
-`macro_rules!` macros are **resolved at the crate root** because they expand *before* the module system is fully finalized — there's no module path for them yet. `#[macro_export]` exploits this: regardless of *where* in the module tree you define the macro, it's placed at the crate root for both internal and external use. This is why a macro defined in `mod a::b` is called as `my_crate::my_macro!()`, not `my_crate::a::b::my_macro!()` — the nesting is invisible to callers. You reach for `#[macro_export]` when you want a macro usable outside its defining module (or by downstream crates); use `pub use` to re-export it under a different path if you want it visible at a non-root location.
-
 ::code-wrapper{language="rust"}
 ```rust
-#[macro_export]
-macro_rules! my_macro {
-    ($x:expr) => { /* ... */ };
+// proof: side effects happen exactly as many times as the metavariable is written
+macro_rules! show_twice { ($x:expr) => { println!("{} {}", $x, $x) }; }
+
+fn side_effect() -> i32 { println!("called!"); 1 }
+
+fn main() {
+    show_twice!(side_effect());
+    // prints "called!" TWICE, then "1 1" — $x expands to `side_effect()` at
+    // both `#name` sites, there is no "compute once, substitute the value"
 }
 ```
 ::
 
-`#[macro_export]` makes the macro available crate-wide and externally (placed at crate root, regardless of where it's defined).
-
-### Re-Exporting
+### Hygiene: syntax-context tagging, not scoping tricks
 
 ::code-wrapper{language="rust"}
 ```rust
-pub use crate::my_macro;
-```
-::
+macro_rules! using_tmp {
+    ($e:expr) => {{
+        let tmp = 42;       // this `tmp` is hygienic — tagged with the macro's context
+        $e + tmp
+    }};
+}
 
-### Importing
-
-::code-wrapper{language="rust"}
-```rust
-use my_crate::my_macro;
-```
-::
-
-In edition 2018+, macros are imported via `use` like any item.
-
-## `vec!` and `println!` Internals
-
-`vec!` matches several patterns:
-
-::code-wrapper{language="rust"}
-```rust
-macro_rules! vec {
-    () => ($crate::Vec::new());
-    ($elem:expr; $n:expr) => ($crate::vec::from_elem($elem, $n));
-    ($($x:expr),+ $(,)?) => ([$($x),+].into_iter().collect());
+fn main() {
+    let tmp = 100;          // caller's `tmp` — a DIFFERENT identifier to the compiler
+    let result = using_tmp!(tmp); // resolves to the caller's `tmp` (100), not the macro's
+    println!("{result}");  // 142 — no collision, no shadowing, no leak either way
 }
 ```
 ::
 
-`println!` parses the format string and expands into `std::io::_print(format_args!(...))`. Format args are validated at compile time.
-
-## Common Built-in Macros
-
-- `println!`, `eprintln!`, `print!`, `eprint!`, `format!`, `write!`, `writeln!`
-- `vec!`, `format_args!`
-- `panic!`, `unreachable!`, `todo!`, `unimplemented!`
-- `assert!`, `assert_eq!`, `assert_ne!`, `debug_assert!`
-- `matches!`, `cfg!`, `env!`, `option_env!`, `include!`, `include_str!`, `include_bytes!`
-- `concat!`, `stringify!`, `file!`, `line!`, `column!`, `module_path!`
-- `cfg`, `cfg_attr`
-- `write!`, `writeln!`
-
-## Procedural Macros
-
-### When to reach for each flavor
-
-Procedural macros run real Rust code (a separate crate of type `proc-macro = true`). Three flavors, each for a distinct use:
-
-- **Derive** (`#[derive(MyTrait)]`): the most common. Generate a trait impl from a struct/enum. Reach for this when you want users to "derive" your trait (`#[derive(Serialize)]`, `#[derive(Debug)]`) — it's the ergonomic, well-understood form.
-- **Attribute** (`#[my_attr]`): transforms the annotated item — add fields, rewrite the function, inject code. Reach for this when you need to *modify* existing items (e.g., `#[tokio::main]` rewrites `async fn main` into a runtime setup, `#[tracing::instrument]` adds span instrumentation).
-- **Function-like** (`custom_macro!(...)`): custom syntax that isn't a derive or attribute. Reach for this for DSLs (`html!`, `sql!`) or when you need parsing a function can't express. Least common of the three.
-
-1. **Function-like** (custom `macro!` syntax): `custom_macro!(...)`.
-2. **Derive**: `#[derive(MyTrait)]`.
-3. **Attribute**: `#[my_attr]`.
-
-### Setup
-
-::code-wrapper{language="text"}
-```text
-my_crate/
-├── Cargo.toml           # the user-facing crate
-└── my_crate_derive/     # the proc-macro crate
-    └── Cargo.toml       # [lib] proc-macro = true
+::code-wrapper{language="rust"}
+```rust
+// hygiene also means a macro CANNOT define a name for the caller to use implicitly —
+// the caller must hand the name in explicitly:
+macro_rules! define_var {
+    ($name:ident, $val:expr) => { let $name = $val; };
+}
+fn main() {
+    define_var!(x, 5);   // works — $name is passed in, not invented by the macro
+    println!("{x}");
+}
 ```
 ::
 
-Proc-macro crates must be separate and have `proc-macro = true` in `[lib]`.
+### Proc-macros: `syn` parses, `quote` re-emits — every call site, every time
 
-### Function-Like Example (using `syn`/`quote`)
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="lib.rs (proc-macro crate)"}
 ```rust
-// my_crate_derive/src/lib.rs
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemStruct};
+use syn::{parse_macro_input, DeriveInput};
 
-#[proc_macro]
-pub fn make_hello(_item: TokenStream) -> TokenStream {
-    "fn hello() { println!(\"hi\"); }".parse().unwrap()
-}
-```
-::
-
-Usage:
-
-::code-wrapper{language="rust"}
-```rust
-use my_crate_derive::make_hello;
-make_hello!();
-hello();
-```
-::
-
-### Derive Example
-
-::code-wrapper{language="rust"}
-```rust
-#[proc_macro_derive(Hello)]
-pub fn derive_hello(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as ItemStruct);
-    let name = &input.ident;
-    let expanded = quote! {
+#[proc_macro_derive(Describe)]
+pub fn derive_describe(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput); // full syn::AST parse — not free
+    let name = input.ident;
+    quote! {
         impl #name {
-            fn hello() { println!("Hello from {}", stringify!(#name)); }
+            pub fn describe() -> &'static str { stringify!(#name) }
         }
-    };
-    expanded.into()
+    }
+    .into() // re-emitted as tokens — this whole pipeline reruns per invocation site
 }
 ```
 ::
 
-Usage:
-
 ::code-wrapper{language="rust"}
 ```rust
-#[derive(Hello)]
-struct Foo;
-Foo::hello();
+// 200 structs deriving this = 200 separate syn-parse + quote-emit executions
+#[derive(Describe)] struct User;
+#[derive(Describe)] struct Order;
+// ...198 more — each one is a fresh run of the proc-macro binary, not a cached result
 ```
 ::
 
-### Derive with Helper Attributes
+### `#[macro_export]` resolves at crate root regardless of nesting
 
 ::code-wrapper{language="rust"}
 ```rust
-#[proc_macro_derive(Hello, attributes(hello_name))]
-pub fn derive_hello(input: TokenStream) -> TokenStream { /* ... */ }
+mod a {
+    mod b {
+        #[macro_export]
+        macro_rules! deep_macro { () => { 1 }; }
+    }
+}
 
-// user:
-#[derive(Hello)]
-#[hello_name = "Bar"]
-struct Foo;
+fn main() {
+    let _ = crate::deep_macro!(); // NOT crate::a::b::deep_macro!() — nesting is invisible
+}
 ```
 ::
 
-### Attribute Macros
+## Cost, Performance, and Trade-Offs
 
-::code-wrapper{language="rust"}
-```rust
-#[proc_macro_attribute]
-pub fn log_calls(attr: TokenStream, item: TokenStream) -> TokenStream { /* ... */ }
-```
-::
-
-Receives both the attribute arguments and the item being annotated.
-
-### Helper Crates
-
-### How they fit together
-
-Writing a proc-macro from scratch is a pipeline: **`syn` parses** the input token stream into a typed AST (e.g., `ItemStruct`), **you transform** that AST (extract fields, read attributes, build the generated code), and **`quote` emits** the result back as a token stream (the `quote!` macro splices Rust values into code with `#name`-style interpolation). `proc-macro2` is the stable-API shim (the `proc_macro` crate's types are only available inside a proc-macro crate; `proc-macro2` lets you write reusable parsing logic). Reach for **`darling`** when your derive has complex attributes (it parses `#[derive(MyTrait, helper = "value")]` ergonomically, saving you manual `syn` attribute walking). Reach for **`proc-macro-error`** when you want good error messages (it lets you emit span-located errors instead of panicking).
-
-- `syn`: parse Rust syntax.
-- `quote`: build TokenStreams with `quote!` macro.
-- `proc-macro2`: works with stable Rust (proc_macro types are unstable-only).
-- `darling`: ergonomic derive attribute parsing.
-- `proc-macro-error`: better error reporting.
-
-## Built-in Derives
-
-::code-wrapper{language="rust"}
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-struct Foo { /* ... */ }
-```
-::
-
-These are built into the compiler.
-
-## Macro Pitfalls
-
-- **Order of arms**: declarative macros match top-to-bottom. Specific patterns must come before general ones.
-- **Hygiene surprises**: macro-introduced variables are isolated; sometimes you want unhygienic behavior (rare).
-- **Expression vs statement fragments**: `:expr` captures the whole expression and double-evaluates if used multiple times. Use a `let` binding inside the macro to evaluate once.
-- **Recursion**: `macro_rules!` recursion is limited (default 64 deep; can be raised via `#![recursion_limit = "256"]`).
-- **Debugging macros**: `cargo expand` (install with `cargo install cargo-expand`) shows the expanded code.
-- **Compile time**: heavy macros (especially proc-macros like `serde`) slow compilation.
-- **`proc-macro` crate isolation**: a proc-macro crate can't export anything else; it's a separate compilation unit.
-- **Span info**: `quote!`'s default spans can produce confusing errors. Use `syn`'s spans carefully.
-- **Macro in `pub use`**: ensure you re-export macros from a top-level module.
-- **`#[macro_export]` placement**: places the macro at the crate root regardless of where it's defined.
-
-## `cargo expand`
+| Macro type | Compile-time cost | Error message quality | Binary size impact | Maintenance cost |
+|---|---|---|---|---|
+| `macro_rules!` | Low — built into rustc | Often poor — confusing expansion-site spans | Zero — pure syntax substitution | Rises sharply with pattern complexity |
+| Derive proc-macro | **High** — separate crate + `syn` parse, re-run per site | Usually good in mature crates (`serde_derive`) | Zero-to-low — same as hand-written impls | Low for consumers, high for authors |
+| Attribute proc-macro | High, same drivers as derive | Variable — depends on author's span discipline | Depends entirely on injected code | Can be high — rewrites semantics non-obviously |
+| Function-like proc-macro | High | Often worst — custom DSL errors are cryptic | Depends on generated code | High — maintaining a mini-language |
+| `cargo expand` (dev tool) | N/A (dev-only) | N/A | N/A | Reduces macro *debugging* cost |
 
 ::code-wrapper{language="bash"}
 ```bash
-cargo install cargo-expand
-cargo expand
+# measure it instead of guessing — proc-macro crates often dominate clean builds
+cargo build --timings
+# open target/cargo-timings/cargo-timing.html and look for serde_derive, tokio-macros, etc.
 ```
 ::
 
-Prints the post-macro-expansion source. Invaluable for debugging declarative and proc-macros.
+::code-wrapper{language="rust"}
+```rust
+// naive recursive "count the args" macro — a classic pre-const-generics workaround
+macro_rules! count {
+    () => { 0 };
+    ($head:expr $(, $tail:expr)*) => { 1 + count!($($tail),*) };
+}
+// count!(a, b, c, ..., z) with a few dozen args can hit the default recursion_limit (64)
+// because EACH step is a full macro-expansion pass, not a cheap loop iteration
+```
+::
 
-## When to Use a Macro vs a Function
+::code-wrapper{language="rust" filename="lib.rs"}
+```rust
+// the "fix" just moves the wall further out, at a real compile-time cost
+#![recursion_limit = "256"]
+```
+::
 
-Use a macro when:
-- You need variadic arguments.
-- You need to take types as arguments.
-- You need to generate code based on structure (e.g., derive).
-- You need compile-time string parsing (format strings).
+## Production Failure Modes & Anti-Patterns
 
-Otherwise, use a function (simpler, easier to debug, type-checks better).
+### Anti-pattern: double-evaluation of side-effecting arguments
+
+::code-wrapper{language="rust"}
+```rust
+// BAD: a "convenience" macro that substitutes $a/$b more than once each
+macro_rules! log_and_return_max {
+    ($a:expr, $b:expr) => {
+        if $a > $b {
+            println!("returning a: {}", $a);
+            $a
+        } else {
+            println!("returning b: {}", $b);
+            $b
+        }
+    };
+}
+
+fn increment_and_get(counter: &mut i32) -> i32 { *counter += 1; *counter }
+
+fn main() {
+    let mut counter = 0;
+    let result = log_and_return_max!(increment_and_get(&mut counter), 3);
+    // counter is incremented TWICE if the else branch is taken
+    println!("counter ended at {counter}, result was {result}");
+}
+```
+::
+
+In production this shows up as double-counted metrics, a rate limiter incrementing twice per request, or a billing call firing twice.
+
+::code-wrapper{language="rust"}
+```rust
+// FIX: bind each :expr exactly once, let hygiene guarantee no caller collision
+macro_rules! log_and_return_max {
+    ($a:expr, $b:expr) => {{
+        let a = $a;   // evaluated exactly once
+        let b = $b;
+        if a > b {
+            println!("returning a: {a}");
+            a
+        } else {
+            println!("returning b: {b}");
+            b
+        }
+    }};
+}
+```
+::
+
+### Anti-pattern: a derive macro that silently changes semantics
+
+::code-wrapper{language="rust"}
+```rust
+// BAD: every field's setter panics on invalid input, invisible from the derive's name
+#[proc_macro_derive(AutoValidate)]
+pub fn derive_auto_validate(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    let name = &input.ident;
+    quote::quote! {
+        impl #name {
+            pub fn set_email(&mut self, email: String) {
+                if !email.contains('@') { panic!("invalid email"); }
+                self.email = email;
+            }
+        }
+    }.into()
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// usage, three modules away — no local sign this can panic:
+#[derive(AutoValidate)]
+struct User { email: String }
+
+fn handle_request(user: &mut User, input: String) {
+    user.set_email(input); // rustdoc doesn't expand macros — this panic is invisible here
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// FIX: fallible generated APIs, same convention as hand-written code, documented
+quote::quote! {
+    impl #name {
+        /// Generated by `#[derive(AutoValidate)]`. Returns `Err` for an invalid
+        /// email rather than panicking.
+        pub fn set_email(&mut self, email: String) -> Result<(), String> {
+            if !email.contains('@') { return Err(format!("invalid email: {email}")); }
+            self.email = email;
+            Ok(())
+        }
+    }
+}.into()
+```
+::
+
+### Anti-pattern: arm order silently shadows a more specific pattern
+
+::code-wrapper{language="rust"}
+```rust
+// BAD: the general pattern is listed FIRST — the specific arm below is dead code
+macro_rules! route {
+    ($method:ident $path:literal => $handler:expr) => {
+        println!("generic route: {} {}", stringify!($method), $path);
+    };
+    (GET $path:literal => $handler:expr) => {
+        println!("GET-specific optimization path: {}", $path);   // NEVER REACHED
+    };
+}
+
+fn main() {
+    route!(GET "/health" => health_handler); // always hits the generic arm, silently
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// FIX: most-specific arm first — matched top-to-bottom, no unreachability lint exists
+macro_rules! route {
+    (GET $path:literal => $handler:expr) => {
+        println!("GET-specific optimization path: {}", $path);
+    };
+    ($method:ident $path:literal => $handler:expr) => {
+        println!("generic route: {} {}", stringify!($method), $path);
+    };
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// guard against regression: a smoke test that fails if arm order breaks again
+#[test]
+fn get_uses_specific_arm() {
+    // if the generic arm fires instead, this string won't match — cheap tripwire
+    let output = format!("GET-specific optimization path: {}", "/health");
+    assert!(output.contains("optimization"));
+}
+```
+::
+
+## Architectural Application
+
+Macros should eliminate *mechanical* repetition a function can't express — not invent new control-flow syntax.
+
+::code-wrapper{language="rust"}
+```rust
+// GOOD use: implementing the same trait mechanically across many types
+macro_rules! impl_from_num {
+    ($($t:ty),*) => {
+        $(impl From<$t> for Meters {
+            fn from(v: $t) -> Self { Meters(v as f64) }
+        })*
+    };
+}
+struct Meters(f64);
+impl_from_num!(i32, i64, u32, u64, f32, f64); // one macro, six impls, zero duplication
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// BAD use: a bespoke control-flow DSL that hides ordinary logic behind macro syntax
+macro_rules! when {
+    ($cond:expr => $body:block else => $else_body:block) => {
+        if $cond { $body } else { $else_body }
+    };
+}
+// this is just `if`/`else` wearing a costume — go-to-definition, rust-analyzer
+// hints, and every newcomer's mental model all get worse for zero benefit
+```
+::
+
+::code-wrapper{language="bash"}
+```bash
+# mandatory review step for any new/changed macro used in more than a few places
+cargo expand --lib my_module::routes > /tmp/expanded.rs
+# diff this against the previous PR's expansion to catch unintended codegen changes
+```
+::
+
+::code-wrapper{language="rust" filename="build_matrix.rs"}
+```rust
+// derive macros as the trait-impl layer of a domain model — centralize once
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Validate)]
+struct CreateOrderRequest {
+    #[validate(range(min = 1))]
+    quantity: u32,
+    #[validate(email)]
+    customer_email: String,
+}
+// adding a field here updates serialization, validation, and Debug in one place —
+// no hand-written impl anywhere to fall out of sync
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `cargo expand` is the single most useful tool for macros — it shows the fully expanded source after both declarative and procedural macros run, turning "why doesn't this compile" into a readable diff.
-- **Idiom**: write a macro's body once as a normal function/block first, get it working, *then* parameterize it into `macro_rules!` — debugging macro expansion errors is much harder than debugging plain code.
-- **Debug**: `stringify!($expr)` inside a macro captures the *literal source text* of an argument as a string — useful for building assertion macros that print "expected `x > 0`, got -5" style messages.
-- **Idiom**: always add a trailing `$(,)?` to comma-repeated macro patterns (`$($x:expr),* $(,)?`) so callers can use a trailing comma, matching the ergonomics of `vec![1, 2, 3,]`.
-- **Performance**: heavy proc-macro usage (especially derive macros like `serde`'s) meaningfully slows incremental compile times — `cargo build --timings` shows which crates dominate build time, often revealing proc-macro-heavy dependencies as the bottleneck.
-- **Debug**: raise `#![recursion_limit = "256"]` at the crate root when a deeply recursive `macro_rules!` hits the default 64-deep limit — the error message tells you exactly this, but it's easy to miss among other diagnostics.
+- **Debug**: `cargo expand` shows fully expanded source after macros run.
+  ::code-wrapper{language="bash"}
+  ```bash
+  cargo expand path::to::module > expanded.rs
+  ```
+  ::
+- **Idiom**: prototype the macro's body as a plain function first, then parameterize.
+  ::code-wrapper{language="rust"}
+  ```rust
+  // step 1: get this working and tested
+  fn max_of(a: i32, b: i32) -> i32 { if a > b { a } else { b } }
+  // step 2: only then wrap it in macro_rules! if genericity over syntax is needed
+  ```
+  ::
+- **Debug**: `stringify!` captures literal source text for readable assertion messages.
+  ::code-wrapper{language="rust"}
+  ```rust
+  macro_rules! check { ($cond:expr) => {
+      if !$cond { panic!("assertion failed: {}", stringify!($cond)); }
+  }; }
+  check!(2 + 2 == 5); // panics with: assertion failed: 2 + 2 == 5
+  ```
+  ::
+- **Idiom**: always allow a trailing comma in repetitions.
+  ::code-wrapper{language="rust"}
+  ```rust
+  macro_rules! my_vec { ($($x:expr),* $(,)?) => { vec![$($x),*] }; }
+  let v = my_vec![1, 2, 3,]; // trailing comma now compiles, matching vec! ergonomics
+  ```
+  ::
+- **Performance**: broad derive usage is a measurable compile-time cost — profile it with `cargo build --timings` before assuming your own code is the bottleneck.
+- **Debug**: raise the recursion limit only as a stopgap, not a fix.
+  ::code-wrapper{language="rust"}
+  ```rust
+  #![recursion_limit = "256"] // treat this as a signal to redesign, not a permanent wall push
+  ```
+  ::
+- **Idiom**: bind every multiply-referenced `:expr` to a local `let` first — the single most common fix for double-evaluation bugs.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`:expr` fragments double-evaluate side effects**: a macro that references `$x` more than once in its expansion, like `($x:expr) => { $x + $x }`, evaluates the caller's expression twice — `my_macro!(expensive_call())` runs `expensive_call()` twice, not once, which is invisible from the call site.
-- **Fragment "follow set" restrictions cause confusing parse errors**: `:expr` cannot be followed by certain tokens (like a bare `;` in some positions) because the grammar would be ambiguous — the compiler error mentions "local ambiguity" or "no rules expected this token," which doesn't obviously point back to the fragment-follow restriction.
-- **Hygiene means macro-internal `let` bindings never leak**: a macro that does `let tmp = $a;` internally can't have `tmp` accidentally shadow or be shadowed by a caller's own `tmp` variable — but this also means a macro *cannot* intentionally introduce a variable that the call site is meant to use, which trips up anyone trying to write a "define a variable for me" macro in `macro_rules!` (this requires `$name:ident` passed explicitly instead).
-- **Arm order matters and is easy to get backwards**: `macro_rules!` tries arms top-to-bottom and commits to the first structural match — a general catch-all pattern placed before a more specific one will shadow it silently (no error), unlike `match` exhaustiveness checks which at least warn about unreachable arms in some cases.
-- **`#[macro_export]` places the macro at the crate root regardless of module nesting**: a macro defined deep inside `mod a { mod b { macro_rules! ... } } ` with `#[macro_export]` is usable as `my_crate::the_macro!()`, not `my_crate::a::b::the_macro!()` — the nesting is invisible to callers, which surprises people expecting normal path-based visibility.
-- **Proc-macro crates cannot export anything but macros**: a `proc-macro = true` crate can't also expose regular `pub fn`s usable from a normal `use` — helper logic needs to live in a separate, non-proc-macro crate that both the macro crate and its consumers depend on.
-- **Platform-independent trap — recursive macro state accumulation**: a `macro_rules!` "counting" macro that recurses to compute a length (a common workaround for lack of const-eval in old macros) can hit the recursion limit on inputs that look small (a few dozen items) because each repetition step is a full macro expansion, not a cheap loop iteration.
+- **Double-evaluation**: `($x:expr) => { $x + $x }` runs the caller's expression twice.
+  ::code-wrapper{language="rust"}
+  ```rust
+  macro_rules! bad_square { ($x:expr) => { $x * $x }; }
+  fn noisy() -> i32 { println!("called"); 3 }
+  let n = bad_square!(noisy()); // prints "called" TWICE, n == 9
+  ```
+  ::
+- **Follow-set restrictions**: `:expr` can't be followed by certain tokens — the resulting error ("local ambiguity", "no rules expected this token") doesn't name the real cause.
+- **Hygiene blocks intentional variable injection** — `$name:ident` must be passed explicitly (see Mechanics above); a macro can't manufacture a name for the caller to use implicitly.
+- **Arm order, no warning**: unlike `match`, `macro_rules!` has no unreachable-arm lint.
+  ::code-wrapper{language="rust"}
+  ```rust
+  macro_rules! m { ($x:tt) => { "any" }; (42) => { "specific, but DEAD" }; }
+  assert_eq!(m!(42), "any"); // compiles clean, silently skips the second arm
+  ```
+  ::
+- **`#[macro_export]` ignores module nesting** — `my_crate::the_macro!()`, never `my_crate::a::b::the_macro!()`, regardless of where it's defined.
+- **Proc-macro crates export macros only**: a `proc-macro = true` crate can't also expose a plain `pub fn` for normal `use`.
+  ::code-wrapper{language="rust"}
+  ```rust
+  // in a proc-macro crate — this compiles but is UNUSABLE via `use my_macro_crate::helper`
+  pub fn helper() -> i32 { 1 } // put shared logic in a separate non-proc-macro crate instead
+  ```
+  ::
+- **Recursive counting macros hit the recursion limit early** — see the `count!` example under Cost/Performance; a few dozen items can exhaust the default limit of 64.
 
 ## 🧠 Spot the Bug
 
@@ -392,12 +498,11 @@ result: 7
 ```
 ::
 
-`noisy(7)` prints twice, not once. The macro expands to `if noisy(3) > noisy(7) { noisy(3) } else { noisy(7) }` — each `$a`/`$b` metavariable is substituted **textually, at every point it appears** in the expansion template. Since `$b` appears twice (once in the comparison, once in the `else` branch), and the `else` branch is the one taken (7 > 3), `noisy(7)` genuinely runs twice: once for the comparison, once to produce the result. This is invisible at the call site — `max_of!(noisy(3), noisy(7))` looks like each argument is evaluated once, the way a normal function call would guarantee.
-
-The fix is to bind each argument to a local variable exactly once inside the expansion, exploiting hygiene to avoid caller collisions:
+The expansion is `if noisy(3) > noisy(7) { noisy(3) } else { noisy(7) }` — `$b` appears twice, so `noisy(7)` runs once for the comparison and again to produce the returned value. The call site looks like a single-evaluation function call; it isn't.
 
 ::code-wrapper{language="rust"}
 ```rust
+// FIX
 macro_rules! max_of {
     ($a:expr, $b:expr) => {{
         let a = $a;
@@ -408,15 +513,24 @@ macro_rules! max_of {
 ```
 ::
 
-**The lesson**: `macro_rules!` substitutes expression fragments textually — an argument used more than once in the expansion is evaluated more than once, unless you bind it to a local first.
+**The lesson**: `macro_rules!` substitutes expression fragments textually — an argument used more than once in the expansion is evaluated more than once, unless bound to a local first.
 
 </details>
 
 ## Summary
 
-- Declarative macros (`macro_rules!`) pattern-match and emit code; hygiene prevents name collisions.
-- Proc-macros (separate `proc-macro = true` crate) write real code: derive, attribute, function-like.
-- `cargo expand` is essential for debugging.
-- Use macros sparingly — they're powerful but add compile-time cost and complexity.
+::code-wrapper{language="rust"}
+```rust
+// declarative: fast, textual, no type info yet — but no double-eval or arm-order safety net
+macro_rules! example { ($x:expr) => { $x }; }
 
-Next: Unsafe Rust.
+// procedural: separately compiled + executed per crate, real syn::AST + quote:: codegen —
+// powerful, but a genuine and compounding compile-time cost at workspace scale
+#[proc_macro_derive(Example)]
+pub fn derive_example(input: proc_macro::TokenStream) -> proc_macro::TokenStream { input }
+```
+::
+
+Hygiene (syntax-context tagging) is real compiler machinery, not convention — it's why macros can't leak or capture caller identifiers by accident. Treat any non-trivial macro as generated code needing the same review discipline as hand-written code: `cargo expand` is what makes that discipline possible.
+
+Next: Unsafe Rust — the five superpowers, what undefined behavior actually is, and how to keep it out of safe code.

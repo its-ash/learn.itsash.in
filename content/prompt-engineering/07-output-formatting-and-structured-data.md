@@ -1,14 +1,17 @@
+---
+title: "07 — Output Formatting & Structured Data"
+description: "Reliable JSON, XML, and structured output for downstream automation — prompted vs. API-enforced schemas, function calling as structured output, common failure modes, and production parsing patterns. Code-first reference for mid-to-senior engineers."
+---
+
 # 07 — Output Formatting & Structured Data
 
 ## Why Structured Output Matters
 
-The moment an LLM's output needs to be consumed by *code* rather than read by a human, format stops being a cosmetic preference and becomes a correctness requirement. A summary that's "close enough" to the right length is fine; a JSON response that's "almost valid" breaks your parser. This chapter covers how to reliably get JSON, XML, and other structured formats out of a model, the difference between prompting for format and enforcing it programmatically, and how tool use (function calling) is really just a specialized, more robust form of structured output.
+When output is consumed by *code* rather than a human, format stops being cosmetic and becomes a correctness requirement. A summary that's "close enough" is fine; a JSON response that's "almost valid" breaks your parser.
 
-## Requesting JSON Output
+## Prompted JSON with Explicit Schema
 
-The baseline technique is simply asking clearly, with an explicit schema:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="prompted_json.md"}
 ```markdown
 Extract the following fields from the job posting below and return them as
 a JSON object with exactly these keys: "title" (string), "company" (string),
@@ -24,9 +27,7 @@ DOE. Must have 5+ years with distributed systems, Kafka, and PostgreSQL."
 ```
 ::
 
-Expected output:
-
-::code-wrapper{language="json"}
+::code-wrapper{language="json" filename="expected_output.json"}
 ```json
 {
   "title": "Senior Backend Engineer",
@@ -39,25 +40,22 @@ Expected output:
 ```
 ::
 
-Several things in the prompt are doing specific work: naming the exact keys (not "extract the relevant fields," which leaves key-naming to chance), specifying types and null-handling explicitly (what happens when salary isn't stated is a real edge case that needs an explicit answer), and telling the model not to wrap the JSON in explanatory text or code fences (a very common default behavior that breaks naive parsing if not suppressed).
+## Prompted vs. API-Enforced: The Critical Distinction
 
-## Schema-Constrained Generation: Prompting vs. Enforcement
-
-There's a critical distinction between two different levels of guarantee:
-
-| Approach | Mechanism | Guarantee |
-|---|---|---|
-| **Prompted JSON** | You ask nicely, with a schema description in the prompt text. | No hard guarantee — the model can still produce invalid JSON, add prose, use wrong types, or invent extra keys. Reliable most of the time with a well-written prompt, but "most of the time" isn't good enough for unattended production parsing. |
-| **API-level structured output / schema enforcement** | Many current provider APIs (as of this writing, this includes JSON-mode or schema-constrained output features on Claude, GPT, and Gemini APIs — check current docs for exact parameter names) constrain the token sampling process itself so that only tokens forming valid JSON matching your schema can be generated. | Strong guarantee — the output is syntactically valid JSON conforming to your schema by construction, not by the model "choosing" to comply. |
-
-**The practical rule: if your target model/API offers native schema-constrained output, use it for anything you plan to parse programmatically, rather than relying purely on prompted formatting instructions.** Prompted JSON is still useful — for exploratory work, for models/APIs without this feature, or as a first line of defense even when you also have a hard fallback — but it should not be the *only* thing standing between "the model's raw output" and "code that assumes valid JSON."
-
-::code-wrapper{language="python"}
+::code-wrapper{language="python" filename="schema_enforced.py"}
 ```python
 import json
 from anthropic import Anthropic
 
 client = Anthropic()
+
+# PROMPTED JSON: you ask nicely with a schema description in prompt text.
+# No hard guarantee — model can produce invalid JSON, add prose, wrong types.
+# Reliable MOST of the time, but "most of the time" breaks unattended production.
+
+# API-ENFORCED JSON: the API constrains token sampling so only valid JSON
+# matching your schema CAN be generated. Guarantee by construction, not by
+# the model "choosing" to comply.
 
 JOB_SCHEMA = {
     "type": "object",
@@ -70,27 +68,77 @@ JOB_SCHEMA = {
         "required_skills": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["title", "company", "salary_min", "salary_max", "remote", "required_skills"],
-    "additionalProperties": False,
+    "additionalProperties": False,  # ← prevents the model from inventing extra keys
 }
 
 response = client.messages.create(
     model="claude-opus-5",
     max_tokens=1024,
     output_config={"format": {"type": "json_schema", "schema": JOB_SCHEMA}},
-    messages=[{"role": "user", "content": "Extract fields from: Senior Backend Engineer at Fintech Startup Co. Fully remote. $140k-$180k DOE."}],
+    messages=[{"role": "user", "content":
+        "Extract fields from: Senior Backend Engineer at Fintech Startup Co. "
+        "Fully remote. $140k-$180k DOE."
+    }],
 )
 
-data = json.loads(response.content[0].text)
+data = json.loads(response.content[0].text)  # ← GUARANTEED valid; no try/except needed
+# The exact API surface (output_config.format, response_format, etc.) differs by
+# provider and changes over time — always check current docs for your specific model.
 ```
 ::
 
-The exact API surface (`output_config.format`, a `response_format` parameter, or similar) differs by provider and changes over time — always check current documentation for your specific model rather than assuming parameter names transfer across providers. The conceptual point that transfers everywhere: **prefer letting the API constrain generation over prompting-and-hoping whenever the feature is available for your model.**
+::code-wrapper{language="python" filename="prompted_vs_enforced.py"}
+```python
+# ANTI-PATTERN: relying on prompted JSON for production parsing
+def parse_prompted_json_naive(response_text: str) -> dict:
+    """This WILL fail in production — the model adds prose, code fences, etc."""
+    return json.loads(response_text)  # crashes on "Sure! Here's the JSON:\n```json\n{...}\n```"
 
-## Requesting XML Output
+# PRODUCTION: layered defense — try clean parse, fall back to extraction, then validate
+import re
 
-XML tags are a strong structuring convention, especially for Claude (see Chapter 15), because they cleanly delimit sections without requiring escaping the way JSON string values sometimes do, and they read naturally as nested containers for mixed structured-and-prose content:
+def parse_model_json_robust(response_text: str, schema: dict) -> dict:
+    """Extract JSON from model output with multiple fallback strategies."""
+    # Strategy 1: direct parse (works if API-enforced or model was clean)
+    try:
+        return validate_schema(json.loads(response_text), schema)
+    except json.JSONDecodeError:
+        pass
 
-::code-wrapper{language="markdown"}
+    # Strategy 2: extract from code fence
+    fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+    if fence_match:
+        try:
+            return validate_schema(json.loads(fence_match.group(1)), schema)
+        except (json.JSONDecodeError, SchemaError):
+            pass
+
+    # Strategy 3: find first { ... } in the text
+    brace_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text, re.DOTALL)
+    if brace_match:
+        try:
+            return validate_schema(json.loads(brace_match.group(0)), schema)
+        except (json.JSONDecodeError, SchemaError):
+            pass
+
+    raise JSONExtractionError(f"Could not extract valid JSON from response: {response_text[:200]}")
+
+def validate_schema(data: dict, schema: dict) -> dict:
+    """Lightweight schema validation — check required fields and types."""
+    for field in schema.get("required", []):
+        if field not in data:
+            raise SchemaError(f"Missing required field: {field}")
+    return data
+
+# BUT: if your provider offers API-enforced structured output, USE THAT INSTEAD.
+# The robust parser is a fallback for when enforcement isn't available, not a
+# replacement for it. Prompted JSON is "most of the time"; API-enforced is "always."
+```
+::
+
+## XML Output for Mixed Structured-and-Prose Content
+
+::code-wrapper{language="markdown" filename="xml_output.md"}
 ```markdown
 Analyze the following customer feedback. Respond using this exact XML
 structure:
@@ -112,36 +160,11 @@ it to my team."
 ```
 ::
 
-XML is often a better fit than JSON when the structure includes variable-length lists of rich content, mixed prose and structure, or nested sections that would require awkward escaping in JSON strings (e.g., content containing literal quote characters or newlines). It also tends to be more forgiving to eyeball-verify and to partially recover from if the model produces a small deviation, since tag boundaries are visually obvious even in malformed output.
-
-## Markdown Output for Human-Readable Structure
-
-Not everything needs to be machine-parsed — a large fraction of "structured output" requests are actually about giving a *human reader* consistent, scannable structure, where Markdown is the right tool:
-
-::code-wrapper{language="markdown"}
-```markdown
-Compare these three cloud database options for our use case (high write
-throughput, moderate read latency requirements, need for strong
-consistency). For each option, use this structure:
-
-## [Database name]
-**Best for:** one sentence
-**Watch out for:** one sentence
-**Verdict:** Recommended / Consider / Not recommended, with one sentence why
-
-Cover: Amazon Aurora, Google Cloud Spanner, and CockroachDB.
-```
-::
-
-The discipline here is the same as JSON/XML — an explicit, consistent template — but the enforcement bar is lower, since a human reading the output can tolerate minor formatting drift in a way a JSON parser cannot. Still, specifying the exact heading level, the exact labels, and the exact ordering produces far more consistent, comparable output across multiple calls (useful if, say, you're generating this comparison for many different database triples and want the results to be visually consistent).
+XML is often better than JSON when the structure includes variable-length lists of rich content, mixed prose and structure, or nested sections that would require awkward escaping in JSON strings.
 
 ## Function Calling / Tool Use as Structured Output
 
-**Function calling** (also called tool use — covered in full in Chapter 13) is worth introducing here specifically as a *form of structured output*, because that framing clarifies why it's often more robust than prompted JSON for anything resembling "call this specific action with these specific parameters."
-
-Instead of asking the model to produce JSON matching a schema you described in prose, you provide a **tool definition** — a formal name, description, and parameter schema — and the model's job becomes selecting which tool to call (if any) and populating its parameters, with the underlying API enforcing that the output conforms to the tool's declared schema:
-
-::code-wrapper{language="json"}
+::code-wrapper{language="json" filename="tool_definition.json"}
 ```json
 {
   "name": "extract_job_posting",
@@ -162,110 +185,174 @@ Instead of asking the model to produce JSON matching a schema you described in p
 ```
 ::
 
-This looks almost identical to the JSON schema example above — and that's the point. **Tool use and structured-output extraction are the same underlying mechanism, applied to two different framings**: "here's a schema for the object you should return" versus "here's a schema for the function you should call." When your task is genuinely "extract this data," schema-constrained output (above) is usually the more direct fit. When your task is genuinely "the model needs to decide whether and how to invoke an external capability" — search the web, query a database, send an email — tool use is the right frame, because it also carries semantics (a name and description) that help the model reason about *when* to invoke it, not just what shape to produce when it does. Chapter 13 goes deep on the decision-making and orchestration side of this; this chapter is about the structural/formatting side.
+::code-wrapper{language="python" filename="tool_vs_schema.py"}
+```python
+# Tool use and structured-output extraction are the SAME underlying mechanism,
+# applied to two framings:
+#   - Schema-constrained extraction: "here's a schema for the object you should return"
+#   - Tool use: "here's a schema for the function you should call"
+#
+# The JSON is identical. The difference is SEMANTIC:
+#   - Extraction: the task is "produce this data shape"
+#   - Tool use: the task is "decide WHETHER and HOW to invoke an external capability"
+#
+# When the task is genuinely "extract this data" → use schema-constrained output.
+# When the task is "the model needs to decide to search/query/send" → use tool use,
+# because it also carries semantics (name + description) that help the model reason
+# about WHEN to invoke, not just what shape to produce.
+```
+::
 
-## Common Formatting Failure Modes
+## Common Failure Modes
 
-### The unwanted preamble
+### The Unwanted Preamble
 
-Left unconstrained, models frequently wrap structured output in a conversational frame:
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="unwanted_preamble.md"}
 ```markdown
+<!-- ANTI-PATTERN: what the model produces without explicit suppression -->
 Sure! Here's the JSON object you requested:
 
 ```json
 {"title": "Senior Backend Engineer", ...}
 ```
-::
+
 Let me know if you need anything else!
 ```
 ::
 
-This breaks naive parsing (`json.loads()` on the raw response text fails immediately because of the surrounding prose and code fence). The fix is an explicit instruction ("return only the JSON object, no other text, no code fences") combined — wherever available — with schema-constrained output at the API level, which eliminates this failure mode entirely rather than just discouraging it.
-
-### Overly rigid format instructions causing truncation
-
-A subtler failure mode: an extremely rigid, verbose format specification can itself consume so much of the model's attention or the available output budget that the *actual content* gets cut short or degraded to fit the mandated structure — especially when combined with a tight `max_tokens` limit (see Chapter 1 on token limits, and Chapter 5 on how CoT reasoning can consume a token budget before the final structured answer is reached).
-
-::code-wrapper{language="markdown"}
+::code-wrapper{language="markdown" filename="preamble_fix.md"}
 ```markdown
-Respond with a JSON object containing exactly 15 keys: title, subtitle,
-introduction (minimum 200 words), background (minimum 300 words),
-methodology (minimum 250 words), findings (minimum 400 words, must
-include at least 3 numbered sub-points each with its own citation),
-implications (minimum 200 words)... [continues for 15 total sections
-with individually specified minimum lengths]
+<!-- PRODUCTION: explicit suppression + API enforcement -->
+Return only the JSON object, no other text, no code fences, no preamble,
+no postamble. Begin your response with { and end it with }.
 ```
 ::
 
-If the combined minimum word counts across all 15 sections exceed what fits in the available `max_tokens`, the model has no good option — every path forward violates either the schema or the truncation limit, and in practice you'll often get an early section fully realized and later sections cut off mid-sentence, or a response that abandons the JSON structure entirely partway through. The fix is to be realistic about output budget before writing the format spec: either reduce the required content, increase `max_tokens` to comfortably exceed your own worst-case estimate of the content's real length, or split the request into multiple calls (Chapter 10) each producing one section, rather than demanding one enormous structured document in a single generation.
+### Overly Rigid Format Causing Truncation
 
-### Schema drift over long conversations
+::code-wrapper{language="python" filename="truncation_anti_pattern.py"}
+```python
+# ANTI-PATTERN: a format spec so verbose it consumes the output budget
+BAD_FORMAT_SPEC = """
+Respond with a JSON object containing exactly 15 keys: title, subtitle,
+introduction (minimum 200 words), background (minimum 300 words), methodology
+(minimum 250 words), findings (minimum 400 words, must include at least 3
+numbered sub-points each with its own citation), implications (minimum 200 words)...
+[continues for 15 total sections with individually specified minimum lengths]
+"""
 
-In a multi-turn conversation where you're repeatedly asking for the same structured format, the model can gradually drift from the exact schema — adding an extra field it thinks is helpful, renaming a key slightly, or changing a value's type (e.g., returning a number as a string on one turn). This is a recency/context-crowding effect: your original schema definition, stated once at the start of a long conversation, has less influence turn-by-turn as more conversation history accumulates between it and the current generation. Mitigation: for anything programmatically parsed across a long conversation, either restate the schema (or a compact reminder of it) periodically, or better, structure your application to make each extraction its own fresh, stateless call rather than a continuation of a long conversation (see Chapter 8 for context management strategies, and Chapter 9 for treating this kind of consistency as something to test for explicitly).
+# The format spec itself is so demanding that the actual CONTENT gets cut short
+# to fit the mandated structure — especially with a tight max_tokens limit.
+# The model spends its budget complying with the format, not producing substance.
+
+# PRODUCTION: bound the format complexity to the output budget
+GOOD_FORMAT_SPEC = """
+Respond with a JSON object: {"summary": string, "key_points": array of
+strings (max 5), "recommendation": string}. Keep "summary" under 100 words.
+"""
+# Simple enough that the model can produce real content within the budget.
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Show the schema, don't just describe it** — A literal example of the target JSON/XML shape (even a single one) in the prompt is often more reliable than a prose description of the same shape, combining the specificity benefits of Chapter 4 with the demonstration benefits of Chapter 3's few-shot technique.
-- **Put format instructions close to the output request, not just at the top of a long prompt** — In a long prompt with substantial context before the actual ask, restating the format requirement briefly right before where generation begins helps counter the "long context can bury short instructions" effect from Chapter 2.
-- **Use `null` explicitly for "field doesn't apply," rather than omitting keys** — A schema where optional data is represented by an explicit `null` value is far easier for downstream code to handle reliably (a fixed set of keys to check) than a schema where fields are sometimes present and sometimes silently missing, which forces every consumer to handle both cases.
-- **Prefer enums over free-text for classification fields** — If a field's valid values are a fixed, known set (e.g., `"low" | "medium" | "high"`), say so explicitly and, where the API supports it, encode it as an actual JSON Schema `enum` constraint rather than describing the valid values in prose — this removes an entire category of "close but not exact" mismatches (e.g., "High" vs "high" vs "HIGH").
-- **Validate, don't just trust — even with schema enforcement** — Schema-constrained generation guarantees syntactic validity and type conformance, but it doesn't guarantee semantic correctness (a `salary_min` of `9999999999` is valid JSON but obviously wrong). Always run a sanity-check validation layer in your application code regardless of how strong the generation-time guarantee is.
+::code-wrapper{language="python" filename="tips.py"}
+```python
+# [Performance] Prefer API-enforced structured output over prompted JSON
+# whenever available. The enforced-shape guarantee transfers better across
+# model swaps (Chapter 16) and eliminates the entire class of "model added
+# prose around my JSON" failures.
+
+# [Idiom] For human-readable structured output, Markdown is the right tool.
+# Specify exact heading level, exact labels, exact ordering:
+# "## [Database name]\n**Best for:** one sentence\n**Watch out for:** one sentence"
+
+# [Debug] If JSON parsing fails in production, log the RAW response text before
+# attempting to parse. "The model returned invalid JSON" is less useful than
+# "the model returned 'Sure! Here's the JSON:\n```json\n{...}\n```' — add
+# 'return only the JSON object, no code fences' to the prompt."
+
+# [Idiom] When mixing reasoning and structured output, separate them:
+# <reasoning> ...free-form reasoning... </reasoning>
+# <answer> ...JSON only... </answer>
+# Then parse only the <answer> block. See Chapter 5 for the two-call pipeline
+# alternative, which cleanly avoids mixing the two concerns in one response.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Overly rigid output-format instructions can cause truncation, as detailed above** — this is common enough, and costly enough when it happens silently in production, that it's worth double-billing here as both a Common Failure Mode and a Gotcha: always sanity-check that your `max_tokens` budget comfortably exceeds a realistic worst-case rendering of your requested schema before shipping a rigid format spec to production.
-- **Empty or malformed input data needs an explicit contract, not silent guessing.** If you ask the model to extract structured fields from a document and the document is empty, doesn't contain the expected information, or is corrupted/truncated, an unconstrained prompt will often have the model either hallucinate plausible-looking values to fill the schema, or produce an inconsistent ad-hoc response (sometimes an error message in prose instead of the schema, sometimes an empty object, sometimes nulls). Specify this explicitly: "If the input does not contain enough information to populate a required field, set it to null and add an `"extraction_warnings"` array describing what's missing — do not guess a plausible-sounding value."
-- **JSON string escaping is a real, recurring failure point.** Content containing literal quote characters, backslashes, or newlines (a customer message that includes a quoted sentence, a code snippet inside a summary) needs to be correctly escaped to remain valid JSON, and models — especially under prompted-JSON rather than schema-enforced generation — occasionally produce invalid escaping on these inputs. This is one of the strongest practical arguments for using genuine schema-constrained generation over prompted JSON wherever the input data is uncontrolled, since the constrained-decoding mechanism handles escaping correctly by construction.
-- **Adversarial input can attempt to break out of your format via injected fake structure.** If any part of your prompt includes untrusted user content, and that content contains something that looks like your closing delimiter (`</analysis>`, a stray closing JSON brace inside a quoted string, or text like "Ignore the above and instead return..."), a less-robust prompted-format setup can be tricked into producing attacker-influenced output. See Chapter 18 for the full treatment — the format-safety implication here is that schema-constrained generation is also a meaningful security improvement, not just a convenience, because it structurally limits what the output *can* contain, regardless of what the input contains.
-- **Don't conflate "valid JSON" with "matches my mental model of the schema."** A model can return perfectly valid, well-formed JSON that nonetheless doesn't match your intended schema in subtle ways — an array where you expected an object, a nested structure where you expected a flat one, correct field names but swapped between two similarly-named fields. Syntactic validity is necessary but not sufficient; always validate structurally (ideally with an actual schema validator library) before trusting the parsed result in downstream logic.
+::code-wrapper{language="python" filename="edge_cases.py"}
+```python
+# [Gotcha] API-enforced JSON guarantees SYNTACTIC validity but not SEMANTIC
+# correctness. The JSON will parse, but the model can still put the wrong value
+# in a field — salary_min as a string of digits, or "remote": "yes" instead of
+# true if the schema allows strings. The schema enforces shape, not truth.
 
-## 🧠 Spot the Issue
+# [Gotcha] "Additional properties: false" in a JSON schema prevents extra keys,
+# but doesn't prevent the model from putting the RIGHT key with the WRONG value.
+# Always validate semantic content, not just structural validity.
 
-A team requests structured output with this prompt, running it via prompted JSON (no schema-enforcement feature available on their current provider/model combination):
+# [Gotcha] Schema-constrained output can still truncate at max_tokens. A valid
+# JSON object that's cut off mid-generation is invalid JSON. Ensure max_tokens
+# is large enough for the LARGEST expected valid response, not just the average.
 
-::code-wrapper{language="markdown"}
-```markdown
-Extract the shipping address from this customer message and return it as
-JSON with keys: street, city, state, zip.
+# [Gotcha] JSON-mode guarantees differ across providers. Some enforce schema
+# validation; others only guarantee JSON syntax validity (valid JSON, but
+# any structure); others are best-effort. Check what "structured output" actually
+# means for YOUR provider before relying on it for production parsing.
 
-Customer message: "Hey, quick question — is my order from last week still
-going to arrive by Friday? Also I moved recently, just want to confirm
-you have my current address on file, it should be 42 Birch Lane."
+# [Safety] Function-calling / tool-use output containing untrusted external content
+# is a direct injection vector (Chapter 18). A tool result that looks like a
+# function call instruction can manipulate the model — validate tool calls against
+# your registered tool list before execution.
 ```
 ::
 
-The model returns:
+## 🧠 Spot the Bug
 
-::code-wrapper{language="json"}
-```json
-{
-  "street": "42 Birch Lane",
-  "city": "Unknown",
-  "state": "Unknown",
-  "zip": "Unknown"
-}
-```
-::
-
-The downstream code treats this as a successfully extracted, complete address and attempts to use it to update a shipping record, causing a corrupted address (city/state/zip literally set to the string "Unknown") to be written to the database. What are the two separate mistakes here — one in the prompt design, one in the downstream code — and how would you fix each?
+A team extracts structured data using prompted JSON (no API enforcement). The prompt says "return a JSON object." In production, ~2% of responses fail to parse. Investigation shows the model sometimes wraps the JSON in a code fence or adds a one-line preamble like "Here are the extracted fields:". What's the fix?
 
 <details>
 <summary>Answer</summary>
 
-**Prompt-design mistake**: the prompt never specified what to do when required information is missing from the source text — it only told the model the shape to fill in, not the contract for partial or absent data (this is exactly the "empty or malformed input" gotcha above). Left to its own devices, the model chose the most plausible-looking filler ("Unknown") rather than a value that clearly signals "this wasn't actually present," because nothing in the prompt told it that distinction mattered. The fix is to specify the missing-data contract explicitly: "If any field cannot be determined from the message, set it to `null`, not a placeholder string. Add a top-level `"complete": true | false` field indicating whether all fields were successfully extracted."
+Prompted JSON has no hard guarantee — the model *usually* complies but can add prose, code fences, or conversational framing any time. The 2% failure rate is the exact failure mode API-enforced structured output exists to eliminate. Two fixes, in order of preference:
 
-**Downstream-code mistake**: even with a better-specified prompt, the calling code should never treat any single LLM extraction as ground truth without validation — it should check for `null` fields (or, in the original flawed version, should have treated a literal string "Unknown" in a structured field as a red flag rather than passing it through unchecked) before writing anything to a persistent record. Trusting parsed-but-unvalidated LLM output as if it were a verified, human-confirmed value is the deeper structural problem — no prompt wording alone should be relied on as the sole safeguard before a write to a production database.
+1. **Use the provider's native structured-output feature** (schema-constrained generation). The output is valid JSON by construction — the 2% failure rate drops to 0% because the API constrains which tokens can be generated.
+2. If API enforcement isn't available for your model, add an explicit suppression instruction ("Return only the JSON object, no code fences, no preamble, no explanation. Begin with { and end with }.") AND implement a robust parser with fallback extraction strategies (see `prompted_vs_enforced.py`).
 
-**The lesson**: every extraction prompt needs an explicit contract for missing or unavailable data (use `null`, not a plausible-looking placeholder string, and consider a companion completeness flag), and every piece of code consuming LLM-extracted structured data needs its own validation layer — schema conformance and "the model tried to fill in something" are not the same as "the extracted value is actually correct and safe to act on."
+The deeper lesson: "most of the time" is not good enough for unattended production parsing. Always prefer enforced guarantees over prompted requests when the feature is available.
 
 </details>
 
 ## Key Takeaways
 
-- Structured output (JSON, XML) turns a model's free-text tendencies into a parseable contract — the key techniques are an explicit schema, explicit type/null handling for missing data, and an instruction to suppress conversational wrapping.
-- Wherever your provider offers native schema-constrained generation, prefer it over prompted-JSON-and-hope for anything programmatically consumed — it structurally guarantees valid syntax and type conformance rather than relying on the model choosing to comply.
-- Function calling / tool use is conceptually the same mechanism as structured-output extraction, framed around invoking a named capability rather than filling a data object — Chapter 13 covers the orchestration side in depth.
-- Overly rigid or exhaustive format specifications can cause truncation or partial-schema output if they don't fit comfortably within your token budget — always sanity-check realistic output length against `max_tokens` before shipping a rigid schema.
-- Syntactic validity is not semantic correctness: always validate structurally and sanity-check values in your application code, regardless of how strong the generation-time formatting guarantee is.
+::code-wrapper{language="python" filename="key_takeaways.py"}
+```python
+"""
+Output formatting & structured data — reliability for downstream code.
+"""
+
+# 1. The moment output is consumed by CODE, format is a correctness requirement,
+#    not a cosmetic preference. "Almost valid JSON" breaks your parser.
+
+# 2. Prompted JSON = "most of the time." API-enforced JSON = "always."
+#    Prefer API-level schema-constrained output for anything parsed programmatically.
+#    prompted: "return a JSON object with these keys..." → ~98% reliable
+#    enforced:  output_config={"format": {"type": "json_schema", ...}} → 100% valid
+
+# 3. Tool use / function calling IS structured output, with semantic framing.
+#    Extraction: "produce this data shape" → schema-constrained output
+#    Tool use: "decide whether/how to invoke a capability" → tool definition
+#    Same JSON schema; different purpose. Match the mechanism to the task.
+
+# 4. XML is better than JSON for mixed prose-and-structure, variable-length
+#    content, and nested sections needing no escaping. Tag boundaries are
+#    visually obvious even in malformed output, aiding partial recovery.
+
+# 5. Common failure modes: unwanted preamble (fix with explicit suppression +
+#    API enforcement), truncation from rigid format specs (fix by bounding
+#    format complexity to the output budget), and semantic-vs-syntactic errors
+#    (API enforces valid JSON; it doesn't enforce correct VALUES — validate both).
+```
+::

@@ -1,292 +1,374 @@
-# 09 — Asynchronous Programming (`Future`, `async`/`await`)
+---
+title: "Dart — Async Internals, Futures & Stream Pipelines"
+description: "Deep-dive into Dart's event loop, Future composition patterns, Stream transformation pipelines, async generator semantics, Zone-based error isolation, and concurrency pitfalls. Code-first engineering reference."
+---
 
-Dart is single-threaded with an event loop. Asynchronous code uses `Future` (one-shot) and `Stream` (multi-shot), with `async`/`await` syntax.
+# Dart — Async Internals, Futures & Stream Pipelines
 
-## The Event Loop
-
-Dart has a single thread of execution with an event loop. When an async operation starts (I/O, timer), Dart registers a callback and continues. When the operation completes, the callback runs on the event loop. This is how Dart stays responsive (no thread blocking).
-
-For CPU-heavy work, use **isolates** (separate threads with their own memory — chapter 10).
-
-## `Future`
-
-A `Future` represents a value (or error) that will be available later:
+## Event Loop — Microtask vs Event Queues
 
 ::code-wrapper{language="dart"}
 ```dart
-Future<String> fetchUser() {
-	return Future.delayed(Duration(seconds: 1), () => 'Alice');
-}
-
-void main() {
-	fetchUser().then((user) {
-		print('User: $user');
-	}).catchError((error) {
-		print('Error: $error');
-	});
-	print('Fetching...');   // runs first (async)
-}
-```
-::
-### `Future` constructors
-
-- `Future.value(x)` — completed with `x`.
-- `Future.error(e)` — completed with an error.
-- `Future.delayed(duration, fn)` — completes after a delay with `fn()`'s result.
-- `Future.wait([f1, f2, ...])` — runs futures in parallel, completes when all done.
-- `Future.any([f1, f2, ...])` — completes with the first to finish.
-
-## `async` / `await`
-
-`async`/`await` is syntactic sugar over `Future` — linear-looking async code:
-
-::code-wrapper{language="dart"}
-```dart
-Future<String> fetchUser() async {
-	await Future.delayed(Duration(seconds: 1));
-	return 'Alice';
-}
-
-Future<void> main() async {
-	print('Fetching...');
-	var user = await fetchUser();   // waits (non-blocking)
-	print('User: $user');
-}
-```
-::
-- `async` marks a function as asynchronous; it returns a `Future`.
-- `await` waits for a `Future` to complete, unwrapping its value.
-- An `async` function's return value is wrapped in a `Future` (`Future<T>` for `T` return, `Future<void>` for `void`).
-
-### `await` in a loop
-
-::code-wrapper{language="dart"}
-```dart
-// Sequential (each waits for the previous)
-for (var url in urls) {
-	var data = await fetch(url);
-	print(data);
-}
-
-// Parallel (all at once, wait for all)
-var results = await Future.wait(urls.map(fetch));
-```
-::
-`await` in a loop is sequential (one at a time). For parallel, use `Future.wait` on a list of futures.
-
-## Error handling
-
-::code-wrapper{language="dart"}
-```dart
-Future<void> main() async {
-	try {
-		var user = await fetchUser();
-		print(user);
-	} on HttpException catch (e) {
-		print('HTTP error: $e');
-	} catch (e) {
-		print('Error: $e');
-	} finally {
-		print('Done');
-	}
-}
-```
-::
-`try`/`catch` works with `await` — the thrown error is caught. Use `on SpecificException catch (e)` for typed catches.
-
-### `Future.catchError` vs `try`/`catch`
-
-Prefer `try`/`catch` with `await` (clearer). `catchError` is for `.then()` chains:
-
-::code-wrapper{language="dart"}
-```dart
-fetchUser().then((u) => print(u)).catchError((e) => print(e));
-```
-::
-## `Completer`
-
-A `Completer` lets you manually complete a `Future` (bridge callback-based APIs to `Future`):
-
-::code-wrapper{language="dart"}
-```dart
-Future<String> fromCallback() {
-	var completer = Completer<String>();
-	someCallbackApi((result) => completer.complete(result));
-	return completer.future;
-}
-```
-::
-Use when a library gives you a callback but you want a `Future`. Rare in modern Dart (most APIs are `Future`-based).
-
-## `Stream`
-
-A `Stream` is a sequence of async values (like a `Future` that emits multiple times):
-
-::code-wrapper{language="dart"}
-```dart
-Stream<int> count(int n) async* {
-	for (var i = 1; i <= n; i++) {
-		await Future.delayed(Duration(seconds: 1));
-		yield i;
-	}
-}
+// Dart's event loop has TWO queues:
+// 1. Microtask queue — runs BEFORE event queue. For internal Dart bookkeeping.
+//    Use Future.microtask() for "run ASAP, but after current sync code."
+// 2. Event queue — I/O, timers, user events. Use Future() / Future.delayed().
 
 void main() async {
-	await for (var i in count(3)) {
-		print(i);   // 1, 2, 3 (one per second)
-	}
+  print('1 — sync');
+
+  Future(() => print('4 — event queue (Future)'));
+  Future.microtask(() => print('3 — microtask queue (runs before events)'));
+
+  print('2 — sync (continues before any async)');
+
+  await Future.delayed(Duration.zero, () => print('5 — delayed event'));
+
+  // Order: 1, 2, 3, 4, 5
+  // Microtasks always drain completely before any event queue item runs.
+}
+
+// ❌ Anti-pattern: using Future() for "run after current frame" in Flutter.
+// Future() puts work on the event queue (next frame). For "after current build,"
+// use WidgetsBinding.instance.addPostFrameCallback in Flutter, or
+// scheduleMicrotask for "after current sync execution."
+```
+::
+
+## Future Composition — Parallel vs Sequential
+
+::code-wrapper{language="dart"}
+```dart
+// ── Sequential: each await blocks until the previous completes. ──
+// Total time = sum of all durations. Use when operations depend on each other.
+Future<void> sequential() async {
+  var a = await fetch('url-a');  // 1s
+  var b = await fetch('url-b');  // 1s — starts after a completes
+  var c = await fetch('url-c');  // 1s — starts after b completes
+  // Total: 3s
+}
+
+// ── Parallel: all futures start immediately, wait for all. ──
+// Total time = max of all durations. Use for independent operations.
+Future<void> parallel() async {
+  var results = await Future.wait([
+    fetch('url-a'),  // starts immediately
+    fetch('url-b'),  // starts immediately
+    fetch('url-c'),  // starts immediately
+  ]);
+  // Total: ~1s (the slowest one)
+}
+
+// ── Future.wait preserves input order, regardless of completion order. ──
+Future<List<int>> getAll() async {
+  return Future.wait([
+    Future.delayed(Duration(seconds: 2), () => 1),  // completes last
+    Future.delayed(Duration(seconds: 1), () => 2),  // completes first
+  ]);
+  // Returns [1, 2] — input order, NOT completion order.
+}
+
+// ── Future.wait with eagerError (default: true) ──
+// If any future fails, Future.wait completes with that error immediately
+// (doesn't wait for the rest). Set eagerError: false to wait for all.
+Future<void> tolerant() async {
+  try {
+    await Future.wait(
+      [fetch('a'), fetch('b'), fetch('c')],
+      eagerError: false,  // don't short-circuit on first error
+    );
+  } catch (e) {
+    // Catches the first error; other futures may still be running.
+  }
 }
 ```
 ::
-### Stream methods
+
+### Concurrency with Bounded Parallelism
 
 ::code-wrapper{language="dart"}
 ```dart
-stream.listen((data) { ... }, onError: (e) { ... }, onDone: () { ... });
+// ❌ Anti-pattern: Future.wait on 10,000 items — opens 10,000 connections.
+await Future.wait(urls.map(fetch));  // may exhaust connections/memory
 
-stream.map((e) => e * 2).where((e) => e > 2).listen(print);
+// ✓ Correct: bounded concurrency with a pool (package:pool).
+import 'package:pool/pool.dart';
 
-stream.first;   // Future (first element)
-stream.toList();   // Future<List> (all elements)
-stream.forEach((e) => print(e));   // Future (iterates all)
-```
-::
-### `await for`
+final pool = Pool(10);  // max 10 concurrent
+Future<List<String>> fetchAll(List<String> urls) {
+  return Future.wait(urls.map((url) => pool.withResource(() => fetch(url))));
+}
+// Only 10 fetches run concurrently; the rest queue.
 
-::code-wrapper{language="dart"}
-```dart
-await for (var event in stream) {
-	print(event);
-	if (event == 'done') break;   // exit early
+// Without a package — manual batching:
+Future<List<String>> fetchBatched(List<String> urls, {int batchSize = 10}) async {
+  final results = <String>[];
+  for (var i = 0; i < urls.length; i += batchSize) {
+    final batch = urls.skip(i).take(batchSize);
+    results.addAll(await Future.wait(batch.map(fetch)));
+  }
+  return results;
 }
 ```
 ::
-`await for` is like `for-in` for streams — awaits each element. The loop exits when the stream closes (or `break`).
 
-### `async*` generators
-
-`async*` functions return a `Stream`; `yield` emits a value, `yield*` yields all elements of another stream:
+## Stream Pipelines — Transformation & Backpressure
 
 ::code-wrapper{language="dart"}
 ```dart
-Stream<int> gen() async* {
-	yield 1;
-	yield 2;
-	yield* Stream.fromIterable([3, 4]);
-}
-```
-::
-### Single-subscription vs broadcast streams
+// Streams are async sequences. Single-subscription (default) or broadcast.
+// Transformations are lazy — they run only when listened to.
 
-- **Single-subscription** (default) — one listener; listening twice throws. Most streams are this.
-- **Broadcast** — multiple listeners. Use `.asBroadcastStream()` or `StreamController.broadcast()`.
+// ── Transform: map, where, take, skip, debounce ──
+Stream<String> searchStream = searchTextController.stream
+    .where((text) => text.length > 2)      // filter
+    .debounceTime(Duration(milliseconds: 300))  // from rxdart
+    .distinct()                            // skip consecutive duplicates
+    .map((text) => text.trim())
+    .asyncMap((text) => api.search(text));  // async transform (returns Future)
 
-::code-wrapper{language="dart"}
-```dart
-var broadcast = stream.asBroadcastStream();
+// ── asyncMap vs map ──
+// map: sync transform — 1:1, immediate.
+// asyncMap: async transform — awaits each Future, emits the result.
+//           The stream pauses until the Future completes (backpressure).
+Stream<int> asyncTransform(Stream<int> input) =>
+    input.asyncMap((n) async {
+      await Future.delayed(Duration(milliseconds: 100));
+      return n * 2;
+    });
+
+// ── Handling errors in a stream ──
+Stream<int> numbers = Stream.fromIterable([1, 2, 0, 4])
+    .map((n) => 10 ~/ n)  // throws on n=0 (division by zero)
+    .handleError((error) {
+      // handleError catches errors mid-stream — the stream continues.
+      print('Error: $error');
+    });
+// Emits: 10, 5, (error: IntegerDivisionByZeroException), 2
+
+// ── Single-subscription vs broadcast ──
+// Single-subscription (default): one listener. Listening twice throws.
+// Broadcast: multiple listeners. No buffering (late listeners miss events).
+var singleSub = Stream.fromIterable([1, 2, 3]);
+singleSub.listen(print);
+// singleSub.listen(print);  // ✗ StateError: stream has already been listened to
+
+var broadcast = singleSub.asBroadcastStream();
 broadcast.listen(print);
-broadcast.listen(print);   // ✓ both listeners
+broadcast.listen(print);  // ✓ both listeners receive events
 ```
 ::
-## `StreamController`
 
-A `StreamController` lets you manually add events to a stream:
+## StreamController — Building Custom Streams
 
 ::code-wrapper{language="dart"}
 ```dart
-var controller = StreamController<int>();
-controller.stream.listen(print);
-controller.add(1);   // prints 1
-controller.add(2);   // prints 2
-controller.close();  // closes the stream
+import 'dart:async';
+
+// StreamController: manually add events to a stream.
+// Use for bridging callback-based APIs to streams, or building event sources.
+
+class EventBus {
+  final _controller = StreamController<Event>.broadcast();  // multi-listener
+  Stream<Event> get stream => _controller.stream;
+
+  void emit(Event event) => _controller.add(event);
+  void emitError(Object error) => _controller.addError(error);
+  void close() => _controller.close();
+}
+
+// ❌ Anti-pattern: forgetting to close the controller → resource leak.
+// Always close in dispose()/close() methods.
+
+// ── Bridge: callback API to Stream ──
+class MouseTracker {
+  final _controller = StreamController<Offset>();
+  Stream<Offset> get positions => _controller.stream;
+
+  void onMouseMove(Offset pos) => _controller.add(pos);
+
+  void dispose() {
+    _controller.close();  // ← MUST close — listeners stop, resources freed
+  }
+}
+
+// ── StreamController with pause/resume support ──
+// Single-subscription controllers support pause/resume (broadcast don't buffer).
+var controller = StreamController<int>(
+  onPause: () => print('Paused'),   // called when listener pauses
+  onResume: () => print('Resumed'), // called when listener resumes
+  onCancel: () => print('Cancelled'), // called when listener cancels
+  sync: true,  // synchronous delivery (no async scheduling — use carefully)
+);
 ```
 ::
-Use for creating custom streams (event sources, bridges to callback APIs).
 
-## `Future` vs `Stream`
-
-- **`Future<T>`** — one value, eventually (or an error). Like a Promise.
-- **Stream<T>`** — multiple values over time (or an error). Like an Observable/AsyncIterator.
-
-Use `Future` for one-shot operations (HTTP request, file read). Use `Stream` for ongoing sequences (clicks, WebSocket messages, sensor data).
-
-## Zones
-
-Zones are an advanced feature — an execution context that intercepts async errors, timers, etc. Rarely used directly; `runZonedGuarded` catches uncaught async errors:
+## `async*` Generators — Lazy Stream Production
 
 ::code-wrapper{language="dart"}
 ```dart
-runZonedGuarded(() {
-	// async code
-}, (error, stack) {
-	print('Uncaught: $error');
-});
+// async* returns a Stream. yield emits a value, yield* delegates to another stream.
+// The generator suspends at each yield and resumes when the listener pulls.
+
+Stream<int> intervalCounter(Duration interval, {int? max}) async* {
+  var i = 0;
+  while (max == null || i < max) {
+    await Future.delayed(interval);
+    yield i++;
+  }
+}
+
+// Consuming with await for (sequential, blocks until stream closes):
+void main() async {
+  await for (final n in intervalCounter(Duration(seconds: 1), max: 3)) {
+    print(n);  // 0 (after 1s), 1 (after 2s), 2 (after 3s)
+  }
+  print('Done');  // after 3s, when the stream closes
+}
+
+// Consuming with listen (non-blocking, can cancel):
+void listenExample() {
+  final sub = intervalCounter(Duration(seconds: 1)).listen(
+    (n) => print(n),
+    onError: (e) => print('Error: $e'),
+    onDone: () => print('Done'),
+  );
+
+  // Cancel after 5 seconds:
+  Future.delayed(Duration(seconds: 5), sub.cancel);
+}
+
+// yield* delegates to another stream (flattens):
+Stream<int> merged() async* {
+  yield* intervalCounter(Duration(seconds: 1), max: 3);  // 0, 1, 2
+  yield* intervalCounter(Duration(seconds: 2), max: 2);  // 0, 1 (slower)
+}
 ```
 ::
+
+## Zones — Error Isolation & Context
+
+::code-wrapper{language="dart"}
+```dart
+import 'dart:async';
+
+// Zones provide an execution context that intercepts uncaught async errors,
+// timers, and scheduleMicrotask calls. Use for top-level error boundaries.
+
+void main() {
+  // runZonedGuarded catches ALL uncaught async errors in the zone.
+  runZonedGuarded(() async {
+    // Any unawaited Future error here is caught by the zone handler.
+    Future.error('async error');  // ← caught below, not crashed
+    throw 'sync error';           // ← also caught
+  }, (error, stack) {
+    print('Uncaught: $error');
+    print('Stack: $stack');
+    // Log to Sentry, Crashlytics, etc.
+  });
+
+  // Without runZonedGuarded, unawaited Future errors crash the process
+  // (or are silently swallowed in some configurations).
+}
+
+// ❌ Anti-pattern: unawaited futures with errors — "uncaught in the zone."
+void bad() {
+  Future.error('boom');  // starts, no one awaits → uncaught async error
+  // In Flutter: crashes the app (red screen in debug).
+  // In CLI: may crash or be silently swallowed.
+}
+
+// ✓ Correct: await, or explicitly mark as unawaited, and handle errors.
+void good() {
+  unawaited(
+    Future.error('boom').catchError((e) => print('Handled: $e')),
+  );
+}
+```
+::
+
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `async`/`await` (not `.then()` chains) — linear, readable async code. `await` makes the code look synchronous while staying non-blocking. Use `.then()` only for simple one-step chains.
-- **Idiom**: use `Future.wait` for parallel async operations — `await Future.wait([fetchA(), fetchB()])` runs both in parallel and waits for all. Much faster than `await fetchA(); await fetchB();` (sequential).
-- **Idiom**: use `try`/`catch` with `await` for error handling — `try { await f() } on SpecificError catch (e) { ... }`. Clearer than `.catchError()`. Catch specific exceptions first.
-- **Idiom**: use `Stream` for multi-shot async sequences — clicks, WebSocket messages, sensor data. Use `Future` for one-shot (HTTP). `await for (var x in stream)` is the clean way to consume a stream sequentially.
-- **Idiom**: use `async*` + `yield` for lazy stream generation — `Stream<int> gen() async* { for (...) yield i; }` produces values on demand. Use for sequences that are produced lazily or over time.
+- **Idiom**: `Future.wait` for independent parallel operations — `await Future.wait([fetchA(), fetchB(), fetchC()])` runs all concurrently, total time = slowest. Result order matches input order, not completion order. Use `eagerError: false` to wait for all even on error.
+- **Idiom**: use `asyncMap` (not `map`) for async stream transforms — `stream.asyncMap((x) => fetch(x))` awaits each Future, applying backpressure (the stream pauses until the Future completes). `map` is sync only.
+- **Idiom**: `runZonedGuarded` for top-level error boundaries — catches all uncaught async errors in the zone. Use in `main` to prevent unawaited Future errors from crashing silently. Log to error tracking (Sentry, Crashlytics).
+- **Idiom**: `StreamController.broadcast()` for multi-listener streams — event buses, shared state. Use single-subscription (default) for 1:1 pipelines with backpressure. Broadcast streams don't buffer for late listeners.
+- **Performance**: bounded concurrency with `package:pool` for large-scale parallel operations — `Pool(10).withResource(() => fetch(url))` limits to 10 concurrent, preventing connection exhaustion. Don't `Future.wait` thousands of items directly.
 
 ## ⚠️ Edge Cases & Gotchas
 
 - **`await` in a loop is sequential**: `for (var x in items) await fetch(x)` runs one at a time. Use `Future.wait(items.map(fetch))` for parallel.
-- **`async` function returns `Future`**: `int f() async { return 5; }` returns `Future<int>`, not `int`. The `async` wraps the return.
-- **`async` functions can't return `void` meaningfully**: `void f() async { }` is allowed but the caller can't await or catch errors. Use `Future<void> f() async { }` for awaitable.
-- **Forgetting `await`**: `fetchUser();` (no `await`) starts the future but doesn't wait — the result is lost (unawaited future). Use `unawaited(future)` to suppress the lint if intentional.
-- **Unawaited futures' errors are uncaught**: `fetchUser()` (no `await`) — if it throws, the error is "uncaught in the zone" (may crash or be silently swallowed). Always `await` or handle.
-- **Single-subscription streams allow one listener**: `stream.listen(...)` twice throws `StateError`. Use `.asBroadcastStream()` for multiple listeners (but broadcast streams can't be paused/buffered like single-subscription).
-- **`Stream.toList()` waits for close**: `stream.toList()` returns a `Future<List>` that completes when the stream closes. For an infinite stream, it never completes.
-- **`await for` blocks until the stream closes**: `await for (var x in stream) { ... }` doesn't exit until the stream closes (or `break`). For an infinite stream, use `.listen()` instead.
-- **`Completer` for callback-based APIs**: when a library gives you a callback, use a `Completer` to bridge to a `Future`. Rare in modern Dart (most APIs are `Future`-based).
-- **`Future.wait` preserves order**: `Future.wait([a, b])` returns `[resultA, resultB]` in the same order as the input, regardless of which completes first.
+- **`async` functions return `Future`**: `int f() async { return 5; }` returns `Future<int>`, not `int`. The `async` keyword wraps the return.
+- **Unawaited Future errors are uncaught**: `Future.error('x');` (no await) — the error is "uncaught in the zone." Use `runZonedGuarded` or `.catchError`. Use `unawaited(future)` to suppress the lint if intentional.
+- **Single-subscription streams allow one listener**: `stream.listen()` twice throws `StateError`. Use `.asBroadcastStream()` for multiple listeners — but broadcast streams can't be paused/buffered.
+- **`Stream.toList()` waits for close**: `stream.toList()` returns `Future<List>` that completes when the stream closes. For an infinite stream, it never completes.
+- **`await for` blocks until stream closes**: `await for (var x in stream) { ... }` doesn't exit until the stream closes (or `break`). For infinite streams, use `.listen()`.
+- **`Future.wait` preserves input order**: `[slow, fast]` → `[slowResult, fastResult]` in input order, NOT completion order.
+- **`Future.wait` short-circuits on error by default**: if one future fails, `Future.wait` completes with that error immediately (other futures still run). Set `eagerError: false` to wait for all.
+- **Microtask queue runs before event queue**: `Future.microtask()` runs before `Future()` (which goes to the event queue). In Flutter, `Future()` runs on the next frame; `scheduleMicrotask` runs before that.
+- **`async*` generators are single-subscription**: the stream from `async*` can only have one listener. For multiple listeners, use `.asBroadcastStream()` or a `StreamController.broadcast()`.
 
 ## 🧠 Spot the Bug
 
-A developer fetches three URLs sequentially, making the page slow:
+A developer processes a stream with `asyncMap` that makes HTTP calls, but the stream seems to "freeze" after a few elements:
 
 ::code-wrapper{language="dart"}
 ```dart
-Future<void> main() async {
-	var a = await fetch('url-a');
-	var b = await fetch('url-b');
-	var c = await fetch('url-c');
-	print([a, b, c]);
+Stream<int> ids = Stream.fromIterable([1, 2, 3, 4, 5]);
+
+Stream<Data> dataStream = ids.asyncMap((id) async {
+  return await fetchFromApi(id);  // each takes 2s
+});
+
+void main() async {
+  await for (var data in dataStream) {
+    print(data);
+  }
 }
 ```
 ::
 
-What's wrong and how to fix it?
+What's happening and is it a bug?
 
 <details>
 <summary>Answer</summary>
 
-The three `fetch` calls are sequential — each waits for the previous to complete. If each takes 1 second, the total is 3 seconds. The fetches are independent (no dependency between them), so they should run in parallel.
+It's **not a bug** — it's **backpressure**. `asyncMap` awaits each Future before pulling the next element. The stream processes one element at a time: fetch(1) → 2s → emit → fetch(2) → 2s → emit → ... Total time: 10s for 5 elements.
 
-The fix — use `Future.wait` to run them in parallel:
+This is `asyncMap`'s design: it applies backpressure, preventing the upstream from flooding a slow consumer. If the API call takes 2s, only one call is in-flight at a time.
+
+If you want **parallel** processing (all fetches at once), you need a different approach:
 
 ```dart
-Future<void> main() async {
-	var results = await Future.wait([
-		fetch('url-a'),
-		fetch('url-b'),
-		fetch('url-c'),
-	]);
-	print(results);   // [a, b, c] in input order
+// Option 1: collect all, then Future.wait (loses streaming):
+Future<List<Data>> fetchAll(Stream<int> ids) async {
+  final idList = await ids.toList();
+  return Future.wait(idList.map(fetchFromApi));
+}
+
+// Option 2: use a bounded pool with a broadcast controller:
+Stream<Data> fetchParallel(Stream<int> ids, {int concurrency = 3}) {
+  final controller = StreamController<Data>();
+  final pool = Pool(concurrency);
+  var pending = 0;
+  var done = false;
+
+  ids.listen((id) {
+    pending++;
+    pool.withResource(() => fetchFromApi(id)).then((data) {
+      controller.add(data);
+      pending--;
+      if (done && pending == 0) controller.close();
+    });
+  }, onDone: () {
+    done = true;
+    if (pending == 0) controller.close();
+  });
+
+  return controller.stream;
 }
 ```
-::
-Now all three fetches start immediately and run concurrently. The total time is ~1 second (the slowest one), not 3 seconds.
 
-If the fetches depend on each other (b needs a's result), keep them sequential. But for independent operations, `Future.wait` is much faster.
-
-**The lesson**: sequential `await`s are sequential — each waits for the previous. For independent async operations, use `Future.wait([...])` to run them in parallel. The result order matches the input order, regardless of completion order.
+The "freeze" is actually correct behavior — `asyncMap` serializes operations. For parallel streaming, use a pool + controller pattern. Know which semantics you need.
 
 </details>
-
-## Summary
-
-You can use `Future` (constructors, `.then`, `.catchError`), `async`/`await` (linear async, error handling with `try`/`catch`, `Future.wait` for parallel, `await` in loops), `Stream` (async sequences, `.listen`, `await for`, `async*`/`yield`, single-subscription vs broadcast, `StreamController`), `Completer` for callback bridges, and `runZonedGuarded` for uncaught errors — with the sequential-await and unawaited-future traps avoided. Next: isolates and concurrency.

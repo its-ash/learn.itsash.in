@@ -1,386 +1,276 @@
+---
+title: "02 — JSX Deep Dive"
+description: "JSX compilation to createElement, expression embedding rules, conditional rendering patterns, fragments, spread pitfalls, and the key prop's role in reconciliation. Code-first reference for mid-to-senior React engineers."
+---
+
 # 02 — JSX Deep Dive
 
-## JSX Is an Expression-Oriented Syntax
+## JSX → React.createElement
 
-Every JSX tag evaluates to a value (a React element object). Because of this, JSX can appear anywhere a JavaScript expression can appear — assigned to a variable, returned from a function, passed as an argument, stored in an array.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="jsx_to_createelement.js"}
 ```javascript
-const heading = <h1>Hello</h1>          // JSX assigned to a variable
-const elements = [<li key="a">A</li>, <li key="b">B</li>]  // JSX in an array
+// JSX is syntactic sugar for React.createElement. The compiler (Babel/SWC)
+// transforms it at build time — JSX never reaches the browser.
 
-function getGreeting(user) {
-  return user ? <h1>Hello, {user.name}</h1> : <h1>Hello, Stranger</h1>  // JSX returned conditionally
+// WHAT YOU WRITE:
+const greeting = <h1 className="title" id="main">Hello, {name}!</h1>
+
+// WHAT THE COMPILER PRODUCES:
+const greeting = React.createElement(
+  'h1',                          // type: string (DOM) | function (component) | symbol (fragment)
+  { className: 'title', id: 'main' },  // props object
+  'Hello, ',                     // children...
+  name,
+  '!'
+)
+
+// WHICH BECOMES THIS OBJECT:
+// {
+//   type: 'h1',
+//   props: { className: 'title', id: 'main', children: ['Hello, ', name, '!'] },
+//   key: null,
+//   ref: null,
+//   $$typeof: Symbol.for('react.element')
+// }
+
+// Knowing this explains WHY:
+// - You can store JSX in variables: const el = <div/>  (it's just an object)
+// - You can pass JSX as props: <Card header={<h1>Title</h1>} />
+// - You can return JSX from functions: getIcon(name) → <svg/>
+// - You can't use if/for/switch INSIDE JSX — they're statements, not expressions
+```
+::
+
+## Expression Embedding Rules
+
+::code-wrapper{language="javascript" filename="expression_embedding.js"}
+```javascript
+// {} in JSX evaluates a SINGLE EXPRESSION — anything that returns a value.
+// You CANNOT put STATEMENTS (if, for, switch, const) inside {}.
+
+// VALID — expressions:
+<div>{2 + 2}</div>                    // arithmetic
+<div>{condition ? 'yes' : 'no'}</div>  // ternary
+<div>{user?.name || 'Anonymous'}</div> // optional chaining + fallback
+<div>{items.map(i => <li key={i.id}>{i.name}</li>)}</div>  // .map() returns array
+<div>{<Child />}</div>                 // JSX is an expression (it's just an object)
+
+// INVALID — statements (these throw syntax errors):
+// <div>{ if (x) { return 'yes' } }</div>          // if is a statement
+// <div>{ for (let i of items) { ... } }</div>     // for is a statement
+// <div>{ const val = compute(); val }</div>       // const is a statement
+
+// WORKAROUND for conditionals inside JSX: ternary or &&
+<div>{show && <Modal/>}</div>
+// WORKAROUND for loops: .map() (it returns an array of elements)
+<div>{items.map(item => <Row key={item.id} {...item} />)}</div>
+// WORKAROUND for complex logic: IIFE or extract to a variable/function
+const content = (() => {
+  if (loading) return <Spinner/>
+  if (error) return <ErrorMessage error={error}/>
+  return <DataView data={data}/>
+})()
+return <div>{content}</div>
+```
+::
+
+## Conditional Rendering: Patterns and Gotchas
+
+::code-wrapper{language="javascript" filename="conditional_gotchas.js"}
+```javascript
+// ANTI-PATTERN: && with numeric values renders 0
+function Cart({ count }) {
+  return <div>{count && <Badge count={count} />}</div>
+  // When count === 0: renders "0" on screen! 0 is falsy but React renders it.
+  // && returns the LEFT operand if it's falsy — so 0 && <Badge/> → 0
+  // React renders numbers (including 0) as text. Only null, undefined, false,
+  // and true are ignored by React's renderer.
+}
+
+// FIX: use a boolean check or ternary
+function Cart({ count }) {
+  return <div>{count > 0 && <Badge count={count} />}</div>  // count > 0 → true/false
+  // OR: {count > 0 ? <Badge count={count} /> : null}
+}
+
+// GOTCHA: empty string "" is rendered by React (it's a valid child)
+// null, undefined, false, true → NOT rendered (ignored)
+// 0, "" → rendered as text
+```
+::
+
+::code-wrapper{language="javascript" filename="conditional_patterns.js"}
+```javascript
+// PRODUCTION PATTERN: extract complex conditionals for readability
+
+function UserMenu({ user, isLoading, isError }) {
+  // Each branch is a clean expression — no nested ternaries that are hard to read
+  if (isLoading) return <Spinner />
+  if (isError) return <ErrorMessage />
+  if (!user) return <LoginButton />
+
+  return <ProfileDropdown user={user} />
+
+  // Early returns OUTSIDE JSX are cleaner than nested ternaries INSIDE JSX.
+  // Use ternaries for simple 2-way choices within JSX, early returns for
+  // multi-branch or guard-clause logic.
 }
 ```
 ::
 
-## The Core Rules of JSX
+## Fragments: Grouping Without Extra DOM
 
-### 1. A Single Root Element (or Fragment)
-
-Every JSX expression must resolve to exactly one root node.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Invalid — two adjacent root elements, no wrapper
-function Bad() {
-  return (
-    <h1>Title</h1>
-    <p>Body</p>
-  )
-}
-// SyntaxError: Adjacent JSX elements must be wrapped in an enclosing tag
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Valid — wrapped in a Fragment (renders no extra DOM node)
-function Good() {
-  return (
-    <>
-      <h1>Title</h1>
-      <p>Body</p>
-    </>
-  )
-}
-```
-::
-
-### 2. Tags Must Always Close
-
-Unlike HTML, self-closing tags cannot omit the slash, and every opening tag needs a matching close.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Invalid in JSX (valid in loose HTML)
-<img src="cat.png">
-<br>
-
-// Valid
-<img src="cat.png" />
-<br />
-```
-::
-
-### 3. `className`, Not `class`; `htmlFor`, Not `for`
-
-JSX attributes map to DOM properties, and `class`/`for` are reserved words in JavaScript, so React uses the camelCase DOM property names instead.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Wrong — `class` is a JS reserved word; React also won't apply the style
-<div class="card"><label for="email">Email</label></div>
-
-// Right
-<div className="card"><label htmlFor="email">Email</label></div>
-```
-::
-
-### 4. Attributes Are camelCase
-
-Most DOM attributes become camelCase in JSX: `onclick` → `onClick`, `tabindex` → `tabIndex`, `readonly` → `readOnly`. Exceptions exist for `aria-*` and `data-*` attributes, which stay hyphenated because they are not "properties" in the DOM sense.
-
-::code-wrapper{language="javascript"}
-```javascript
-<button
-  onClick={handleClick}
-  tabIndex={0}
-  aria-label="Close dialog"
-  data-testid="close-btn"
-  disabled={isLoading}
->
-  Close
-</button>
-```
-::
-
-## Expressions in JSX: `{}`
-
-Curly braces embed a JavaScript **expression** (something that evaluates to a value) — never a **statement** (`if`, `for`, variable declarations).
-
-::code-wrapper{language="javascript"}
-```javascript
-function Price({ amount, currency }) {
-  return (
-    <span>
-      {/* Expressions: ternaries, function calls, template literals, arithmetic — all fine */}
-      {currency}{amount.toFixed(2)}
-      {amount > 100 && <strong> (Bulk discount applied)</strong>}
-    </span>
-  )
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Invalid — `if` is a statement, not an expression; cannot go inside {}
-function Bad({ status }) {
-  return (
-    <div>
-      {if (status === 'ok') { return <span>OK</span> }}  // SyntaxError
-    </div>
-  )
-}
-```
-::
-
-The fix is to move the branching *outside* the JSX (into a variable, a helper function, or an early return — see chapter 12), or use an expression-form construct like the ternary or `&&`.
-
-## Conditional Rendering Patterns
-
-### Ternary — when you need an else branch
-
-::code-wrapper{language="javascript"}
-```javascript
-function StatusBadge({ isOnline }) {
-  return (
-    <span className={isOnline ? 'badge badge--green' : 'badge badge--gray'}>
-      {isOnline ? 'Online' : 'Offline'}
-    </span>
-  )
-}
-```
-::
-
-### Logical AND (`&&`) — when there's no else branch
-
-::code-wrapper{language="javascript"}
-```javascript
-function Inbox({ unreadCount }) {
-  return (
-    <div>
-      <h2>Inbox</h2>
-      {unreadCount > 0 && <span className="badge">{unreadCount}</span>}
-    </div>
-  )
-}
-```
-::
-
-### The classic `&&` gotcha: falsy-but-not-boolean values render
-
-`&&` returns its left operand if it's falsy. `0` is falsy — but React *renders* `0` as text, because it's a valid, meaningful child (unlike `false`, `null`, and `undefined`, which React treats as "render nothing").
-
-::code-wrapper{language="javascript"}
-```javascript
-// Bug: when unreadCount is 0, this renders a literal "0" on the page
-function Inbox({ unreadCount }) {
-  return <div>{unreadCount && <span className="badge">{unreadCount}</span>}</div>
-}
-// unreadCount = 0  →  0 && <span>...</span>  evaluates to 0  →  React renders "0"
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Fix: force a real boolean, or compare explicitly
-function Inbox({ unreadCount }) {
-  return <div>{unreadCount > 0 && <span className="badge">{unreadCount}</span>}</div>
-}
-// unreadCount = 0  →  false && ...  →  false  →  React renders nothing
-```
-::
-
-This is one of the most common real-world React bugs and worth internalizing: **`&&` is safe only when the left side is guaranteed to be a strict boolean, or when you explicitly coerce it (`!!count`, `count > 0`).**
-
-### `switch`-like rendering with an object lookup or IIFE
-
-For more than two branches, a ternary chain becomes unreadable. Prefer an object map or an early return (chapter 12) over nested ternaries.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Avoid — nested ternaries are hard to read and easy to get wrong
-function Status({ state }) {
-  return (
-    <span>
-      {state === 'loading' ? 'Loading…' : state === 'error' ? 'Error!' : state === 'empty' ? 'No data' : 'Ready'}
-    </span>
-  )
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Better — a lookup map reads top-to-bottom and is trivially extendable
-const STATUS_LABELS = {
-  loading: 'Loading…',
-  error: 'Error!',
-  empty: 'No data',
-  ready: 'Ready',
-}
-
-function Status({ state }) {
-  return <span>{STATUS_LABELS[state] ?? 'Unknown'}</span>
-}
-```
-::
-
-## Rendering Lists
-
-Arrays of JSX render directly. `.map()` is the standard pattern — each generated element requires a unique `key` prop (deep dive in chapter 13).
-
-::code-wrapper{language="javascript"}
-```javascript
-function TodoList({ todos }) {
-  return (
-    <ul>
-      {todos.map(todo => (
-        <li key={todo.id} className={todo.done ? 'done' : ''}>
-          {todo.text}
-        </li>
-      ))}
-    </ul>
-  )
-}
-```
-::
-
-### Missing keys: the console warning that's easy to ignore (and shouldn't be)
-
-::code-wrapper{language="javascript"}
-```javascript
-// No key — React warns: "Each child in a list should have a unique 'key' prop"
-{todos.map(todo => <li>{todo.text}</li>)}
-```
-::
-
-Without a stable `key`, React falls back to positional matching during reconciliation, which can cause state to attach to the wrong list item when the list is reordered, filtered, or spliced — a subtle bug that often doesn't manifest until the list has interactive children (inputs, checkboxes). See chapter 13 for the full mechanism.
-
-## Fragments
-
-A `Fragment` groups children without adding an extra DOM node. Use the shorthand `<>...</>` when you don't need a `key`; use the explicit `<Fragment key={...}>` form when you do (shorthand doesn't accept props).
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="fragments.js"}
 ```javascript
 import { Fragment } from 'react'
 
-function DefinitionList({ terms }) {
-  return (
-    <dl>
-      {terms.map(({ id, term, definition }) => (
-        // Shorthand <>...</> cannot take a `key`, so the explicit form is required in a .map()
-        <Fragment key={id}>
-          <dt>{term}</dt>
-          <dd>{definition}</dd>
-        </Fragment>
-      ))}
-    </dl>
-  )
-}
-```
-::
+// PROBLEM: a component must return a single root element, but you don't want
+// to add an extra <div> that breaks CSS (flexbox/grid) or semantics.
 
-Fragments matter for real layout correctness: wrapping `<tr>` children in a `<div>` inside a `<table>` produces invalid, browser-mangled HTML because `<div>` isn't a legal child of `<table>`/`<tbody>`. A `Fragment` avoids introducing that invalid wrapper.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Bug: browsers hoist the <div> out of the table, breaking the DOM structure and CSS
-function Row({ user }) {
-  return (
-    <div>
-      <td>{user.name}</td>
-      <td>{user.email}</td>
-    </div>
-  )
-}
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-// Fix: Fragment groups the <td>s with no invalid wrapper element
-function Row({ user }) {
+// SHORT SYNTAX (no key support):
+function Columns() {
   return (
     <>
-      <td>{user.name}</td>
-      <td>{user.email}</td>
+      <td>Hello</td>
+      <td>World</td>
     </>
   )
 }
+// Compiles to React.createElement(React.Fragment, null, ...)
+
+// EXPLICIT SYNTAX (supports key — needed in lists):
+function DefinitionList({ terms }) {
+  return terms.map(([term, def]) => (
+    <Fragment key={term}>
+      <dt>{term}</dt>
+      <dd>{def}</dd>
+    </Fragment>
+  ))
+}
+// The short <> syntax CANNOT take a key prop — use <Fragment key={...}> in lists.
+// React won't warn about missing keys if you use <> — but it won't be able to
+// reconcile items correctly either. Always use explicit Fragment with key in lists.
 ```
 ::
 
-## Comments in JSX
+## Spread Attributes: Powerful, Dangerous
 
-Comments inside the JSX tree must be expressions, so they're wrapped in `{}` and use `/* */`, not `//`.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spread_pitfalls.js"}
 ```javascript
-function Card() {
-  return (
-    <div className="card">
-      {/* This is a valid JSX comment */}
-      <h2>Title</h2>
-      {
-        // A single-line comment also works, but only inside {} on its own line
-      }
-    </div>
-  )
+// CONVENIENT: forward all props to a child
+function Button({ variant, ...rest }) {
+  return <button className={`btn btn-${variant}`} {...rest} />
+  // rest = all props except variant — className, onClick, disabled, type, etc.
 }
+
+// ANTI-PATTERN: spreading unknown props breaks explicit contracts
+function UserCard({ name, email, ...unknownProps }) {
+  // unknownProps could contain ANYTHING — including props UserCard shouldn't receive
+  return <div {...unknownProps}>  // ← div now has arbitrary attributes
+    <h3>{name}</h3>
+    <p>{email}</p>
+  </div>
+}
+// If someone passes <UserCard onClick={...} />, the div gets an onClick —
+// probably not intended. Explicit is safer:
+function UserCard({ name, email, onClick }) {
+  return <div onClick={onClick}>...</div>  // only what you intend
+}
+
+// GOTCHA: spread overrides earlier props — order matters
+<input type="text" {...props} />  // props.type overrides "text" if present
+<input {...props} type="text" />  // type="text" always wins (last wins)
 ```
 ::
 
-## Spreading Props
+## Inline Object Literals and Re-render Traps
 
-The spread operator forwards an entire object as individual props — useful for pass-through components, but it obscures exactly which props a component receives.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="inline_object_renders.js"}
 ```javascript
-function Input(props) {
-  return <input {...props} className="styled-input" />
+// ANTI-PATTERN: inline object/array literals create NEW references every render
+function Parent({ data }) {
+  return <Child
+    config={{ theme: 'dark', size: 'lg' }}  // ← new object every render
+    items={[1, 2, 3]}                        // ← new array every render
+    style={{ color: 'red' }}                 // ← new object every render
+  />
 }
+// If Child is React.memo'd, the memo BREAKS — new object/array reference every
+// render means shallow comparison fails, Child re-renders every time.
+// These literals also break useEffect/useCallback dependency arrays (Ch 6, 9).
 
-// Usage: type, value, onChange, placeholder all forwarded transparently
-<Input type="email" value={email} onChange={handleChange} placeholder="you@example.com" />
-```
-::
+// FIX: hoist stable references outside the component or use useMemo
+const STATIC_CONFIG = { theme: 'dark', size: 'lg' }  // module-level constant
+const STATIC_ITEMS = [1, 2, 3]
 
-::code-wrapper{language="javascript"}
-```javascript
-// Gotcha: prop order matters — later spreads/props win
-function Input(props) {
-  // className is fixed regardless of what's passed in, because it comes AFTER the spread
-  return <input {...props} className="styled-input" />
+function Parent({ data }) {
+  return <Child config={STATIC_CONFIG} items={STATIC_ITEMS} />
 }
-// If you need callers to be able to override className, spread AFTER instead:
-function Input({ className, ...rest }) {
-  return <input {...rest} className={className ?? 'styled-input'} />
-}
+// Now the references are stable — React.memo on Child works correctly.
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Reach for an object lookup map (`STATUS_LABELS[state]`) instead of chained ternaries once you have more than two conditional branches in JSX; it reads top-to-bottom and survives future branches without nesting.
-- **Debug** — When React logs "Each child in a list should have a unique key prop," it's not being pedantic — attach a debugger or `console.log` to confirm your key source (usually an id) is actually unique and stable before silencing the warning with `index` as a shortcut.
-- **Performance** — Fragments (`<>...</>`) don't add DOM nodes, which keeps deeply nested layouts (tables, grids, flex/grid children) free of unnecessary wrapper `<div>`s that can break CSS selectors like `:nth-child` or `display: contents` assumptions.
-- **Idiom** — Prefer `{condition && <X />}` for "render or nothing," but coerce numeric conditions to booleans explicitly (`count > 0 &&`, not `count &&`) to avoid the stray-`0` rendering bug.
-- **Debug** — `{/* comment */}` is the only valid comment syntax directly inside JSX children; a bare `// comment` on its own line without surrounding `{}` will be rendered as literal text.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] JSX is just an object — you can store it, pass it, return it from
+// functions. Use this to build render helpers without creating components:
+// const icon = isLoading ? <Spinner/> : <CheckIcon/>
+
+// [Idiom] Use early returns for guard clauses instead of deep nesting.
+// if (!data) return null is cleaner than {data && <div>...</div>} for multi-line.
+
+// [Performance] Hoist stable object/array literals to module scope to avoid
+// breaking React.memo on children. Every inline {{...}} creates a new reference.
+
+// [Debug] If a number "0" appears unexpectedly in your UI, check for
+// {count && <Component/>} — use {count > 0 && <Component/>} instead.
+
+// [Idiom] <Fragment key={...}> is required when mapping to multiple sibling
+// elements per item. The short <> syntax can't take a key.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`0 && <Component />` renders the text "0"** — because `0` is a valid, non-nullish React child, not because of any special-casing. Only `false`, `null`, `undefined`, and `true` render as nothing; every other falsy-ish value (`0`, `NaN`, `''` is fine — empty string renders nothing) has its own rendering rule and `0` is the one that bites people.
-- **JSX attribute values must be expressions, not raw strings when dynamic** — `<div id="user-{id}">` does not interpolate; it produces the literal string `"user-{id}"`. Use `` <div id={`user-${id}`}> `` or `<div id={'user-' + id}>`.
-- **`style` takes an object with camelCase keys, not a CSS string** — `<div style="color: red">` throws a React warning and is silently ignored; the correct form is `<div style={{ color: 'red', fontSize: '14px' }}>` — note the double braces (one for the JS expression, one for the object literal).
-- **Boolean HTML attributes need explicit `={true}`/`={false}` or omission, not string `"false"`** — `<input disabled="false" />` is still disabled, because any non-empty string is truthy in HTML's eyes for boolean attributes. Write `<input disabled={false} />` or omit the prop entirely.
-- **Whitespace and newlines inside JSX collapse like HTML** — a value split across lines for readability (`<p>{firstName}\n{lastName}</p>`) does not insert a space between them the way you might expect from the literal source formatting; JSX trims leading/trailing whitespace per line and joins lines with a single space, which can silently glue two adjacent words together if you're not using an explicit `{' '}` separator.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] && with 0 renders "0" on screen. 0 is falsy but React renders numbers.
+// Fix: {count > 0 && <Badge/>} or {count ? <Badge/> : null}
+
+// [Gotcha] Empty string "" is rendered by React. null, undefined, false, true
+// are NOT rendered. If you conditionally render an empty string for "hide",
+// it still takes up space in some layouts. Use null instead.
+
+// [Gotcha] Spread {...props} overrides earlier explicit props if it comes AFTER
+// them. Put spread FIRST if you want explicit props to win, LAST if spread wins.
+
+// [Gotcha] You can't use if/for/while/switch inside {} — they're statements.
+// Use ternary, &&, .map(), or extract to a variable/function.
+
+// [Gotcha] JSX comments ({/* */}) are NOT regular HTML comments (<!-- -->).
+// HTML comments inside JSX are treated as text and rendered to the DOM.
+// Always use {/* comment */} for JSX comments.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A cart badge is supposed to hide when the cart is empty. Users report a stray `0` flashing on the page on every fresh visit.
+A developer renders a list of products but sees a React warning: "Each child in a list should have a unique key prop." The code looks correct:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
-function CartBadge({ itemCount }) {
+function ProductList({ products }) {
   return (
-    <header>
-      <CartIcon />
-      {itemCount && <span className="badge">{itemCount}</span>}
-    </header>
+    <div>
+      {products.map(product => (
+        <>
+          <h3>{product.name}</h3>
+          <p>{product.price}</p>
+        </>
+      ))}
+    </div>
   )
 }
 ```
@@ -389,17 +279,47 @@ function CartBadge({ itemCount }) {
 <details>
 <summary>Answer</summary>
 
-On a fresh visit `itemCount` is `0`. `0 && <span>...</span>` short-circuits and evaluates to `0` (not `false`), and React renders numbers as text — so the literal digit `0` appears in the header instead of nothing.
+The fragment uses the short `<>` syntax, which **cannot accept a `key` prop**. When mapping to fragments, you must use the explicit `<Fragment key={...}>` form:
 
-**The lesson**: guard numeric conditions in `&&` expressions with an explicit comparison (`itemCount > 0 && ...`) so the left operand is always a real boolean, since React only treats `false`/`null`/`undefined` as "render nothing."
+```javascript
+import { Fragment } from 'react'
+
+function ProductList({ products }) {
+  return (
+    <div>
+      {products.map(product => (
+        <Fragment key={product.id}>
+          <h3>{product.name}</h3>
+          <p>{product.price}</p>
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+```
+
+Without a key on the fragment, React can't track which `<h3>+<p>` pair corresponds to which product during reconciliation — adding/removing/reordering products will cause incorrect DOM updates.
 
 </details>
 
 ## Key Takeaways
 
-- JSX compiles to expressions (element objects), so it can only contain expressions in `{}`, never statements like `if`/`for`.
-- Every JSX tree needs exactly one root — use a `Fragment` (`<>...</>`) to group siblings without adding a DOM node.
-- Attributes are camelCase DOM property names (`className`, `htmlFor`, `onClick`), with `aria-*`/`data-*` as hyphenated exceptions.
-- `&&` is the standard "render or nothing" pattern, but only safe with a strict boolean left operand — numeric falsy values like `0` render as text.
-- `.map()` over an array of JSX requires a stable, unique `key` per item — missing or unstable keys cause reconciliation bugs, not just console warnings.
-- `style` takes a JS object with camelCase properties, never a CSS string.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. JSX compiles to React.createElement() → plain element objects. It's an
+//    expression, so you can store it, pass it, return it from functions.
+
+// 2. {} evaluates ONE expression — no statements (if/for/switch). Use ternary,
+//    &&, .map(), or extract to a variable/function for complex logic.
+
+// 3. {count && <X/>} renders "0" when count is 0 — use {count > 0 && <X/>}.
+//    React renders 0 and "" as text; ignores null, undefined, false, true.
+
+// 4. Fragments group siblings without extra DOM. Use <Fragment key={...}> in
+//    lists — the short <> syntax can't take a key prop.
+
+// 5. Inline object/array literals ({{...}} and {[...]}) create new references
+//    every render → breaks React.memo, useEffect deps, useCallback deps.
+//    Hoist stable values to module scope or use useMemo.
+```
+::

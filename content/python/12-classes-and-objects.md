@@ -1,28 +1,66 @@
 # 12 — Classes & Objects
 
-## Defining a Class
+## Production Data Classes — `@dataclass` with Validation and `__slots__`
 
 ::code-wrapper{language="python"}
 ```python
+# ── Production: a validated, memory-efficient data class ──
+# Combines @dataclass (auto __init__/__repr__/__eq__) with __slots__ (no __dict__)
+# and __post_init__ for validation that can't be expressed in type hints alone.
+
+from dataclasses import dataclass, field
+from datetime import datetime
+
+@dataclass(frozen=True, slots=True)
 class User:
-    def __init__(self, name, email):
-        self.name = name       # instance attribute — unique per object
-        self.email = email
+    """
+    Immutable user record — frozen=True makes it hashable (can be a dict key/set member),
+    slots=True eliminates __dict__ overhead (~40% memory reduction per instance).
+    """
+    id: int
+    email: str
+    name: str
+    created_at: datetime = field(default_factory=datetime.now)  # mutable default → factory
+    roles: frozenset[str] = field(default_factory=frozenset)     # frozenset: immutable + hashable
 
-    def greeting(self):
-        return f"Hello, {self.name}!"
+    def __post_init__(self):
+        # frozen=True means attributes can't be set normally — use object.__setattr__
+        # to work around the frozen restriction for validation-driven adjustments
+        if not self.email or "@" not in self.email:
+            raise ValueError(f"invalid email: {self.email!r}")
+        if self.id <= 0:
+            raise ValueError(f"id must be positive, got {self.id}")
 
-ada = User("Ada Lovelace", "ada@example.com")
-grace = User("Grace Hopper", "grace@example.com")
+# Frozen + slots dataclass is hashable → usable as dict keys and set members
+user = User(id=1, email="ada@example.com", "name"="Ada")
+print(user)   # User(id=1, email='ada@example.com', name='Ada', created_at=..., roles=frozenset())
+# user.email = "x"  # FrozenInstanceError — can't mutate a frozen dataclass
 
-print(ada.greeting())     # Hello, Ada Lovelace!
-print(grace.name)           # Grace Hopper
-print(type(ada))              # <class '__main__.User'>
-print(isinstance(ada, User))    # True
+# Can be used as a dict key (hashable because frozen + all fields hashable)
+user_index = {user: "admin"}
+
+# ── Memory comparison: __dict__ vs __slots__ ──
+import sys
+
+@dataclass
+class UserDict:
+    id: int
+    email: str
+    name: str
+
+@dataclass(slots=True)
+class UserSlots:
+    id: int
+    email: str
+    name: str
+
+ud = UserDict(1, "a@b.com", "Ada")
+us = UserSlots(1, "a@b.com", "Ada")
+print(f"with __dict__:    {sys.getsizeof(ud) + sys.getsizeof(ud.__dict__)} bytes")
+print(f"with __slots__:   {sys.getsizeof(us)} bytes")
+# Typical: ~232 bytes vs ~64 bytes — 3.6× smaller, compounds at millions of instances
 ```
 ::
-
-`__init__` is the **initializer**, not a constructor in the C++/Java sense — by the time `__init__` runs, the object already exists (created by `__new__`, covered in chapter 23). `__init__`'s job is only to populate the already-created instance's attributes.
 
 ## `self` Is Not Magic
 

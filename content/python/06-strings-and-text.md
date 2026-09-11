@@ -1,35 +1,87 @@
 # 06 — Strings & Text
 
-## Strings Are Immutable Sequences of Unicode Code Points
-
-Every `str` in Python 3 is a sequence of Unicode code points — there is no separate "character" type (indexing a string returns a length-1 string). Strings are immutable: no operation ever changes a `str` object in place; every "modification" produces a new string.
+## String Representation — Unicode Code Points, Not Bytes or Graphemes
 
 ::code-wrapper{language="python"}
 ```python
-s = "hello"
-print(s[0])        # 'h'  — a length-1 str, not a "char" type
-# s[0] = "H"       # TypeError: 'str' object does not support item assignment
+# Python str stores Unicode CODE POINTS (integers in 0..0x10FFFF).
+# This is NEITHER bytes (the on-disk encoding) NOR graphemes (what users see).
 
-s2 = "H" + s[1:]     # must build a NEW string
-print(s2)              # "Hello"
-print(s is s2)           # False — different objects
+# ── The three-level model ──
+s = "café"
+print(len(s))                     # 4 — four CODE POINTS: c, a, f, é
+print(len(s.encode("utf-8")))     # 5 — five BYTES (é is 2 bytes in UTF-8: 0xC3 0xA9)
+# User-perceived "characters" (grapheme clusters) can differ from both — see below
+
+# ── Code point ↔ integer conversion ──
+print(ord("A"))                   # 65 — the integer value of code point U+0041
+print(chr(65))                    # 'A' — code point U+0041 → str
+print(hex(ord("é")))             # '0xe9' — U+00E9 (precomposed form)
+
+# ── Production: Unicode normalization before comparison/lookup ──
+# "é" has TWO valid Unicode representations:
+#   NFC (precomposed):  U+00E9      — one code point, "é"
+#   NFD (decomposed):   U+0065 + U+0301 — "e" + combining acute accent — two code points
+import unicodedata
+
+nfc = "é"                          # precomposed — \u00e9
+nfd = "e\u0301"                    # decomposed — "e" + combining accent
+
+print(nfc == nfd)                  # False! — different code point sequences
+print(len(nfc), len(nfd))          # 1 2 — different lengths!
+print(unicodedata.normalize("NFC", nfd) == nfc)   # True — normalize before comparing
+
+# ANTI-PATTERN: using user-supplied strings as dict keys without normalization
+# A user who types "café" via a compose key vs. a dead-key accent produces
+# different code point sequences — they'll be DIFFERENT keys in a dict.
+user_input_a = "café"              # NFC from one input method
+user_input_b = "cafe\u0301"        # NFD from another input method
+cache = {user_input_a: "data"}
+print(user_input_b in cache)       # False — miss! same visual string, different code points
+
+# CORRECT: normalize all strings to NFC before use as keys/comparisons
+def normalize_key(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
+
+cache = {normalize_key(user_input_a): "data"}
+print(normalize_key(user_input_b) in cache)   # True — normalized comparison works
 ```
 ::
 
-## Creating Strings
-
 ::code-wrapper{language="python"}
 ```python
-single = 'hello'
-double = "hello"          # functionally identical — use double consistently (PEP 8 doesn't mandate, but be consistent)
-triple = """multi
-line
-string"""                  # preserves newlines literally
-raw = r"C:\Users\name"       # raw string — backslashes are NOT escape sequences
-byte_string = b"raw bytes"     # bytes, not str — see below
+# ── Grapheme clusters: what users perceive vs. what len() reports ──
+# Emoji and flags are the most common source of "len() is wrong" bugs.
 
-print(triple)
-print(raw)                      # C:\Users\name  (the \U and \n are literal characters)
+flag = "🇺🇸"                       # US flag — two REGIONAL INDICATOR code points
+print(len(flag))                   # 2 — two code points, one visible glyph
+print([hex(ord(c)) for c in flag]) # ['0x1f1fa', '0x1f1f8'] — U=U+1F1FA, S=U+1F1F8
+
+family = "👨‍👩‍👧‍👦"                  # family emoji — joined by ZWJ (zero-width joiner)
+print(len(family))                 # 7 — seven code points (4 people + 3 ZWJ), one glyph
+# ZWJ = U+200D — invisible joiner that tells the renderer to combine adjacent emoji
+
+# For correct user-perceived character counting, use the \X regex grapheme cluster
+# (requires the `regex` module, not stdlib `re`, which lacks grapheme support)
+# import regex
+# print(len(regex.findall(r"\X", family)))   # 1 — one grapheme cluster
+
+# ── Production: truncating user-display text at grapheme boundaries ──
+# Naive truncation at code point N can split a combining character from its base
+def truncate_naive(s: str, max_len: int) -> str:
+    """WRONG — can split combining accents from their base characters."""
+    return s[:max_len]              # cuts at code point boundary, not grapheme boundary
+
+def truncate_safe(s: str, max_len: int) -> str:
+    """CORRECT — counts grapheme clusters, not code points (requires `regex` module)."""
+    import regex
+    clusters = regex.findall(r"\X", s)
+    return "".join(clusters[:max_len])
+
+# "café" in NFD form: c, a, f, e, combining-acute — truncating at 4 drops the accent
+nfd_cafe = "cafe\u0301"
+print(truncate_naive(nfd_cafe, 4))   # "cafe" — accent lost! displays as "cafe" not "café"
+# print(truncate_safe(nfd_cafe, 4))  # "café" — correct, keeps the combining cluster intact
 ```
 ::
 

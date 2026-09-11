@@ -1,101 +1,99 @@
 ---
-title: Learn CSS — From Zero to Pro
-description: A comprehensive, edge-case-covering, idiomatic CSS curriculum. 22 chapters covering selectors, the cascade, box model, positioning, flexbox, grid, responsive design, animations, transitions, variables, and modern CSS features. Go from beginner to pro CSS developer.
+title: "CSS — Code-First Engineering Reference"
+description: "A 22-chapter code-first CSS reference for mid-to-senior engineers. Engine internals, cascade layers, box-model formatting contexts, flex/grid algorithms, container queries, the compositor pipeline, GPU layers, i18n logical properties, and production architecture. Dense annotated code, anti-pattern→correct pairs, edge cases, and gotchas."
 ---
 
-# 🎨 Learn CSS — From Zero to Pro
+# 🎨 CSS — Code-First Engineering Reference
 
-A comprehensive, edge-case-covering, idiomatic CSS curriculum. Each document is self-contained and covers its concept deeply enough that a careful reader can go from beginner to pro CSS developer.
+A 22-chapter deep-dive reference for mid-to-senior engineers. Each chapter is structured around annotated production code: complex implementations, anti-pattern→correct pairs, performance tips, and edge cases. Minimal prose, maximum code. DevTools is the REPL.
 
-## How to Use This Course
+## How to Use This Reference
 
-1. **Read sequentially** for a structured path (01 → 22).
-2. **Jump to a chapter** as a reference when you hit a concept in the wild.
-3. **Practice in a browser** — DevTools is your REPL.
-4. **Read the MDN docs** alongside each chapter.
+1. **Read sequentially** (01 → 22) for a structured engine-deep path.
+2. **Jump to a chapter** when you hit a concept in production — every chapter is self-contained.
+3. **Skim the anti-pattern → correct pairs** — they're the highest-signal sections.
+4. **Read the 🧠 Spot the Bug** at the end of each chapter before checking the answer.
 
 ## Prerequisites
 
-- A modern browser (Chrome, Firefox, Safari, Edge).
+- A modern browser (Chrome, Firefox, Safari, Edge). DevTools (`Cmd+Opt+I`).
 - A code editor (VS Code recommended).
-- Basic HTML knowledge.
+- Working HTML knowledge.
+- Comfort reading CSS — this is a reference, not a beginner tutorial.
 
 ## Curriculum
 
-### Part I — Foundations
+### Part I — Engine Foundations
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 01 | [Introduction & Setup](/css/01-introduction-and-setup) | History, adding CSS to HTML, DevTools, box model preview. |
-| 02 | [Selectors & Specificity](/css/02-selectors-and-specificity) | Element/class/id, combinators, specificity, the cascade. |
-| 03 | [The Box Model](/css/03-box-model) | content/padding/border/margin, box-sizing, margins collapse. |
-| 04 | [Colors & Units](/css/04-colors-and-units) | RGB/HSL/LCH, px/em/rem/vw/vh, %, calc(). |
-| 05 | [Typography & Text](/css/05-typography-and-text) | font-family, size, weight, line-height, text-align, letter-spacing. |
+| 01 | [CSS Engine Internals & Production Setup](/css/01-introduction-and-setup) | Parse → box tree → cascade → layout → paint → composite. `@layer` architecture from line one. |
+| 02 | [Selectors, Specificity & the Cascade Algorithm](/css/02-selectors-and-specificity) | Right-to-left matching, the 4-tuple specificity, cascade layers as the precedence primitive. |
+| 03 | [The Box Model: Formatting Contexts & Margin Collapse](/css/03-box-model) | `box-sizing`, BFC, margin-collapse rules, the `min-width: auto` flex/grid killer. |
+| 04 | [Color Spaces, Units & the Fluid Math of CSS](/css/04-colors-and-units) | OKLCH perceptual uniformity, em/rem compounding, `calc`/`min`/`max`/`clamp`, `color-mix`. |
+| 05 | [Typography Engine: Font Loading & Text Overflow](/css/05-typography-and-text) | `font-display` strategies, variable font axes, unitless line-height, single/multi-line truncation. |
 
-### Part II — Layout
-
-| # | Topic | Why It Matters |
-|---|---|---|
-| 06 | [Display & Positioning](/css/06-display-and-positioning) | block/inline/flex/grid, static/relative/absolute/fixed/sticky. |
-| 07 | [Flexbox](/css/07-flexbox) | One-dimensional layout, alignment, wrapping, flex-grow/shrink. |
-| 08 | [CSS Grid](/css/08-css-grid) | Two-dimensional layout, tracks, areas, alignment, subgrid. |
-| 09 | [Responsive Design & Media Queries](/css/09-responsive-design) | Viewport, breakpoints, mobile-first, container queries. |
-| 10 | [Floats & Positioning Deep Dive](/css/10-floats-and-positioning) | Floats (legacy), z-index, stacking contexts, clipping. |
-
-### Part III — Visual Design
+### Part II — Layout Algorithms
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 11 | [Backgrounds & Gradients](/css/11-backgrounds-and-gradients) | background-image, gradients, background-size/position/clip. |
-| 12 | [Borders, Shadows & Outlines](/css/12-borders-shadows-and-outlines) | border, border-radius, box-shadow, outline, :focus-visible. |
-| 13 | [Animations & Transitions](/css/13-animations-and-transitions) | transition, @keyframes, animation, easing, will-change. |
-| 14 | [Filters, Blend Modes & Masking](/css/14-filters-blend-modes-and-masking) | filter, backdrop-filter, mix-blend-mode, mask, clip-path. |
+| 06 | [Display, Position & the Containing Block](/css/06-display-and-positioning) | Formatting contexts, the five position schemes, the transform-ancestor trap that breaks `fixed`. |
+| 07 | [Flexbox: One-Dimensional Layout & the flex Algorithm](/css/07-flexbox) | grow/shrink/basis resolution, `min-width: auto`, gap, the app-layout pattern. |
+| 08 | [CSS Grid: Two-Dimensional Layout & Track Resolution](/css/08-css-grid) | `fr` distribution, `minmax(0, 1fr)` overflow fix, `auto-fit` vs `auto-fill`, `grid-template-areas`, subgrid. |
+| 09 | [Responsive Design: Media Queries, Container Queries & Fluid CSS](/css/09-responsive-design) | Mobile-first, fluid `clamp`/`auto-fit`, container queries, `prefers-*` media features. |
+| 10 | [Floats, z-index & the Stacking Context Model](/css/10-floats-and-positioning) | Stacking-context creation rules, the ancestor-z-index trap, `isolation: isolate`, `clip-path`. |
 
-### Part IV — Modern CSS
+### Part III — Visual Compositing
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 15 | [CSS Variables (Custom Properties)](/css/15-css-variables) | --var, var(), cascading, theming, runtime values. |
-| 16 | [Logical Properties & Writing Modes](/css/16-logical-properties-and-writing-modes) | inline/block, start/end, RTL, vertical writing, i18n. |
-| 17 | [Modern CSS Features (2023+)](/css/17-modern-css-features) | nesting, :has(), @layer, container style queries, color-mix. |
-| 18 | [Architecture & Methodology](/css/18-architecture-and-methodology) | BEM, OOCSS, SMACSS, ITCSS, Atomic/Tailwind, @layer. |
+| 11 | [Backgrounds & Gradients: Layering & the Shorthand Reset Trap](/css/11-backgrounds-and-gradients) | Multiple layers, `background-size` `/` syntax, `background-clip: text`, conic-gradient pie charts. |
+| 12 | [Borders, Shadows, Outlines & Focus States](/css/12-borders-shadows-and-outlines) | Layered elevation, `outline` vs `border` (layout shift), `:focus-visible`, the overflow-clips-shadow trap. |
+| 13 | [Animations & Transitions: The Compositor Pipeline](/css/13-animations-and-transitions) | GPU vs layout-triggering properties, `cubic-bezier` overshoot, the `height: auto` trap, `grid-template-rows`. |
+| 14 | [Filters, Blend Modes & Masking: Compositing Pipeline](/css/14-filters-blend-modes-and-masking) | `drop-shadow` vs `box-shadow`, `backdrop-filter` translucency, `mix-blend-mode` contexts, `mask` soft fades. |
+
+### Part IV — Modern CSS Primitives
+
+| # | Topic | Why It Matters |
+|---|---|---|
+| 15 | [CSS Variables: Custom Properties as the Theming Engine](/css/15-css-variables) | Cascade/inheritance, invalid-value semantics, runtime theming, JS `setProperty` bridge. |
+| 16 | [Logical Properties & Writing Modes: i18n-Ready CSS](/css/16-logical-properties-and-writing-modes) | inline/block axes, logical equivalents, vertical-rl, the logical/physical mixing trap. |
+| 17 | [Modern CSS (2023+): Nesting, :has(), Layers & color-mix](/css/17-modern-css-features) | Native nesting, `:has()`, `@layer`, container style queries, `color-mix`, scroll-driven animations. |
+| 18 | [Architecture: BEM, OOCSS, ITCSS, Atomic & Cascade Layers](/css/18-architecture-and-methodology) | Flat-specificity naming, structure/skin separation, `@layer` as the native architecture primitive. |
 
 ### Part V — Production Engineering
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 19 | [CSS Performance](/css/19-performance) | Critical CSS, repaints, containment, will-change, content-visibility. |
-| 20 | [Browser Compatibility & Prefixes](/css/20-browser-compatibility) | Vendor prefixes, @supports, progressive enhancement, caniuse. |
-| 21 | [Preprocessors & Build Tools](/css/21-preprocessors-and-build-tools) | Sass, PostCSS, Vite, webpack, CSS Modules, Tailwind. |
-| 22 | [Exercises & Projects](/css/22-exercises-and-projects) | 7 projects from reset to a full capstone landing page. |
+| 19 | [CSS Performance: Render Path, Containment & GPU Layers](/css/19-performance) | Critical CSS, layout thrashing, `content-visibility: auto`, `contain`, `will-change` memory cost. |
+| 20 | [Browser Compatibility: Prefixes, @supports & Progressive Enhancement](/css/20-browser-compatibility) | Autoprefixer/browserslist, `@supports` feature detection, the Safari `-webkit-` laggard trap. |
+| 21 | [Preprocessors & Build Tools: Sass, PostCSS, Vite & CSS Modules](/css/21-preprocessors-and-build-tools) | `@use` vs deprecated `@import`, compile-time vs runtime variables, PostCSS chains, CSS Modules. |
+| 22 | [Exercises & Projects: Production CSS Systems](/css/22-exercises-and-projects) | 7 projects: layered reset, navbar, grid dashboard, glassmorphism, tooltips, loaders, capstone. |
 
 ## Learning Path Suggestions
 
-### If you're new to web development
+### Mid-level developer moving to senior
 
-1. Read 01–05 in order (foundations).
-2. Build simple layouts with Flexbox (07) and Grid (08).
-3. Make them responsive (09).
-4. Do exercises 1–5 in chapter 22.
+Read 01 (engine + `@layer`), 02 (cascade algorithm), 07–08 (flex/grid algorithms — the `min-width` and `minmax(0,1fr)` traps), 13 (compositor pipeline — what animates at 60fps), 17 (`:has()`, `@layer`, container queries), 19 (render path + `content-visibility`), 18 (architecture).
 
-### If you're coming from a design background
+### Coming from a framework (React/Vue/Tailwind)
 
-Read 02 (selectors), 03 (box model), 07–08 (Flexbox/Grid — the modern layout tools), 13–14 (animations/transforms). Skip the units/colors chapter (you know them).
+Read 02 (specificity — you've been insulated), 06 (containing block — the `fixed` + transform trap), 08 (grid track resolution), 13 (which properties animate on GPU), 15 (CSS variables as the JS↔CSS bridge), 18 (BEM + `@layer` vs utility-first).
 
-### If you're a developer who "knows some CSS"
+### Senior frontend engineer
 
-Read 07–08 (Flexbox/Grid — you may be using floats or outdated patterns), 15 (variables), 16 (calc/clamp — modern responsive), 18 (`:has()`, `aspect-ratio`, container queries — recent additions), 20 (performance).
+Skim 01–05. Read closely: 10 (stacking contexts — the cage model), 13 (compositor pipeline), 14 (compositing gotchas), 16 (logical properties for i18n), 17 (2023+ features), 19 (`content-visibility`, `contain`, GPU layers), 21 (Sass vs CSS variables, build pipeline).
 
-### If you're a senior frontend engineer
+### Performance-focused
 
-Skim 01–10. Read 09 (container queries), 13–14 (animations/transforms), 15–16 (variables/functions), 18 (`:has()`, subgrid, scroll-snap), 19 (progressive enhancement), 20 (containment, `will-change`), 21 (pitfalls) closely.
+Read 13 (compositor-only properties), 19 (render path, `content-visibility: auto`, `contain`, `will-change`), 11 (shorthand reset trap), 05 (font loading, `font-display`), 09 (fluid CSS vs media queries).
 
 ## Companion Resources
 
 - [MDN CSS Docs](https://developer.mozilla.org/en-US/docs/Web/CSS) — the definitive reference.
+- [Can I Use](https://caniuse.com) — browser compatibility tables. Check Safari specifically.
+- [web.dev CSS](https://web.dev/learn/css) — Google's CSS learning material.
 - [CSS Tricks](https://css-tricks.com) — practical guides and almanac.
-- [Can I Use](https://caniuse.com) — browser compatibility tables.
-- [web.dev](https://web.dev/learn/css) — Google's CSS learning material.
 - [Josh W. Comeau's CSS Tutorials](https://www.joshwcomeau.com/css/) — intuitive explanations.
 - [CSS Gradient Generator](https://cssgradient.io) — visual gradient tool.
 
@@ -103,20 +101,11 @@ Skim 01–10. Read 09 (container queries), 13–14 (animations/transforms), 15�
 
 ::code-wrapper{language="bash"}
 ```bash
-# VS Code with the following extensions:
-# - "Live Server" (ritwickdey.LiveServer) — hot reload on save
-# - "CSS Peek" (pranaygp.vscode-css-peek) — jump to definition
-# - "Tailwind CSS IntelliSense" (bradlc.vscode-tailwindcss) — if using Tailwind
-
-# Browser DevTools (built-in):
-# - Chrome: Cmd+Opt+I → Elements tab
-# - Firefox: Cmd+Opt+I → Inspector tab
-# - Safari: Cmd+Opt+I (enable Develop menu first)
+# VS Code extensions: Live Server (hot reload), CSS Peek (jump to definition), Tailwind IntelliSense (if Tailwind)
+# Browser DevTools: Cmd+Opt+I → Elements/Inspector. Coverage tab (unused CSS), Rendering tab (paint flashing, CLS), Layers panel (GPU layers).
 ```
 ::
 
 ## License
 
 These notes are yours to use, share, and modify.
-
-🎨

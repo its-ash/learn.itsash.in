@@ -1,193 +1,309 @@
+---
+title: "13 — Lists, Keys & Reconciliation"
+description: "Reconciliation algorithm internals, key prop mechanics, why index keys corrupt state on reorder, virtual DOM diffing strategy, production patterns for dynamic lists. Code-first reference for mid-to-senior React engineers."
+---
+
 # 13 — Lists, Keys & Reconciliation
 
-Every earlier chapter has used `key` on list items with a one-line justification ("React needs it"). This chapter explains *why*, in enough mechanical detail that the many `key`-related footguns stop feeling arbitrary and start feeling inevitable.
+## The Reconciliation Algorithm
 
-## What Reconciliation Actually Does
-
-When a component re-renders, React doesn't diff real DOM nodes against each other — it diffs the new React element tree (the lightweight objects JSX compiles to) against the previous render's tree, and computes the minimal set of real DOM mutations needed to make the DOM match. This process is called **reconciliation**, and its algorithm is a heuristic, not a general tree-diff — a truly general tree-diffing algorithm is O(n³) for n nodes, which is far too slow to run on every render. React's heuristic runs in O(n) by making two simplifying assumptions:
-
-1. Two elements of different types produce different trees — React tears down the old subtree entirely and builds a new one, rather than trying to find similarities.
-2. Elements of the same type in the same position are assumed to represent the *same conceptual thing* across renders, and get updated in place rather than rebuilt.
-
-Assumption 2 is where lists get interesting: within an array of sibling elements, "position" is ambiguous by default — that's exactly the ambiguity `key` exists to resolve.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="reconciliation_overview.js"}
 ```javascript
-function Toggle({ showFirst }) {
-  return showFirst ? <input type="text" /> : <input type="checkbox" />
+// When a component re-renders, React does NOT diff real DOM nodes.
+// It diffs the NEW React element tree against the PREVIOUS render's element tree,
+// then computes the minimal set of real DOM mutations to apply.
+
+// This process is called RECONCILIATION. It uses a heuristic algorithm, NOT
+// a general tree-diff (a general tree-diff is O(n³) — far too slow for UIs).
+
+// React's heuristic runs in O(n) via TWO assumptions:
+//
+// 1. DIFFERENT element types → different trees
+//    <div> → <span> : React tears down the entire old subtree, builds a new one.
+//    No reuse, no diffing of children. Full unmount + remount.
+//
+// 2. SAME element type + SAME position → same underlying thing
+//    <div className="a"> → <div className="b"> : React keeps the DOM node,
+//    just updates changed attributes (className, style, etc.) in place.
+//    Children are then diffed recursively.
+
+// The "position" assumption is where lists get dangerous:
+// In an array of siblings, "position" is ambiguous without keys.
+// That ambiguity is what the `key` prop exists to resolve.
+
+// ── Annotated diffing pseudocode (what React does internally) ──
+
+function reconcileChildren(prevChildren, nextChildren) {
+  // prevChildren: [elementA, elementB, elementC]  (from last render)
+  // nextChildren: [elementB, elementC, elementD]  (from this render, A removed, D added)
+
+  // STEP 1: If nextChildren has keys, match by key first
+  const prevByKey = new Map(prevChildren.map(c => [c.key, c]))
+  const matched = []
+  const toCreate = []
+
+  for (const nextChild of nextChildren) {
+    if (nextChild.key !== null && prevByKey.has(nextChild.key)) {
+      // Key match: reuse the previous element's DOM node + state
+      matched.push(reuseAndUpdate(prevByKey.get(nextChild.key), nextChild))
+      prevByKey.delete(nextChild.key)
+    } else {
+      // No key match: this is a new element → create from scratch
+      toCreate.push(nextChild)
+    }
+  }
+
+  // STEP 2: Any prev elements not matched by key → unmount (destroy DOM + state)
+  for (const [, unmatched] of prevByKey) {
+    unmount(unmatched)  // cleanup effects, remove DOM nodes, destroy state
+  }
+
+  // STEP 3: Create DOM for new elements
+  for (const newChild of toCreate) {
+    mount(newChild)
+  }
+
+  // STEP 4: Reorder matched DOM nodes into the correct positions
+  reorder(matched, nextChildren)
 }
 ```
 ::
 
-Same element type (`input`), same position — React updates the existing DOM node's attributes rather than removing and recreating it. But an `<input>` with `type="text"` holding typed text, switched to `type="checkbox"`, keeps the *same DOM node* with its internal state (like whatever the browser was tracking for that input) partially carried over in edge cases — this is exactly why type changes on the same element position can look buggy without an explicit `key` to force a fresh node.
+## Why Keys Exist: The Identity Problem
 
-## Why Lists Need Keys: The Identity Problem
-
-Without keys, React's default matching strategy for array children is **positional** — index 0 in the new array is matched against index 0 in the old array, index 1 against index 1, and so on, regardless of what the items actually *represent*.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="identity_problem.js"}
 ```javascript
-function TodoList({ todos }) {
+import { useState } from 'react'
+
+// Without keys, React's default matching strategy for array children is POSITIONAL:
+// new index-0 matches old index-0, new index-1 matches old index-1, etc.
+// regardless of what the items actually represent.
+
+// ANTI-PATTERN: no key prop (React warns in dev, falls back to positional matching)
+function TodoListNoKey({ todos }) {
   return (
     <ul>
       {todos.map(todo => <li>{todo.text}</li>)}
-      {/* No key prop — React warns in development and falls back to positional matching */}
+      {/* React console warning: "Each child in a list should have a unique key prop" */}
     </ul>
   )
 }
-```
-::
 
-If `todos` is `[{id: 1, text: 'Buy milk'}, {id: 2, text: 'Walk dog'}]` and the user deletes the first item, the new array is `[{id: 2, text: 'Walk dog'}]`. Positionally, React compares the new index-0 (`Walk dog`) against the old index-0 (`Buy milk`) — same element type (`li`), so React reuses that DOM node and merely **updates its text content** — it does not realize the "Buy milk" item was removed and "Walk dog" shifted up. Any per-item state living in that `<li>`'s subtree (an uncontrolled input's value, a CSS transition mid-flight, a child component's internal `useState`) stays attached to the *position*, not the *item*, and ends up displaying against the wrong data.
+// THE BUG this causes:
+// todos = [{ id: 1, text: 'Buy milk' }, { id: 2, text: 'Walk dog' }]
+// User deletes "Buy milk" → todos = [{ id: 2, text: 'Walk dog' }]
+//
+// Positional matching:
+//   old index-0 = "Buy milk"  →  new index-0 = "Walk dog"
+//   React sees: same type (li), same position (0) → "same thing, update in place"
+//   React reuses the old <li> DOM node and just updates its text content.
+//   It does NOT realize "Buy milk" was removed and "Walk dog" shifted up.
+//
+// Any per-item state (uncontrolled inputs, local useState, CSS transitions) attached
+// to that <li>'s subtree stays attached to the POSITION, not the ITEM.
+// Result: state ends up displaying against the wrong data.
 
-## Keys Restore Identity
-
-A stable, unique `key` tells React which old element each new element actually corresponds to, independent of array position — React matches by key first, then only falls back to creating/destroying elements for keys that didn't previously exist or no longer exist.
-
-::code-wrapper{language="javascript"}
-```javascript
-function TodoList({ todos }) {
+// CORRECT: stable unique key from the data
+function TodoListKeyed({ todos }) {
   return (
     <ul>
-      {todos.map(todo => <li key={todo.id}>{todo.text}</li>)}
+      {todos.map(todo => (
+        <li key={todo.id}>{todo.text}</li>
+      ))}
     </ul>
   )
 }
+// Now deleting id:1 is unambiguous:
+//   React sees key "1" is gone → removes exactly that <li> DOM node.
+//   Key "2" is still present → its <li> is left completely untouched.
+//   No update, no re-render, any state inside survives intact.
 ```
 ::
-
-Now deleting the "Buy milk" item (id `1`) is unambiguous: React sees that key `1` is gone, removes exactly that `<li>` DOM node, and leaves the `<li>` for key `2` completely untouched — no update, no re-render of its subtree beyond what its own props dictate, and any state living inside it survives intact because it's still attached to the same key, hence the same underlying "identity."
 
 ## The Index-as-Key Trap
 
-Using the array index as a key is common, and works fine for lists that are **never reordered, filtered, or have items inserted/removed from anywhere but the end** — but those are precisely the operations most real lists eventually need.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="index_key_trap.js"}
 ```javascript
-function EditableTodoList({ todos, onRemove }) {
+import { useState } from 'react'
+
+// ANTI-PATTERN: using array index as key for a mutable list
+function EditableTodoListBad({ todos, onRemove }) {
   return (
     <ul>
       {todos.map((todo, index) => (
         <li key={index}>
+          {/* Uncontrolled checkbox — its checked state lives in the DOM, not React */}
           <input type="checkbox" defaultChecked={todo.done} />
-          {todo.text}
+          <span>{todo.text}</span>
           <button onClick={() => onRemove(todo.id)}>Delete</button>
         </li>
       ))}
     </ul>
   )
 }
-```
-::
+// THE BUG:
+// todos = [
+//   { id: 1, text: 'Task A', done: true },   ← index 0, checkbox CHECKED
+//   { id: 2, text: 'Task B', done: false },  ← index 1, checkbox UNCHECKED
+// ]
+// User deletes Task A → todos = [{ id: 2, text: 'Task B', done: false }]
+//
+// React matches by key=index:
+//   old key=0 (Task A, checkbox checked) → new key=0 (Task B, done: false)
+//   React: "same key, same type → reuse DOM node, update props"
+//   The <li> DOM node is reused. The checkbox DOM node is reused.
+//   defaultChecked={todo.done} = false is set, BUT defaultChecked only applies
+//   on initial mount — it does NOT re-apply on reuse. The checkbox stays CHECKED
+//   (from Task A) even though Task B's done is false.
+//
+// The checkbox visually shows the WRONG state for Task B.
 
-Each `<li>` holds an *uncontrolled* checkbox (chapter 14) whose checked state lives entirely in the DOM, not in React state — React has no record of it and relies on the DOM node persisting to preserve it. Delete the first todo: the array shrinks, and every remaining item shifts down one index. React, matching by `key={index}`, believes item at index 0 is unchanged (same key, `0`), item at index 1 is unchanged (same key, `1`), and so on — it never sees the removal at all from a keying perspective, it just sees the *last* key disappear. So React reuses every existing `<li>` DOM node in place and only removes the final one — but the checkbox DOM nodes, having been reused, still hold whichever `defaultChecked` values they had *before* the shift. The checked states end up visually shifted by one relative to the todos they now render next to.
-
-::code-wrapper{language="javascript"}
-```javascript
-function EditableTodoList({ todos, onRemove }) {
+// CORRECT: key by stable identity
+function EditableTodoListGood({ todos, onRemove }) {
   return (
     <ul>
       {todos.map(todo => (
         <li key={todo.id}>
           <input type="checkbox" defaultChecked={todo.done} />
-          {todo.text}
+          <span>{todo.text}</span>
           <button onClick={() => onRemove(todo.id)}>Delete</button>
         </li>
       ))}
     </ul>
   )
 }
+// Deleting Task A (id:1):
+//   React sees key "1" is gone → removes that <li> entirely (including its checkbox).
+//   Key "2" is still present → its <li> + checkbox are untouched.
+//   Checkbox state stays correctly paired with its todo. ✓
 ```
 ::
 
-With `key={todo.id}`, deleting an item removes precisely that item's `<li>` (and its checkbox DOM node) — every other `<li>` is left completely alone, so its checkbox state stays correctly paired with its todo.
+## When Index-as-Key Is Actually Safe
 
-## When Index-as-Key Is Actually Fine
-
-The blanket "never use index as key" advice overstates the rule. Index-as-key is safe specifically when **all** of the following hold: the list is never reordered, items are never inserted or removed except at the end, and the list has no per-item state (no uncontrolled inputs, no local `useState` inside list items, no CSS transitions keyed to identity). A static list of navigation labels rendered once from a hardcoded array satisfies all three.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="index_key_safe.js"}
 ```javascript
-const NAV_ITEMS = ['Home', 'About', 'Contact']
+// Index-as-key is safe when ALL of these hold:
+// 1. The list is never reordered (no sort, no drag-and-drop)
+// 2. Items are never inserted/removed except at the END
+// 3. List items have NO per-item state (no uncontrolled inputs, no local useState,
+//    no CSS transitions keyed to identity)
+
+// SAFE: static navigation — never changes, no per-item state
+const NAV_ITEMS = ['Home', 'About', 'Products', 'Contact']
 
 function NavBar() {
   return (
     <nav>
       {NAV_ITEMS.map((label, index) => (
         <a key={index} href={`/${label.toLowerCase()}`}>{label}</a>
-        // Safe: NAV_ITEMS is a fixed constant — never reordered, filtered, or mutated
       ))}
     </nav>
   )
 }
+
+// SAFE: rendering a fixed set of columns from a static schema
+function DataTable({ row, columns }) {
+  return (
+    <tr>
+      {columns.map((col, index) => (
+        <td key={index}>{row[col.field]}</td>
+      ))}
+    </tr>
+  )
+  // columns is a fixed schema that never reorders — index is stable.
+}
+
+// NEVER SAFE: any list that can be filtered, sorted, prepended, or
+// have items removed from anywhere but the end.
 ```
 ::
 
-## Keys Must Be Stable, Unique Among Siblings — Not Globally
+## Key Requirements: Stable, Unique Among Siblings
 
-A key only needs to be unique among its *immediate siblings* in that render, not globally unique across the whole app — the same key value can appear in two different lists (or the same list rendered in two different parent components) with no conflict, because reconciliation compares each list independently.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="key_requirements.js"}
 ```javascript
+import { Fragment } from 'react'
+
+// Keys must be:
+// 1. STABLE across renders — the same item must get the same key every render
+// 2. UNIQUE among siblings in the same array — NOT globally unique
+// 3. From the data itself (database id, UUID) — not derived at render time
+
+// ── Sibling uniqueness, not global ──
 function Dashboard({ recentOrders, recentUsers }) {
   return (
     <>
-      <ul>{recentOrders.map(o => <li key={o.id}>{o.id}</li>)}</ul>
-      <ul>{recentUsers.map(u => <li key={u.id}>{u.id}</li>)}</ul>
-      {/* order.id === 7 and user.id === 7 can coexist fine — different lists, independently keyed */}
+      <ul>
+        {recentOrders.map(o => <li key={o.id}>Order #{o.id}</li>)}
+      </ul>
+      <ul>
+        {recentUsers.map(u => <li key={u.id}>User #{u.id}</li>)}
+      </ul>
+      {/* order.id === 7 and user.id === 7 can coexist — different lists,
+          independently keyed. No conflict. */}
     </>
   )
 }
-```
-::
 
-What breaks is **non-uniqueness within the same array** — generating keys with `Math.random()` or `Date.now()` on every render is a common anti-pattern that looks like it satisfies "give it a key" while actually being worse than no key at all, since a fresh random key every render tells React *every single item is brand new on every render*, forcing full unmount/remount of the entire list every time, destroying all per-item state and DOM (including focus, scroll position, and CSS transitions) on every re-render.
-
-::code-wrapper{language="javascript"}
-```javascript
+// ── ANTI-PATTERN: Math.random() or Date.now() as key ──
 function BrokenList({ items }) {
   return (
     <ul>
-      {items.map(item => <li key={Math.random()}>{item.text}</li>)}
-      {/* Every render generates entirely new keys — React treats every <li> as new, every time */}
+      {items.map(item => (
+        <li key={Math.random()}>{item.text}</li>
+      ))}
     </ul>
   )
+  // Every render generates entirely new keys.
+  // React thinks EVERY item is brand new on EVERY render.
+  // → Full unmount + remount of the entire list every single render.
+  // → All per-item state destroyed (focus, scroll position, form input, transitions).
+  // → Actively WORSE than no key at all.
 }
-```
-::
 
-## Keys on Fragments and Component Boundaries
+// ── ANTI-PATTERN: index in the key string with sortable data ──
+function UnstableKeyList({ items }) {
+  return (
+    <ul>
+      {items.map((item, index) => (
+        <li key={`${item.name}-${index}`}>{item.name}</li>
+      ))}
+    </ul>
+  )
+  // The index component makes this key unstable on reorder — same as bare index.
+  // If two items share a name, the key isn't even unique. Use item.id only.
+}
 
-`key` must be placed on the outermost element returned for each list item — not on some element nested inside it — because reconciliation reads `key` off the top-level element in the array, not off whatever JSX that element happens to render internally.
+// ── CORRECT: key on the outermost element produced by .map() ──
+function UserTable({ users }) {
+  return (
+    <table><tbody>
+      {users.map(user => (
+        <UserRow key={user.id} user={user} />
+        // key goes on the element directly produced by .map() — UserRow.
+      ))}
+    </tbody></table>
+  )
+}
 
-::code-wrapper{language="javascript"}
-```javascript
-function UserRow({ user }) {
+// ANTI-PATTERN: key on a nested element — does nothing for the list
+function UserRowBad({ user }) {
   return (
     <tr>
       <td key={user.id}>{user.name}</td>
-      {/* WRONG POSITION: key here does nothing for the list — this <tr> itself is unkeyed */}
+      {/* WRONG: key here does nothing for reconciliation — this <tr> is unkeyed. */}
     </tr>
   )
 }
 
-function UserTable({ users }) {
-  return <table><tbody>{users.map(u => <UserRow key={u.id} user={u} />)}</tbody></table>
-  {/* Correct: key belongs on the array-produced element (UserRow), not inside its render output */}
-}
-```
-::
-
-When a list item needs to render multiple sibling elements without an extra wrapping `<div>`, use the explicit `<Fragment key={...}>` form — the shorthand `<>...</>` syntax cannot accept a `key` prop, which is precisely why it exists as a shorthand for the *unkeyed* case only.
-
-::code-wrapper{language="javascript"}
-```javascript
-import { Fragment } from 'react'
-
+// ── Fragments with keys: multiple sibling elements per list item ──
 function DefinitionList({ terms }) {
   return (
     <dl>
       {terms.map(term => (
+        // The shorthand <>...</> CANNOT accept a key prop — syntax error.
+        // Must use the explicit <Fragment key={...}> form.
         <Fragment key={term.id}>
           <dt>{term.word}</dt>
           <dd>{term.definition}</dd>
@@ -199,43 +315,289 @@ function DefinitionList({ terms }) {
 ```
 ::
 
-## Forcing a Remount on Purpose with `key`
+## Reordering Bugs: A Deep Dive
 
-Because `key` controls identity, deliberately *changing* a key is a legitimate technique to force React to fully discard a component instance and its state, then mount a brand-new one — useful when a component's internal state should reset completely in response to some prop, rather than update in place.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="reordering_bugs.js"}
 ```javascript
-function ProfileEditor({ userId }) {
-  // Without a key change, switching userId would update the SAME instance's props,
-  // leaving any local draft-form state from the PREVIOUS user's edits lingering.
-  return <ProfileForm key={userId} userId={userId} />
+import { useState } from 'react'
+
+// A list where each item has local state (an expanding/collapsing detail panel).
+// The bug: index keys cause state to "jump" to the wrong row after a sort.
+
+function SortableListBad({ items }) {
+  const [sortAsc, setSortAsc] = useState(true)
+  const sorted = [...items].sort((a, b) => sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name))
+
+  return (
+    <div>
+      <button onClick={() => setSortAsc(s => !s)}>Toggle Sort</button>
+      <ul>
+        {sorted.map((item, index) => (
+          <ExpandableRow key={index} item={item} />
+        ))}
+      </ul>
+    </div>
+  )
+  // After sorting, React matches by index:
+  //   old index-0 (was "Alice", expanded) → new index-0 (now "Bob")
+  //   React reuses Alice's ExpandableRow instance — including its expanded state.
+  //   Bob now appears expanded even though the user never expanded Bob.
+  //   Alice's expanded state has "jumped" to Bob's row.
+}
+
+function SortableListGood({ items }) {
+  const [sortAsc, setSortAsc] = useState(true)
+  const sorted = [...items].sort((a, b) => sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name))
+
+  return (
+    <div>
+      <button onClick={() => setSortAsc(s => !s)}>Toggle Sort</button>
+      <ul>
+        {sorted.map(item => (
+          <ExpandableRow key={item.id} item={item} />
+        ))}
+      </ul>
+    </div>
+  )
+  // After sorting, React matches by item.id:
+  //   key "alice-1" still exists → Alice's ExpandableRow (with its expanded state)
+  //   is preserved and moved to its new position in the DOM.
+  //   key "bob-2" still exists → Bob's ExpandableRow (collapsed) moves to its position.
+  //   No state jumps. Each item's state follows the item, not the position. ✓
+}
+
+function ExpandableRow({ item }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <li>
+      <button onClick={() => setExpanded(e => !e)}>
+        {item.name} {expanded ? '▼' : '▶'}
+      </button>
+      {expanded && <div className="details">{item.details}</div>}
+    </li>
+  )
 }
 ```
 ::
 
-Changing `userId` causes React to see a different key at that position, so it unmounts the old `ProfileForm` instance (discarding all of its internal `useState`, refs, and effects) and mounts a fresh one — a deliberate application of the same identity mechanism that normally protects list items from unwanted resets, now used in reverse to *guarantee* one.
+## Forcing a Remount with `key`
+
+::code-wrapper{language="javascript" filename="force_remount.js"}
+```javascript
+import { useState, useEffect } from 'react'
+
+// Deliberately CHANGING a key forces React to unmount the old instance
+// and mount a brand-new one — discarding all internal state, refs, and effects.
+// This is a legitimate technique when a prop change should reset component state.
+
+// USE CASE: a profile editor that should reset its form when switching users
+function ProfileManager({ userId }) {
+  return (
+    <ProfileForm key={userId} userId={userId} />
+    // Without key: switching userId updates the SAME instance's props.
+    //   → Any local draft-form state from the PREVIOUS user lingers.
+    //   → useEffect dependencies fire, but useState values don't reset.
+    // With key: switching userId changes the key → React unmounts the old
+    //   ProfileForm entirely and mounts a fresh one → all state reset. ✓
+  )
+}
+
+// USE CASE: resetting a form without clearing field-by-field
+function FormResetter() {
+  const [formKey, setFormKey] = useState(0)
+  return (
+    <div>
+      <ComplexForm key={formKey} />
+      <button onClick={() => setFormKey(k => k + 1)}>Reset Form</button>
+      {/* Incrementing formKey remounts ComplexForm → all fields, errors,
+          touched states, etc. are reset to initial values in one line. */}
+    </div>
+  )
+}
+
+// ANTI-PATTERN: using key change as a general-purpose "force update"
+function BadForceUpdate({ data }) {
+  const [renderKey, setRenderKey] = useState(0)
+  // Don't do this to force a re-render when data prop changes —
+  // it discards the ENTIRE subtree (DOM, state, effects) unnecessarily.
+  // If a component isn't updating when props change, the real fix is usually
+  // a missing/incorrect dependency array or a stale closure, not a remount.
+}
+```
+::
+
+## Production Patterns for Dynamic Lists
+
+::code-wrapper{language="javascript" filename="production_patterns.js"}
+```javascript
+import { useState, useMemo, useCallback, useRef } from 'react'
+
+// ── 1. Stable key generation when data lacks a natural id ──
+function useStableKeys(items) {
+  const keyMapRef = useRef(new Map())
+
+  return useMemo(() => {
+    const keyMap = keyMapRef.current
+    const keys = items.map(item => {
+      // Reuse existing key if we've seen this item reference before
+      if (keyMap.has(item)) return keyMap.get(item)
+      // Generate a new stable key for new items
+      const key = crypto.randomUUID ? crypto.randomUUID() : `key-${keyMap.size}`
+      keyMap.set(item, key)
+      return key
+    })
+    // Clean up keys for items no longer present
+    const currentSet = new Set(items)
+    for (const [item] of keyMap) {
+      if (!currentSet.has(item)) keyMap.delete(item)
+    }
+    return keys
+  }, [items])
+}
+// Use case: items come from an external source without ids (e.g., parsed CSV rows).
+// The ref-based map ensures each item reference gets a stable key across renders.
+
+// ── 2. Virtualized list for large datasets (conceptual) ──
+// Rendering 10,000 <li> elements simultaneously will freeze the browser.
+// Virtualization renders only the visible window + a small overscan buffer.
+// Libraries: react-window, react-virtual, @tanstack/react-virtual.
+
+function useVirtualizedList({ itemCount, itemHeight, viewportHeight, scrollTop }) {
+  const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - 5)  // 5 items overscan
+  const visibleCount = Math.ceil(viewportHeight / itemHeight) + 10         // 10 items overscan
+  const endIndex = Math.min(itemCount, startIndex + visibleCount)
+
+  return useMemo(() => ({
+    startIndex,
+    endIndex,
+    visibleItems: Array.from({ length: endIndex - startIndex }, (_, i) => ({
+      index: startIndex + i,
+      offsetTop: (startIndex + i) * itemHeight,
+    })),
+    totalHeight: itemCount * itemHeight,
+  }), [startIndex, endIndex, itemCount, itemHeight])
+}
+// Keys remain critical in virtualized lists — the visible window changes as the user
+// scrolls, and stable keys ensure React reuses (not remounts) items that scroll
+// back into view after scrolling out and back.
+
+// ── 3. Optimistic list updates (add/remove before server confirms) ──
+function useOptimisticList(fetchItems, createItem, deleteItem) {
+  const [items, setItems] = useState([])
+  const [pendingOps, setPendingOps] = useState(new Set())
+
+  const refresh = useCallback(async () => {
+    setItems(await fetchItems())
+  }, [fetchItems])
+
+  const optimisticAdd = useCallback(async (newItemData) => {
+    const tempId = `temp-${Date.now()}`
+    const optimisticItem = { ...newItemData, id: tempId, _pending: true }
+    setItems(prev => [...prev, optimisticItem])
+    setPendingOps(prev => new Set([...prev, tempId]))
+    try {
+      const realItem = await createItem(newItemData)
+      setItems(prev => prev.map(item => item.id === tempId ? realItem : item))
+    } catch (err) {
+      setItems(prev => prev.filter(item => item.id !== tempId))  // rollback
+      throw err
+    } finally {
+      setPendingOps(prev => { const next = new Set(prev); next.delete(tempId); return next })
+    }
+  }, [createItem])
+
+  const optimisticRemove = useCallback(async (id) => {
+    const snapshot = items.find(item => item.id === id)
+    setItems(prev => prev.filter(item => item.id !== id))
+    try {
+      await deleteItem(id)
+    } catch (err) {
+      if (snapshot) setItems(prev => { const next = [...prev, snapshot]; next.sort((a,b) => a.id - b.id); return next })
+      throw err
+    }
+  }, [deleteItem, items])
+
+  return { items, pendingOps, refresh, optimisticAdd, optimisticRemove }
+}
+// The tempId key ensures the optimistic item is uniquely keyed. When the server
+// responds with a real id, the key changes → React unmounts the temp item and
+// mounts the real one. This is the one case where a key change on the same logical
+// item is intentional and correct.
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug** — React's development-mode console warning "Each child in a list should have a unique 'key' prop" is worth fixing immediately, not suppressing — it fires precisely in the scenario (an unkeyed array of elements) most likely to produce the positional-identity bugs this chapter describes.
-- **Idiom** — Prefer a stable field from the data itself (a database id, a UUID) over anything derived at render time — derived values like `${item.name}-${index}` reintroduce index-based instability the moment two items share a name or the list reorders.
-- **Performance** — Deliberately changing a `key` to force a remount (the `ProfileEditor` pattern above) is cheap for small components but discards and rebuilds the *entire* subtree, including any expensive child DOM/state — reach for it when a genuine reset is wanted, not as a general-purpose "force update" hammer.
-- **Debug** — If a list item's local state (an open/closed accordion, a hover highlight, an in-progress edit) seems to "jump" to the wrong row after a delete or sort, suspect index-as-key before anything else — this exact symptom is the signature of positional identity mismatched against reordered data.
-- **Idiom** — When rendering a list of composite JSX per item (multiple sibling tags), reach for `<Fragment key={id}>` rather than an unnecessary wrapping `<div>` purely to hold the key — the fragment keeps the DOM output flat while still giving reconciliation the identity it needs.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Debug] "Each child in a list should have a unique key prop" warning = fix it NOW.
+// It fires precisely in the scenario most likely to cause positional-identity bugs.
+
+// [Idiom] Prefer a stable field from the data (database id, UUID) over anything
+// derived at render time. `${item.name}-${index}` reintroduces instability the
+// moment two items share a name or the list reorders.
+
+// [Performance] Changing a key to force remount is cheap for small components but
+// discards the ENTIRE subtree (DOM, state, effects). Use it for genuine resets,
+// not as a "force update" hammer.
+
+// [Debug] If a list item's local state "jumps" to the wrong row after delete/sort,
+// suspect index-as-key before anything else. This symptom is the signature of
+// positional identity mismatched against reordered data.
+
+// [Idiom] Use <Fragment key={id}> for multiple sibling elements per list item —
+// keeps DOM flat while giving reconciliation the identity it needs. The shorthand
+// <>...</> cannot take a key prop.
+
+// [Performance] For lists > 100 items, use virtualization (react-window, @tanstack/react-virtual).
+// Keys remain critical — stable keys ensure scrolled-out items reuse, not remount,
+// when they scroll back into view.
+
+// [Idiom] When data lacks natural ids, use a ref-based Map to assign stable keys
+// per item reference — never Math.random() or Date.now() per render.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Index-as-key silently corrupts per-item state on reorder, insert-at-start, or delete-from-middle** — no error, no warning; uncontrolled inputs, local component state, and CSS transitions inside list items end up visually attached to the wrong data row after the operation.
-- **`key={Math.random()}` or `key={Date.now()}` is worse than no key at all** — it guarantees every item looks brand-new on every single render, forcing full unmount/remount (losing focus, scroll position, and all per-item state) far more aggressively than the positional fallback ever would.
-- **The shorthand `<>...</>` Fragment syntax cannot take a `key` prop at all** — attempting `<key={id}>...</>`  is a syntax error; the explicit `<Fragment key={id}>` form is required the moment a keyed fragment is needed inside a `.map()`.
-- **A `key` placed on an element nested inside a list item's returned JSX, rather than on the top-level mapped element itself, has no effect on reconciliation** — React only reads `key` off elements that are direct children of the array/iterable being rendered.
-- **Sibling uniqueness is the only requirement — keys are not required to be globally unique across the whole app** — two independent lists (or the same list re-rendered in a different parent) reusing the same key values is completely safe, since reconciliation scopes key comparison to one array of siblings at a time.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] Index-as-key silently corrupts per-item state on reorder, insert-at-start,
+// or delete-from-middle. No error, no warning — uncontrolled inputs, local useState,
+// and CSS transitions end up attached to the wrong data row. The hardest bug to trace
+// because nothing throws — the UI just looks wrong.
+
+// [Gotcha] key={Math.random()} is worse than no key at all. It guarantees every item
+// looks brand-new on every render → full unmount/remount → loses focus, scroll position,
+// all per-item state, every CSS transition restarts. A performance and UX disaster.
+
+// [Gotcha] The shorthand <>...</> Fragment syntax CANNOT take a key prop.
+// <key={id}>...</> is a syntax error. Must use <Fragment key={id}> (imported from 'react').
+
+// [Gotcha] A key placed on an element NESTED inside a list item's returned JSX has
+// NO effect on reconciliation. React only reads key off elements that are direct
+// children of the array/iterable being rendered.
+//   <li><span key={id}>...</span></li>  ← key on <span> is useless if <li> is the mapped element.
+
+// [Gotcha] Keys are NOT required to be globally unique across the app — only among
+// siblings in the same array. Two independent lists reusing the same key values is safe.
+// Reusing the same key WITHIN one list is a bug (duplicate keys → React warns + keeps only one).
+
+// [Gotcha] Changing a key on an item that should be preserved (e.g., keying by a value
+// that changes on every update) causes unnecessary remounts. Keys should be stable for
+// the lifetime of the item in the list — only change when the item's identity truly changes.
+
+// [Gotcha] defaultChecked/defaultValue on uncontrolled inputs inside list items with
+// index keys: these props only apply on MOUNT, not on reuse. After a reorder, React
+// reuses the DOM node but does NOT re-apply defaultChecked → stale checkbox state.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A "recently viewed products" carousel lets users remove an item early. After removing the first product, the *wrong* product's "Remove" button ends up temporarily disabled (mid-animation) instead of the one that was actually just removed.
+A "recently viewed products" carousel lets users remove an item. After removing the first product, the wrong product's "Remove" button ends up disabled mid-animation:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
 function RecentlyViewed({ products, onRemove }) {
   return (
@@ -256,7 +618,7 @@ function ProductCard({ product, onRemove }) {
 
   function handleClick() {
     setRemoving(true)
-    setTimeout(() => onRemove(), 300)
+    setTimeout(() => onRemove(), 300)  // 300ms fade-out animation before removal
   }
 
   return (
@@ -272,17 +634,42 @@ function ProductCard({ product, onRemove }) {
 <details>
 <summary>Answer</summary>
 
-`ProductCard` holds its own local `removing` state, and the list is keyed by array `index` rather than `product.id`. Clicking "Remove" on the first product sets *that instance's* `removing` to `true`, starting the 300ms fade — but the parent's `products` array only updates (via `onRemove`) after the timeout fires. In the meantime, nothing else changes, so no reconciliation happens yet. The real problem shows up on a *second* quick removal before the first timeout completes: because every `ProductCard` is keyed by position, removing an earlier item shifts every subsequent item's index down by one. React matches the new index-0 element against the old index-0 `ProductCard` instance — which is the instance that currently has `removing: true` mid-animation — and hands it the *next* product's data while keeping its old `removing` state, so the fade-out and disabled button end up visually attached to whichever product now happens to occupy that position, not the one the user actually clicked.
+`ProductCard` holds local `removing` state, and the list is keyed by array `index` instead of `product.id`. Clicking "Remove" on the first product sets that instance's `removing` to `true` and starts the 300ms fade. The parent's `products` array only updates after the timeout fires. On a second quick removal before the first timeout completes: removing an earlier item shifts every subsequent item's index down by one. React matches the new index-0 element against the old index-0 `ProductCard` instance — which has `removing: true` mid-animation — and hands it the next product's data while keeping its old `removing` state. The fade-out and disabled button end up on the wrong product.
 
-**The lesson**: any list item holding per-instance local state (here, an in-progress removal animation) must be keyed by a stable identity field like `product.id`, never by array index — index-based keys tie state to a *position* that shifts under insert/remove, not to the *item* the user actually interacted with.
+**Fix**: key by `product.id` so each `ProductCard` instance's state follows the product, not the position:
+
+```javascript
+<ProductCard key={product.id} product={product} onRemove={() => onRemove(product.id)} />
+```
+
+With stable keys, React matches by product identity — the instance with `removing: true` is correctly removed when its timeout fires, and no other product's state is affected.
 
 </details>
 
 ## Key Takeaways
 
-- Reconciliation diffs React element trees, not real DOM, using an O(n) heuristic that assumes same-type-same-position elements represent the same underlying thing — `key` is how you correct that assumption for lists.
-- Without keys, React matches array children positionally, which silently misattributes per-item DOM and state (uncontrolled input values, local `useState`, CSS transitions) whenever a list is reordered, filtered, or has items removed from anywhere but the end.
-- Index-as-key is safe only for lists that are never reordered, never have items inserted/removed except at the end, and hold no per-item state — a fixed, hardcoded list of labels is the canonical safe case.
-- Keys must be stable and unique among *siblings*, not globally — a database id or UUID from the data itself is the right source; `Math.random()` or `Date.now()` per render is actively worse than no key.
-- `key` belongs on the outermost element produced per list item, and the explicit `<Fragment key={id}>` form is required (not the `<>` shorthand) when a list item needs multiple sibling elements without a wrapper `<div>`.
-- Deliberately changing a `key` is a legitimate way to force a full remount and state reset — the same identity mechanism that protects list items from unwanted resets, applied in reverse on purpose.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. Reconciliation diffs React element trees (not real DOM) using an O(n) heuristic:
+//    different types → full teardown; same type + same position → update in place.
+//    Keys correct the "same position" assumption for lists.
+
+// 2. Without keys, React matches array children POSITIONALLY — index-0 to index-0.
+//    This silently misattributes per-item DOM/state on reorder, filter, or delete-from-middle.
+
+// 3. Index-as-key is safe ONLY for: never-reordered, only-appended/removed-from-end,
+//    no-per-item-state lists (e.g., static nav). Everything else needs stable data keys.
+
+// 4. Keys must be STABLE (same item → same key every render) and UNIQUE among siblings
+//    (not globally). Source: database id, UUID. NEVER Math.random() or Date.now() per render.
+
+// 5. Key goes on the OUTERMOST element from .map(). For multiple siblings per item,
+//    use <Fragment key={id}> (not the <> shorthand, which can't take a key).
+
+// 6. Deliberately changing a key forces a full remount + state reset — useful for
+//    resetting forms on prop change, actively harmful as a "force update" hammer.
+
+// 7. For large lists (>100 items), use virtualization. Keys remain critical —
+//    stable keys ensure scrolled-out items reuse (not remount) when they return to view.
+```
+::

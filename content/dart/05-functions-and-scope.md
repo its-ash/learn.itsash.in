@@ -1,290 +1,278 @@
-# 05 — Functions & Scope
+---
+title: "Dart — Functions, Closures & Generator Semantics"
+description: "Deep-dive into Dart function parameter semantics, closure capture mechanics, typedef usage, sync/async generators, and callable classes. Code-first engineering reference."
+---
 
-Dart functions are first-class — pass them, return them, store them. They support optional/named parameters, defaults, closures, and `async`/`await`.
+# Dart — Functions, Closures & Generator Semantics
 
-## Declaring Functions
+## Parameter Architecture — Positional, Named, Required
 
 ::code-wrapper{language="dart"}
 ```dart
-int add(int a, int b) {
-	return a + b;
+// Dart has three parameter categories with strict ordering rules:
+// 1. Required positional (no brackets)
+// 2. Optional positional (in [...])
+// 3. Named parameters (in {...}) — optional or `required`
+
+// All three can coexist, but order is mandatory:
+void createServer(
+  String host,              // required positional (must come first)
+  int port,                 // required positional
+  [String? certPath]        // optional positional (nullable or with default)
+  , {
+  required String name,     // required named (must be provided by name)
+  int backlog = 128,        // optional named with default
+  bool tls = false,         // optional named with default
+}) {
+  // ...
 }
 
-// Arrow function (expression body)
-int square(int x) => x * x;
+createServer('0.0.0.0', 8080, '/cert.pem', name: 'api', tls: true);
+createServer('0.0.0.0', 8080, name: 'api');  // certPath omitted, backlog=128, tls=false
 
-// void return
-void greet(String name) {
-	print('Hello, $name');
+// ❌ Anti-pattern: boolean positional flags — unclear at the call site.
+void init(bool debug, bool verbose, bool color) { ... }
+init(true, false, true);  // what do these mean?!
+
+// ✓ Correct: named parameters for booleans and options.
+void init({bool debug = false, bool verbose = false, bool color = true}) { ... }
+init(debug: true, color: false);  // self-documenting
+
+// Default values must be compile-time constants:
+void configure({Duration timeout = const Duration(seconds: 30)}) { ... }
+// void configure({String dir = getHomeDir()}) { ... }  // ✗ not a const
+// ✓ Use null default + ?? for runtime defaults:
+void configure({String? dir}) {
+  final resolved = dir ?? getHomeDir();  // runtime default
 }
 ```
 ::
-`=>` is shorthand for `{ return expr; }` — use for single-expression functions. `void` means no return value.
 
-## Parameters
-
-### Required positional
+## Closures — Capture Semantics & Memory
 
 ::code-wrapper{language="dart"}
 ```dart
-int add(int a, int b) => a + b;
-add(2, 3);   // 5
-```
-::
-### Optional positional (in `[...]`)
+// Closures capture variables BY REFERENCE (not by value) from the enclosing scope.
+// The captured variable stays alive as long as the closure exists (GC root).
 
-::code-wrapper{language="dart"}
-```dart
-String greet(String name, [String? title]) {
-	return '${title == null ? '' : '$title '}$name';
-}
-greet('Alice');           // 'Alice'
-greet('Alice', 'Dr.');    // 'Dr. Alice'
-```
-::
-Optional positional params are in `[...]`, nullable (or with a default). They must come after required params.
-
-### Named parameters (in `{...}`)
-
-::code-wrapper{language="dart"}
-```dart
-void createUser({String? name, int? age}) { ... }
-createUser(name: 'Alice', age: 30);
-createUser(age: 30, name: 'Alice');   // order doesn't matter
-createUser();                          // both null
-```
-::
-Named params are in `{...}`, passed by name. They're optional by default.
-
-### Required named params (`required`)
-
-::code-wrapper{language="dart"}
-```dart
-void createUser({required String name, required int age}) { ... }
-createUser(name: 'Alice', age: 30);   // ✓
-// createUser(name: 'Alice');          // ✗ age is required
-```
-::
-`required` makes a named param mandatory.
-
-### Default values
-
-::code-wrapper{language="dart"}
-```dart
-void greet(String name, {String greeting = 'Hello'}) {
-	print('$greeting, $name');
-}
-greet('Alice');                      // 'Hello, Alice'
-greet('Alice', greeting: 'Hi');      // 'Hi, Alice'
-```
-::
-Defaults apply to optional params (positional or named). The default must be a compile-time constant.
-
-## `var` in parameters
-
-Dart 3 allows `var` or explicit type:
-
-::code-wrapper{language="dart"}
-```dart
-int add(var a, var b) => a + b;   // a, b are inferred (but no type annotation)
-```
-::
-Prefer explicit types for public APIs; `var` is fine for private/local.
-
-## First-Class Functions
-
-::code-wrapper{language="dart"}
-```dart
-var multiply = (int a, int b) => a * b;   // function expression (lambda)
-multiply(2, 3);   // 6
-
-void apply(Function fn) {   // Function as a parameter
-	fn();
-}
-
-apply(() => print('Called'));
-```
-::
-Functions are objects (type `Function`). You can pass them, return them, store them.
-
-### Typedefs (function types)
-
-::code-wrapper{language="dart"}
-```dart
-typedef IntOperation = int Function(int a, int b);
-
-IntOperation add = (a, b) => a + b;
-IntOperation multiply = (a, b) => a * b;
-```
-::
-`typedef` names a function type — clearer than writing `int Function(int, int)` everywhere. Use for callbacks and higher-order functions.
-
-## Closures
-
-A closure is a function that captures variables from its enclosing scope:
-
-::code-wrapper{language="dart"}
-```dart
+// Each invocation of makeAdder creates a NEW `increment` on the stack,
+// and the returned closure captures it — each closure has its own `increment`.
 Function makeAdder(int increment) {
-	return (int x) => x + increment;   // captures 'increment'
+  return (int x) => x + increment;  // captures `increment` from this invocation
 }
 
 var add5 = makeAdder(5);
 var add10 = makeAdder(10);
-add5(3);    // 8
-add10(3);   // 13
+print(add5(3));   // 8  — its own captured increment=5
+print(add10(3));  // 13 — its own captured increment=10
+
+// ❌ Anti-pattern: closures in a loop capture the loop variable (shared, mutated).
+var handlers = <void Function()>[];
+for (var i = 0; i < 3; i++) {
+  handlers.add(() => print(i));
+}
+handlers.forEach((f) => f());  // 3, 3, 3 — all see the final value of i
+
+// ✓ Correct: capture per-iteration in a final local.
+var handlersFixed = <void Function()>[];
+for (var i = 0; i < 3; i++) {
+  final j = i;  // fresh, immutable per iteration
+  handlersFixed.add(() => print(j));
+}
+handlersFixed.forEach((f) => f());  // 0, 1, 2
+
+// Memory implication: closures keep captured variables alive (prevent GC).
+// A closure stored in a long-lived collection can extend a variable's lifetime
+// beyond its expected scope — be careful in long-running processes.
 ```
 ::
-Each call to `makeAdder` captures its own `increment`. Closures keep the captured variables alive.
 
-## Scope
-
-Dart has **lexical (static) scope** — the scope is determined by the code structure (where the function is defined), not where it's called:
+## Typedefs & Function Types
 
 ::code-wrapper{language="dart"}
 ```dart
-var topLevel = 'top';
+// Typedefs name function types — use for callbacks, handlers, strategy patterns.
+typedef Validator<T> = String? Function(T value);  // returns error message or null
 
-void outer() {
-	var outerVar = 'outer';
+// Generic function type:
+typedef Mapper<S, T> = T Function(S source);
 
-	void inner() {
-		var innerVar = 'inner';
-		print(topLevel);    // ✓ accessible
-		print(outerVar);    // ✓ accessible (lexical scope)
-		print(innerVar);    // ✓
-	}
+// Using the typedef in APIs:
+class FormField<T> {
+  final Validator<T> validator;
+  FormField(this.validator);
 
-	inner();
-	// print(innerVar);   // ✗ out of scope
+  String? validate(T value) => validator(value);
 }
+
+// Type-safe handler registration:
+typedef EventHandler<T extends Event> = void Function(T event);
+
+class EventBus {
+  final _handlers = <Type, List<Function>>{};
+
+  void subscribe<T extends Event>(EventHandler<T> handler) {
+    (_handlers[T] ??= <Function>[]).add(handler);
+  }
+
+  void publish<T extends Event>(T event) {
+    for (final h in _handlers[T] ?? []) {
+      (h as EventHandler<T>)(event);
+  }
+  }
+}
+
+// ❌ Anti-pattern: using `Function` (untyped) — accepts anything, no type safety.
+void registerCallback(Function fn) { ... }  // any function signature accepted
+
+// ✓ Correct: use a function type or typedef.
+void registerCallback(EventHandler<Click> fn) { ... }  // only the right signature
 ```
 ::
-Nested functions can access variables from all enclosing scopes. The scope is nested visually (by braces).
 
-## `async` and `await` (brief; chapter 11 in depth)
+## Generators — `sync*` and `async*`
 
 ::code-wrapper{language="dart"}
 ```dart
-Future<String> fetchUser() async {
-	await Future.delayed(Duration(seconds: 1));
-	return 'Alice';
+// sync* returns a lazy Iterable — values produced on demand (pull-based).
+// The generator suspends at each `yield` and resumes when the next value is requested.
+Iterable<int> fibonacci() sync* {
+  var a = 0, b = 1;
+  while (true) {
+    yield a;          // suspend here, resume on next iteration
+    final next = a + b;
+    a = b;
+    b = next;
+  }
 }
 
+// Take only what you need — infinite sequence, finite consumption:
+print(fibonacci().take(10).toList());  // [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+// `.take(10)` pulls 10 values; the generator never runs beyond that.
+
+// yield* delegates to another generator (flattens):
+Iterable<int> naturals(int n) sync* {
+  yield* List.generate(n, (i) => i + 1);  // yields all elements of the iterable
+}
+
+// async* returns a lazy Stream — values produced over time (push-based).
+// Each `yield` emits to the listener; the generator suspends until the
+// listener requests more (single-subscription) or the stream is listened to.
+Stream<int> timedCounter(int max, Duration interval) async* {
+  for (var i = 1; i <= max; i++) {
+    await Future.delayed(interval);  // async pause between emissions
+    yield i;  // emit value to listener
+  }
+}
+
+// Consuming:
 void main() async {
-	var user = await fetchUser();
-	print(user);
+  await for (final n in timedCounter(5, Duration(seconds: 1))) {
+    print(n);  // 1 (after 1s), 2 (after 2s), ..., 5 (after 5s)
+  }
+}
+
+// yield* with async* delegates to another stream:
+Stream<int> mergedStream() async* {
+  yield* timedCounter(3, Duration(seconds: 1));  // emits 1, 2, 3
+  yield* timedCounter(3, Duration(seconds: 2));  // then emits 1, 2, 3 (slower)
 }
 ```
 ::
-`async` marks a function as asynchronous; it returns a `Future`. `await` waits for a `Future` to complete. See chapter 11 for details.
 
-## Generators (`sync*` / `async*`)
+## Callable Classes — `call()` Method
 
 ::code-wrapper{language="dart"}
 ```dart
-Iterable<int> naturals() sync* {
-	var k = 1;
-	while (true) yield k++;
+// A class with a `call()` method can be invoked like a function.
+// This enables objects that are also functions — useful for validators,
+// comparators, state machines, and DSLs.
+
+class Validator {
+  final List<String? Function(String)> _rules;
+  Validator(this._rules);
+
+  // `call` allows `validator(value)` syntax — invokes this method.
+  String? call(String value) {
+    for (final rule in _rules) {
+      final error = rule(value);
+      if (error != null) return error;
+    }
+    return null;
+  }
+
+  // Compose validators with operator overloading:
+  Validator operator +(Validator other) => Validator([..._rules, ...other._rules]);
 }
 
-Stream<int> asyncNaturals() async* {
-	var k = 1;
-	while (true) {
-		await Future.delayed(Duration(seconds: 1));
-		yield k++;
-	}
+final emailValidator = Validator([
+  (s) => s.isEmpty ? 'Required' : null,
+  (s) => !s.contains('@') ? 'Invalid email' : null,
+]);
+
+// Called like a function (invokes `call`):
+print(emailValidator('test@example.com'));  // null (valid)
+print(emailValidator(''));                   // 'Required'
+print(emailValidator('no-at-sign'));         // 'Invalid email'
+
+// Use case: comparator objects for sort:
+class ByLength {
+  int call(String a, String b) => a.length.compareTo(b.length);
 }
+var words = ['banana', 'hi', 'cherry'];
+words.sort(ByLength());  // sort by length: ['hi', 'banana', 'cherry']
 ```
 ::
-`sync*` returns an `Iterable` (lazy, sync); `yield` produces a value. `async*` returns a `Stream` (lazy, async); `yield` produces a value. Generators are lazy — values are produced on demand.
 
-## `call()` method
-
-A class with a `call()` method can be called like a function:
-
-::code-wrapper{language="dart"}
-```dart
-class Multiplier {
-	final int factor;
-	Multiplier(this.factor);
-	int call(int x) => x * factor;
-}
-
-var triple = Multiplier(3);
-triple(5);   // 15 — calls triple.call(5)
-```
-::
 ## 💡 Tips & Tricks
 
-- **Idiom**: use named parameters (`{...}`) for functions with many optional params or boolean flags — `createUser(name: 'Alice', admin: true)` is clearer than `createUser('Alice', null, true)`. Named params self-document at the call site.
-- **Idiom**: use `required` for mandatory named params — `{required String name}` ensures the caller provides it, with a clear error if missing. Use named params for clarity, `required` for mandatory ones.
-- **Idiom**: use arrow functions (`=>`) for single-expression functions — `int square(int x) => x * x;` is concise and readable. Use for simple transformations, getters, and callbacks.
-- **Idiom**: use `typedef` for function types — `typedef IntOp = int Function(int, int);` is clearer than `int Function(int, int)` everywhere. Use for callbacks and higher-order function signatures.
-- **Idiom**: use closures to capture and configure behavior — `makeAdder(5)` returns a function that adds 5. Useful for partial application, callbacks, and stateful handlers.
+- **Idiom**: use `required` named parameters for mandatory arguments — `{required String apiKey}` ensures the caller provides it with a clear compile error if missing. Named parameters self-document at the call site: `createClient(apiKey: '...', timeout: 30)`.
+- **Idiom**: use `sync*` generators for lazy sequences — `Iterable<int> gen() sync* { for (...) yield i; }` produces values on demand. Zero allocation until iterated. Use for infinite sequences, large computed ranges, and pull-based pipelines.
+- **Idiom**: use `async*` for time-series streams — `Stream<T> events() async* { while (...) { await wait; yield event; } }` produces values over time. Use for polling, sensor data, and push-based pipelines.
+- **Idiom**: use `typedef` for function types in public APIs — `typedef Validator<T> = String? Function(T value)` is clearer than `String? Function(T)` repeated everywhere. Enables generic function types in signatures.
+- **Idiom**: use `call()` for callable domain objects — `validator(value)` is cleaner than `validator.validate(value)`. Use for validators, comparators, strategy objects that are "functions with state."
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Optional positional params (`[...]`) must come after required**: `void f(int a, [int b])` is valid; `void f([int b], int a)` is not.
-- **Named params (`{...}`) must come after positional**: `void f(int a, {int b})` is valid; `void f({int b}, int a)` is not (actually, named after positional is the rule — named always last).
-- **Default values must be compile-time constants**: `void f({int x = someVar})` fails if `someVar` isn't const. Use `null` default + `??` inside for runtime defaults.
-- **`Function` type is untyped**: `Function fn` accepts any function. Use `int Function(int)` for type safety. `Function` defeats type checking.
-- **Closures capture by reference**: the captured variable is shared, not copied. `var i = 0; functions.add(() => i); i = 5;` — calling the function returns 5 (current value), not 0.
-- **`async` functions return `Future`**: `int f() async { return 5; }` returns `Future<int>`, not `int`. The `async` keyword wraps the return in a `Future`.
-- **`yield` only in `sync*`/`async*`**: `yield` outside a generator function is a compile error.
-- **Lexical scope, not dynamic**: a function defined in `outer` accesses `outer`'s variables, even if called from elsewhere. Scope is by code structure, not call stack.
-- **`void` can't be used as a value**: `var x = voidFn();` — if `voidFn` returns `void`, `x` is `void`, can't be used. Use `Function` or ignore the return.
-- **`call()` makes a class callable**: `obj(args)` calls `obj.call(args)`. Subtle — a "function call" on an object invokes `call`. Use for callable objects (multipliers, validators).
+- **Optional positional params (`[...]`) must come after required**: `void f(int a, [int b])` is valid; `void f([int b], int a)` is a compile error.
+- **Named params (`{...}`) must come after all positional params**: `void f(int a, {int b})` is valid; `void f({int b}, int a)` is a compile error.
+- **Default values must be compile-time constants**: `void f({int x = someRuntimeVar})` fails. Use `null` default + `??` inside for runtime defaults.
+- **`Function` type is untyped**: `Function fn` accepts any function signature — no type safety. Use `void Function(int)` or a `typedef` instead.
+- **Closures capture by reference, not value**: the captured variable is shared. `var i = 0; var f = () => i; i = 5; f()` returns `5`, not `0`. For per-iteration capture, use `final captured = i;`.
+- **`async` functions return `Future`**: `int f() async { return 5; }` returns `Future<int>`, not `int`. The `async` keyword wraps the return in a `Future`. `Future<void> f() async {}` for async functions with no return value.
+- **`yield` only in `sync*`/`async*`**: using `yield` outside a generator function is a compile error. Regular functions can't yield.
+- **`sync*` iterables are lazy and re-evaluate**: each iteration re-runs the generator. `var gen = fibonacci(); gen.take(10).toList(); gen.take(10).toList();` runs the generator twice. Cache with `.toList()` if you need to iterate multiple times.
+- **`async*` streams are single-subscription by default**: listening twice throws `StateError`. Use `.asBroadcastStream()` for multiple listeners (but loses pause/resume/buffering guarantees).
+- **Lexical scope, not dynamic**: a function defined in `outer` accesses `outer`'s variables even if called from elsewhere. Scope is determined by code structure, not the call stack.
 
 ## 🧠 Spot the Bug
 
-A developer creates a list of callbacks in a loop, but all callbacks return the same value:
+A developer creates event handlers in a loop, but all handlers report the same button index:
 
 ::code-wrapper{language="dart"}
 ```dart
-var callbacks = [];
-for (var i = 0; i < 3; i++) {
-	callbacks.add(() => i);
+for (var i = 0; i < buttons.length; i++) {
+  buttons[i].onClick.listen((_) => handleClick(i));
 }
-print(callbacks.map((f) => f()).toList());   // [3, 3, 3]? or [0, 1, 2]?
 ```
 ::
 
-What's the output and why?
+When any button is clicked, `handleClick` always receives `buttons.length`. Why?
 
 <details>
 <summary>Answer</summary>
 
-In Dart, the output is `[0, 1, 2]` — because in a `for` loop, each iteration creates a *new* `i` (Dart's `for` loop variable is fresh per iteration, unlike JavaScript's `var`).
+The closure `(_) => handleClick(i)` captures `i` **by reference**. Dart's `for` loop variable `i` is a single variable reassigned each iteration (not fresh per iteration like JS `let`). All closures capture the same `i`, which ends at `buttons.length` after the loop. When any button is clicked, the closure reads the current value of `i` — `buttons.length`.
 
-Wait, let me verify. In Dart, `for (var i = 0; ...)` — is `i` fresh per iteration? Actually, in Dart, the loop variable `i` is a single variable that's reassigned each iteration (like JS `var`), not fresh (like JS `let` or Rust). So the closures all capture the same `i`, which ends at 3. The output would be `[3, 3, 3]`.
-
-Hmm, let me reconsider. Testing: in Dart, `for (var i = 0; i < 3; i++) { callbacks.add(() => i); }` — all closures capture the same `i`, which is 3 after the loop. So `[3, 3, 3]`.
-
-The fix — capture `i` in a local variable per iteration:
+The fix — capture `i` in a `final` local per iteration:
 
 ```dart
-for (var i = 0; i < 3; i++) {
-	final captured = i;   // fresh per iteration
-	callbacks.add(() => captured);
-}
-print(callbacks.map((f) => f()).toList());   // [0, 1, 2]
-```
-::
-Or use `for-in` with a collection (each item is fresh):
-
-```dart
-for (var i in [0, 1, 2]) {
-	callbacks.add(() => i);   // i is the list item, fresh per iteration? Actually same issue
+for (var i = 0; i < buttons.length; i++) {
+  final index = i;  // fresh, immutable per iteration
+  buttons[i].onClick.listen((_) => handleClick(index));
 }
 ```
-::
-Actually, `for-in` in Dart also reuses the loop variable. The safe pattern is the `final captured = i;` inside the loop body.
 
-**The lesson**: Dart's `for` loop variable is a single variable reassigned each iteration. Closures capture it by reference, so all closures see the final value. To capture per-iteration, assign to a fresh `final` local inside the loop body.
+Now each closure captures its own `index`, which is immutable and holds the correct value for that iteration. `handleClick(0)`, `handleClick(1)`, etc.
 
 </details>
-
-## Summary
-
-You can declare functions (arrow, `void`), use parameters (required, optional positional `[...]`, named `{...}`, `required`, defaults), use first-class functions and `typedef`s, closures (capture by reference), lexical scope, `async`/`await` (brief), generators (`sync*`/`async*` with `yield`), and `call()` — with the loop-variable-capture and `Function`-untyped traps avoided. Next: collections.

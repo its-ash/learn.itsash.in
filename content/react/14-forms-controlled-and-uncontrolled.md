@@ -1,16 +1,26 @@
-# 14 — Forms: Controlled and Uncontrolled
+---
+title: "14 — Forms: Controlled & Uncontrolled"
+description: "Controlled vs uncontrolled inputs, the controlled input loop, file inputs, defaultValues, FormData submission, validation patterns, multi-field forms with useReducer, uncontrolled with useRef. Code-first reference for mid-to-senior React engineers."
+---
 
-Forms are where a surprising fraction of real-world React bugs live — not because forms are conceptually hard, but because HTML form elements already have their own internal state (an `<input>` tracks its own value in the DOM whether or not React is involved), and React's model requires deciding, per field, whether React or the DOM owns that state.
+# 14 — Forms: Controlled & Uncontrolled
 
-## Controlled Inputs: React Owns the Value
+## The Core Distinction
 
-A **controlled** input's `value` is driven entirely by React state, and every keystroke flows through an `onChange` handler that updates that state, which then flows back down as the new `value` — a one-way loop that keeps the DOM node's displayed value and React's state permanently in sync.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="core_distinction.js"}
 ```javascript
-function LoginForm() {
-  const [email, setEmail] = useState('')
+import { useState, useRef, useReducer, useCallback } from 'react'
 
+// Every HTML form element has its own internal DOM state (the browser tracks the
+// value). In React, you must decide PER FIELD whether React or the DOM owns that state.
+
+// ── CONTROLLED: React owns the value ──
+// value={state} + onChange={update state} → React state is the single source of truth.
+// Every keystroke: DOM → onChange → setState → re-render → value prop → DOM.
+// The displayed value can never diverge from React state.
+
+function ControlledInput() {
+  const [email, setEmail] = useState('')
   return (
     <input
       type="email"
@@ -19,13 +29,74 @@ function LoginForm() {
     />
   )
 }
+
+// ── UNCONTROLLED: the DOM owns the value ──
+// defaultValue={initial} (set once on mount) + ref to read the value when needed.
+// React does NOT control the value — the browser manages it as users type.
+
+function UncontrolledInput() {
+  const inputRef = useRef(null)
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    console.log(inputRef.current.value)
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input type="text" defaultValue="" ref={inputRef} />
+      <button type="submit">Submit</button>
+    </form>
+  )
+}
 ```
 ::
 
-Because React state is the single source of truth, the current value is always readable from `email` without touching the DOM — trivial to validate on every keystroke, transform (uppercase, strip non-digits), sync to another field, or reset with a simple `setEmail('')`.
+## The Controlled Input Loop
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="controlled_loop.js"}
 ```javascript
+import { useState } from 'react'
+
+// The one-way data flow of a controlled input:
+//   User types 'h' → DOM input event → onChange: setEmail('h') → state = 'h'
+//   → component re-renders → <input value="h" /> → React updates DOM → DOM displays 'h'
+// This loop ensures the DOM value and React state can NEVER diverge.
+// The cost: a re-render on every keystroke. For most forms, negligible.
+
+// ANTI-PATTERN: value without onChange — silently rejects all typing
+function BrokenReadOnlyInput() {
+  const [name] = useState('')
+  return <input value={name} />
+  // Every keystroke: React re-renders, value is still '' → DOM reset to ''.
+  // The user's typed character is immediately overwritten. Looks read-only.
+}
+
+// ANTI-PATTERN: value={undefined} on first render → controlled/uncontrolled warning
+function FlakyInput({ initialValue }) {
+  const [value, setValue] = useState(initialValue)  // undefined if not passed
+  return <input value={value} onChange={e => setValue(e.target.value)} />
+  // First render: value={undefined} → uncontrolled. After keystroke: controlled.
+  // React warns: "changing an uncontrolled input to be controlled."
+}
+
+// CORRECT: always initialize to a properly-typed empty value
+function SafeInput({ initialValue }) {
+  const [value, setValue] = useState(initialValue ?? '')
+  return <input value={value} onChange={e => setValue(e.target.value)} />
+}
+```
+::
+
+## Controlled Input with Live Transformation
+
+::code-wrapper{language="javascript" filename="live_transformation.js"}
+```javascript
+import { useState } from 'react'
+
+// The power of controlled inputs: transform/filter/format on every keystroke
+// because the value flows through your state on every change.
+
 function PhoneInput() {
   const [digits, setDigits] = useState('')
 
@@ -38,59 +109,129 @@ function PhoneInput() {
     [a, b, c].filter(Boolean).join('-')
   )
 
-  return <input type="tel" value={formatted} onChange={handleChange} placeholder="555-123-4567" />
+  return (
+    <input
+      type="tel"
+      value={formatted}
+      onChange={handleChange}
+      placeholder="555-123-4567"
+    />
+  )
+  // User types "5551234567" → sees "555-123-4567" → state stores "5551234567"
+}
+
+function UpperCaseInput() {
+  const [value, setValue] = useState('')
+  return (
+    <input
+      value={value}
+      onChange={e => setValue(e.target.value.toUpperCase())}
+      placeholder="AUTO-UPPERCASE"
+    />
+  )
+}
+
+function AgeInput() {
+  const [age, setAge] = useState('')
+  function handleChange(e) {
+    const raw = e.target.value.replace(/\D/g, '')
+    const num = raw === '' ? '' : Math.min(150, Math.max(0, parseInt(raw, 10)))
+    setAge(num)
+  }
+  return <input type="number" value={age} onChange={handleChange} min={0} max={150} />
 }
 ```
 ::
 
-## Uncontrolled Inputs: The DOM Owns the Value
+## Uncontrolled Inputs with useRef
 
-An **uncontrolled** input lets the browser's native DOM node track its own value, and React reaches in only when it actually needs the value — typically via a `ref` (chapter 8) at submit time, rather than on every keystroke.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="uncontrolled_useRef.js"}
 ```javascript
-function FeedbackForm() {
+import { useRef } from 'react'
+
+// Uncontrolled inputs are simpler for forms that only need the value at submit time.
+// No re-render on every keystroke — the DOM manages its own value.
+
+function SimpleContactForm() {
+  const nameRef = useRef(null)
+  const emailRef = useRef(null)
   const messageRef = useRef(null)
 
   function handleSubmit(e) {
     e.preventDefault()
-    submitFeedback(messageRef.current.value)
+    const data = {
+      name: nameRef.current.value,
+      email: emailRef.current.value,
+      message: messageRef.current.value,
+    }
+    submitContactForm(data)
   }
 
   return (
     <form onSubmit={handleSubmit}>
-      <textarea ref={messageRef} defaultValue="" />
+      <input type="text" name="name" defaultValue="" ref={nameRef} required />
+      <input type="email" name="email" defaultValue="" ref={emailRef} required />
+      <textarea name="message" defaultValue="" ref={messageRef} required />
       <button type="submit">Send</button>
+    </form>
+  )
+  // Pros: no per-keystroke re-renders, less code for simple forms.
+  // Cons: can't validate/format/react to the value live.
+}
+
+function ResettableForm() {
+  const formRef = useRef(null)
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    const formData = new FormData(e.target)
+    submitData(Object.fromEntries(formData))
+    e.target.reset()
+  }
+
+  return (
+    <form onSubmit={handleSubmit} ref={formRef}>
+      <input name="username" defaultValue="" />
+      <input name="bio" defaultValue="" />
+      <button type="submit">Submit</button>
+      <button type="button" onClick={() => formRef.current.reset()}>Reset</button>
     </form>
   )
 }
 ```
 ::
 
-Note `defaultValue`, not `value` — this is the tell for "uncontrolled." `defaultValue`/`defaultChecked` set the *initial* DOM value once, on mount, and then React stops touching it; the browser takes over from there. Passing `value` (without an `onChange` handler firing state updates back) instead produces React's classic **"a component is changing an uncontrolled input to be controlled, or vice versa"** warning, or worse, a genuinely read-only-looking input that rejects all typing.
+## File Inputs (Always Uncontrolled)
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="file_inputs.js"}
 ```javascript
-// BROKEN: value is set from state that never updates, with no onChange to update it
-function BrokenInput() {
-  const [name] = useState('')
-  return <input value={name} />
-  // Every keystroke is immediately overwritten back to the empty string on the next render —
-  // the input visually appears to reject all typed characters.
-}
-```
-::
+import { useRef, useState } from 'react'
 
-## Why Choose One Over the Other
+// File inputs are ALWAYS uncontrolled — browsers refuse to let JavaScript set
+// the .value of a file input programmatically (security: prevents pre-filling
+// a fake file path).
 
-Controlled inputs are the default recommendation for most application forms because validation, conditional disabling, formatting-as-you-type, and multi-field dependencies (a "confirm password" field checked against "password") all need the current value available in JavaScript on every keystroke — which is exactly what controlled state provides for free.
-
-Uncontrolled inputs earn their place in narrower situations: a single free-text field read only at submit time with no live validation, a file input (`<input type="file">`, whose `value` cannot be set programmatically by React or anything else, for browser security reasons — it is *always* uncontrolled), or a form embedded inside a performance-sensitive list where re-rendering on every keystroke is measurably too expensive.
-
-::code-wrapper{language="javascript"}
-```javascript
 function AvatarUpload() {
   const fileRef = useRef(null)
+  const [preview, setPreview] = useState(null)
+
+  function handleFileChange(e) {
+    const file = e.target.files[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file')
+      e.target.value = ''
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File too large (max 5MB)')
+      e.target.value = ''
+      return
+    }
+
+    setPreview(URL.createObjectURL(file))
+  }
 
   function handleSubmit(e) {
     e.preventDefault()
@@ -100,8 +241,173 @@ function AvatarUpload() {
 
   return (
     <form onSubmit={handleSubmit}>
-      {/* File inputs are uncontrolled by necessity — browsers refuse to let JS set .value */}
-      <input type="file" ref={fileRef} accept="image/*" />
+      <input
+        type="file"
+        ref={fileRef}
+        accept="image/*"
+        onChange={handleFileChange}
+      />
+      {preview && <img src={preview} alt="Preview" style={{ maxWidth: 200 }} />}
+      <button type="submit">Upload</button>
+    </form>
+  )
+}
+
+function MultiFileUpload() {
+  const filesRef = useRef(null)
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    const files = Array.from(filesRef.current.files)
+    const validFiles = files.filter(f => f.size < 10 * 1024 * 1024)
+    uploadFiles(validFiles)
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input type="file" ref={filesRef} multiple accept=".pdf,.doc,.docx" />
+      <button type="submit">Upload</button>
+    </form>
+  )
+}
+
+// ANTI-PATTERN: trying to make a file input controlled
+function BrokenFileInput() {
+  const [file, setFile] = useState(null)
+  return (
+    <input
+      type="file"
+      value={file}
+      onChange={e => setFile(e.target.value)}
+    />
+  )
+  // React warning: "File inputs are always uncontrolled."
+  // e.target.value gives a fake path string — useless. Use e.target.files + ref.
+}
+```
+::
+
+## defaultValues and defaultValue Gotchas
+
+::code-wrapper{language="javascript" filename="defaultvalues.js"}
+```javascript
+import { useRef, useState, useEffect } from 'react'
+
+// defaultValue/defaultChecked set the INITIAL DOM value on mount, then React
+// stops touching the input. Changing defaultValue on re-render does NOT update
+// the input's current value.
+
+function PrefilledForm({ user }) {
+  return (
+    <form>
+      <input name="name" defaultValue={user.name} />
+      <input name="email" defaultValue={user.email} />
+      {/* Set ONCE on mount. If user prop changes after mount, inputs do NOT update. */}
+    </form>
+  )
+}
+
+// FIX 1: Force remount with key when the data source changes
+function EditProfileKeyRemount({ user }) {
+  return <input key={user.id} defaultValue={user.name} />
+  // Changing user.id → key changes → remount → defaultValue re-applies.
+}
+
+// FIX 2: Use controlled input — value always reflects current prop/state
+function EditProfileControlled({ user }) {
+  const [name, setName] = useState(user.name)
+  useEffect(() => setName(user.name), [user.name])
+  return <input value={name} onChange={e => setName(e.target.value)} />
+}
+
+// defaultChecked for checkboxes and radios
+function CheckboxUncontrolled() {
+  return (
+    <label>
+      <input type="checkbox" defaultChecked={true} />
+      Subscribe to newsletter
+    </label>
+  )
+}
+
+// ANTI-PATTERN: using value/defaultValue on a checkbox
+function BrokenCheckbox() {
+  return <input type="checkbox" value={true} />
+  // `value` on a checkbox sets the FORM SUBMISSION value, NOT whether it's checked.
+  // Use `checked` (controlled) or `defaultChecked` (uncontrolled).
+}
+```
+::
+
+## Form Submission with FormData
+
+::code-wrapper{language="javascript" filename="formdata_submission.js"}
+```javascript
+import { useRef, useState } from 'react'
+
+// FormData reads all named fields from a <form> in one call — works with both
+// controlled and uncontrolled inputs. The `name` attribute on each field is required.
+
+function SignupFormFormData() {
+  const formRef = useRef(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    const formData = new FormData(e.target)
+
+    const data = Object.fromEntries(formData.entries())
+    // { name: "Alice", email: "alice@example.com", password: "secret" }
+
+    // For multi-value fields (checkboxes with same name), use getAll:
+    // const interests = formData.getAll('interests')  → ["sports", "music"]
+
+    setSubmitting(true)
+    try {
+      await api.signup(data)
+      formRef.current.reset()
+    } catch (err) {
+      console.error('Signup failed:', err)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} ref={formRef}>
+      <input name="name" type="text" required />
+      <input name="email" type="email" required />
+      <input name="password" type="password" required />
+
+      <label><input type="checkbox" name="interests" value="sports" /> Sports</label>
+      <label><input type="checkbox" name="interests" value="music" /> Music</label>
+      <label><input type="checkbox" name="interests" value="reading" /> Reading</label>
+
+      <button type="submit" disabled={submitting}>
+        {submitting ? 'Creating account…' : 'Sign Up'}
+      </button>
+    </form>
+  )
+}
+
+// Sending FormData directly as multipart/form-data (for file uploads)
+function UploadWithFormData() {
+  async function handleSubmit(e) {
+    e.preventDefault()
+    const formData = new FormData(e.target)
+    // Don't set Content-Type — the browser sets it automatically with the
+    // correct multipart boundary when you pass FormData to fetch.
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      body: formData,
+    })
+    return res.json()
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input name="title" type="text" required />
+      <input name="file" type="file" required />
       <button type="submit">Upload</button>
     </form>
   )
@@ -109,74 +415,253 @@ function AvatarUpload() {
 ```
 ::
 
-## Handling an Entire Form's State
+## Multi-Field Form with useState (Object State)
 
-For forms with many fields, one `useState` per field becomes repetitive. A single object in state, updated via computed property names, scales better while remaining plain React with no library.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="multifield_usestate.js"}
 ```javascript
+import { useState } from 'react'
+
+// One useState per field works for 2-3 fields. Beyond that, a single state object
+// with a shared change handler scales better. The `name` attribute maps to state keys.
+
 function SignupForm() {
-  const [form, setForm] = useState({ name: '', email: '', password: '' })
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+  })
 
   function handleChange(e) {
-    const { name, value } = e.target
-    setForm(prev => ({ ...prev, [name]: value }))
+    const { name, value, type, checked } = e.target
+    setForm(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value,
+    }))
   }
 
   function handleSubmit(e) {
     e.preventDefault()
+    if (form.password !== form.confirmPassword) {
+      alert('Passwords do not match')
+      return
+    }
     submitSignup(form)
   }
 
   return (
     <form onSubmit={handleSubmit}>
-      <input name="name" value={form.name} onChange={handleChange} />
-      <input name="email" value={form.email} onChange={handleChange} />
-      <input name="password" type="password" value={form.password} onChange={handleChange} />
+      <input name="name"      value={form.name}      onChange={handleChange} required />
+      <input name="email"     value={form.email}     onChange={handleChange} type="email" required />
+      <input name="password"  value={form.password}  onChange={handleChange} type="password" required />
+      <input name="confirmPassword" value={form.confirmPassword} onChange={handleChange} type="password" required />
       <button type="submit">Sign Up</button>
     </form>
   )
+  // The computed property name [name]: value makes one handler work for every field.
+  // Trade-off: setForm replaces the entire object on every keystroke, re-rendering
+  // all fields. For 5-15 fields, fine. For 50+ fields, consider uncontrolled.
 }
 ```
 ::
 
-Matching each `<input>`'s `name` attribute to a key in the state object lets one `handleChange` function serve every field — a pattern that scales to dozens of fields without dozens of handler functions, at the cost of losing per-field type safety unless reinforced with TypeScript (chapter 23).
+## Multi-Field Form with useReducer (Complex State)
 
-## Validation: Inline vs. On Submit
-
-Real forms typically validate at two different times for different reasons: on every keystroke/blur for immediate feedback on obviously-wrong input, and again on submit as a final gate, since a user can submit before ever triggering a field's `onBlur`.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="multifield_usereducer.js"}
 ```javascript
-function SignupForm() {
+import { useReducer, useCallback } from 'react'
+
+// For forms with complex state transitions (validation, multi-step, dependent fields,
+// async submit state), useReducer is more maintainable than multiple useState calls.
+// See Ch 10 (useReducer) for the reducer fundamentals.
+
+const initialState = {
+  values: { name: '', email: '', password: '', role: 'member' },
+  errors: {},
+  touched: {},
+  status: 'idle',  // 'idle' | 'validating' | 'submitting' | 'success' | 'error'
+  submitError: null,
+}
+
+function formReducer(state, action) {
+  switch (action.type) {
+    case 'FIELD_CHANGE': {
+      const { name, value } = action
+      return {
+        ...state,
+        values: { ...state.values, [name]: value },
+        errors: { ...state.errors, [name]: undefined },
+      }
+    }
+    case 'FIELD_BLUR': {
+      const { name } = action
+      return {
+        ...state,
+        touched: { ...state.touched, [name]: true },
+        errors: { ...state.errors, [name]: action.error },
+      }
+    }
+    case 'VALIDATE':
+      return { ...state, errors: action.errors, status: 'idle' }
+    case 'SUBMIT_START':
+      return { ...state, status: 'submitting', submitError: null }
+    case 'SUBMIT_SUCCESS':
+      return { ...state, status: 'success' }
+    case 'SUBMIT_ERROR':
+      return { ...state, status: 'error', submitError: action.error }
+    case 'RESET':
+      return { ...initialState, values: { ...initialState.values } }
+    default:
+      return state
+  }
+}
+
+const validators = {
+  name: (val) => val.length < 2 ? 'Name must be at least 2 characters' : undefined,
+  email: (val) => !val.includes('@') ? 'Enter a valid email' : undefined,
+  password: (val) => val.length < 8 ? 'Password must be at least 8 characters' : undefined,
+}
+
+function validateAll(values) {
+  const errors = {}
+  for (const [field, validate] of Object.entries(validators)) {
+    const error = validate(values[field])
+    if (error) errors[field] = error
+  }
+  return errors
+}
+
+function ComplexSignupForm({ onSubmit }) {
+  const [state, dispatch] = useReducer(formReducer, initialState)
+  const { values, errors, touched, status, submitError } = state
+
+  const handleChange = useCallback((e) => {
+    const { name, value } = e.target
+    dispatch({ type: 'FIELD_CHANGE', name, value })
+  }, [])
+
+  const handleBlur = useCallback((e) => {
+    const { name } = e.target
+    const error = validators[name]?.(values[name])
+    dispatch({ type: 'FIELD_BLUR', name, error })
+  }, [values])
+
+  const handleSubmit = useCallback(async (e) => {
+    e.preventDefault()
+    const allErrors = validateAll(values)
+    dispatch({ type: 'VALIDATE', errors: allErrors })
+    if (Object.keys(allErrors).length > 0) return
+
+    dispatch({ type: 'SUBMIT_START' })
+    try {
+      await onSubmit(values)
+      dispatch({ type: 'SUBMIT_SUCCESS' })
+    } catch (err) {
+      dispatch({ type: 'SUBMIT_ERROR', error: err.message })
+    }
+  }, [values, onSubmit])
+
+  return (
+    <form onSubmit={handleSubmit} noValidate>
+      <div>
+        <input
+          name="name"
+          value={values.name}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          placeholder="Name"
+        />
+        {touched.name && errors.name && <p className="error">{errors.name}</p>}
+      </div>
+
+      <div>
+        <input
+          name="email"
+          type="email"
+          value={values.email}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          placeholder="Email"
+        />
+        {touched.email && errors.email && <p className="error">{errors.email}</p>}
+      </div>
+
+      <div>
+        <input
+          name="password"
+          type="password"
+          value={values.password}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          placeholder="Password"
+        />
+        {touched.password && errors.password && <p className="error">{errors.password}</p>}
+      </div>
+
+      <div>
+        <select name="role" value={values.role} onChange={handleChange}>
+          <option value="member">Member</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+
+      <button type="submit" disabled={status === 'submitting'}>
+        {status === 'submitting' ? 'Creating…' : 'Sign Up'}
+      </button>
+
+      {status === 'error' && <p className="error">Signup failed: {submitError}</p>}
+      {status === 'success' && <p className="success">Account created!</p>}
+    </form>
+  )
+  // useReducer keeps all form state transitions in one testable reducer function.
+  // The component stays declarative — dispatch actions, read state, render.
+}
+```
+::
+
+## Validation Patterns
+
+::code-wrapper{language="javascript" filename="validation_patterns.js"}
+```javascript
+import { useState, useCallback } from 'react'
+
+// Validate on blur (immediate feedback) + validate on submit (final gate)
+function ValidatedForm() {
   const [form, setForm] = useState({ email: '', password: '' })
   const [errors, setErrors] = useState({})
-  const [submitting, setSubmitting] = useState(false)
+  const [touched, setTouched] = useState({})
 
   function validate(values) {
     const next = {}
-    if (!values.email.includes('@')) next.email = 'Enter a valid email address'
-    if (values.password.length < 8) next.password = 'Password must be at least 8 characters'
+    if (!values.email) next.email = 'Email is required'
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) next.email = 'Invalid email format'
+    if (!values.password) next.password = 'Password is required'
+    else if (values.password.length < 8) next.password = 'Password must be 8+ characters'
     return next
   }
 
+  function handleChange(e) {
+    const { name, value } = e.target
+    setForm(prev => ({ ...prev, [name]: value }))
+    if (touched[name]) {
+      setErrors(validate({ ...form, [name]: value }))
+    }
+  }
+
   function handleBlur(e) {
+    const { name } = e.target
+    setTouched(prev => ({ ...prev, [name]: true }))
     const fieldErrors = validate(form)
-    setErrors(prev => ({ ...prev, [e.target.name]: fieldErrors[e.target.name] }))
+    setErrors(prev => ({ ...prev, [name]: fieldErrors[name] }))
   }
 
   async function handleSubmit(e) {
     e.preventDefault()
     const fieldErrors = validate(form)
     setErrors(fieldErrors)
+    setTouched({ email: true, password: true })
     if (Object.keys(fieldErrors).length > 0) return
-
-    setSubmitting(true)
-    try {
-      await submitSignup(form)
-    } finally {
-      setSubmitting(false)
-    }
+    await submitForm(form)
   }
 
   return (
@@ -184,86 +669,142 @@ function SignupForm() {
       <input
         name="email"
         value={form.email}
-        onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
+        onChange={handleChange}
         onBlur={handleBlur}
       />
-      {errors.email && <p className="error">{errors.email}</p>}
+      {touched.email && errors.email && <span className="error">{errors.email}</span>}
 
       <input
         name="password"
         type="password"
         value={form.password}
-        onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))}
+        onChange={handleChange}
         onBlur={handleBlur}
       />
-      {errors.password && <p className="error">{errors.password}</p>}
+      {touched.password && errors.password && <span className="error">{errors.password}</span>}
 
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Signing up…' : 'Sign Up'}
-      </button>
+      <button type="submit">Submit</button>
     </form>
   )
+  // noValidate disables browser validation popups — we use custom JS validation.
+  // HTML constraint attributes (required, pattern) still work for CSS :invalid.
 }
-```
-::
 
-`noValidate` on the `<form>` disables the browser's own built-in validation UI (which varies in appearance across browsers and is hard to style consistently), delegating entirely to the custom JavaScript validation shown here — a common production choice when a form needs a consistent, brand-matched validation experience.
+// Cross-field validation
+function PasswordMatchForm() {
+  const [form, setForm] = useState({ password: '', confirmPassword: '' })
+  const [errors, setErrors] = useState({})
 
-## Why Hand-Rolled Forms Get Painful at Scale
+  function validate(values) {
+    const next = {}
+    if (values.password !== values.confirmPassword) {
+      next.confirmPassword = 'Passwords do not match'
+    }
+    return next
+  }
 
-The pattern above is entirely correct, but notice how much of it is boilerplate that has nothing to do with *this specific form*: tracking touched/blurred state per field, re-running validation, tracking submission state, mapping error messages to fields. A form with fifteen fields, conditional fields, array fields (a dynamic list of "add another phone number" rows), and cross-field validation multiplies this boilerplate substantially — which is the gap form libraries fill.
-
-**react-hook-form** is the most widely used solution in current React codebases; its core idea is registering *uncontrolled* inputs via a `register` function, so most fields never trigger a React re-render on keystroke, and validation/error state is managed internally and exposed through a hook.
-
-::code-wrapper{language="javascript"}
-```javascript
-import { useForm } from 'react-hook-form'
-
-function SignupForm() {
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm()
-
-  async function onSubmit(data) {
-    await submitSignup(data)
+  function handleSubmit(e) {
+    e.preventDefault()
+    const fieldErrors = validate(form)
+    setErrors(fieldErrors)
+    if (Object.keys(fieldErrors).length === 0) submit(form)
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)}>
-      <input {...register('email', { required: 'Email is required', pattern: { value: /@/, message: 'Invalid email' } })} />
-      {errors.email && <p className="error">{errors.email.message}</p>}
-
-      <input type="password" {...register('password', { minLength: { value: 8, message: 'Too short' } })} />
-      {errors.password && <p className="error">{errors.password.message}</p>}
-
-      <button type="submit" disabled={isSubmitting}>Sign Up</button>
+    <form onSubmit={handleSubmit} noValidate>
+      <input
+        name="password"
+        type="password"
+        value={form.password}
+        onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))}
+      />
+      <input
+        name="confirmPassword"
+        type="password"
+        value={form.confirmPassword}
+        onChange={e => {
+          const next = { ...form, confirmPassword: e.target.value }
+          setForm(next)
+          setErrors(validate(next))
+        }}
+      />
+      {errors.confirmPassword && <span className="error">{errors.confirmPassword}</span>}
+      <button type="submit">Submit</button>
     </form>
   )
 }
 ```
 ::
 
-The tradeoff is real, not one-directional: react-hook-form's uncontrolled-by-default approach means the current value of a field isn't automatically available for things like live character counters or cross-field-dependent UI without opting into `watch()`, which reintroduces re-renders for the watched fields specifically. **Formik** takes the opposite default (fully controlled, values always in state) at the cost of more re-renders on large forms. Choosing between them, or hand-rolling per this chapter's earlier examples, is a tradeoff between control/bundle-size and boilerplate reduction — not a question with one universally correct answer.
-
 ## 💡 Tips & Tricks
 
-- **Idiom** — Default to controlled inputs for anything with validation, formatting, or cross-field logic; reach for uncontrolled only for simple submit-time-only fields or elements (like file inputs) that are uncontrolled by browser design regardless of what React wants.
-- **Debug** — The "component is changing an uncontrolled input to controlled" warning almost always traces back to an initial state value of `undefined` (e.g. `useState()` with no argument) — `value={undefined}` renders as uncontrolled on the first render, then becomes controlled once state is set to a real string, tripping the warning. Always initialize form state to `''`, not `undefined`.
-- **Performance** — For very large forms (50+ fields) or forms embedded in frequently-re-rendering lists, react-hook-form's uncontrolled-by-default registration avoids the per-keystroke re-render cost that a naive one-`useState`-per-field controlled approach incurs across the whole form.
-- **Idiom** — Use the `name` attribute plus a single object-shaped state and one shared `handleChange` (the computed-property-name pattern) once a form exceeds roughly five fields — one `useState` call per field stops scaling readably well before that.
-- **Debug** — `noValidate` on `<form>` only disables the *browser's* built-in validation popups — it does not disable HTML constraint attributes like `required`/`pattern` for CSS `:invalid` styling purposes, nor does it replace the need to actually call `e.preventDefault()` in your submit handler.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Default to controlled for anything with validation, formatting, or cross-field
+// logic. Reach for uncontrolled only for simple submit-time-only fields or file inputs.
+
+// [Debug] "Component is changing an uncontrolled input to controlled" → initial state
+// is undefined. useState() with no arg → undefined → value={undefined} = uncontrolled.
+// Always initialize: useState('') for text, useState(false) for checkboxes.
+
+// [Performance] For 50+ field forms or forms in frequently-re-rendering lists,
+// react-hook-form's uncontrolled-by-default registration avoids per-keystroke re-renders.
+
+// [Idiom] Use a single state object + name-attribute-keyed handleChange once a form
+// exceeds ~5 fields. One useState per field stops scaling readably before that.
+
+// [Debug] noValidate on <form> disables browser validation POPUPS only.
+// HTML constraint attributes (required, pattern) still work for CSS :invalid styling.
+// You still need e.preventDefault() in your submit handler regardless.
+
+// [Idiom] For complex forms (multi-step, dependent validation, async submit state),
+// useReducer centralizes all state transitions in one testable function. See Ch 10.
+
+// [Safety] Always clean up object URLs: URL.revokeObjectURL(previewUrl) in a useEffect
+// cleanup. Failing to revoke leaks memory (the blob stays until page unloads).
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **A controlled `<input>` with `value` set but no `onChange` handler silently rejects all keyboard input** — React overwrites the DOM value back to the unchanging state value on every render, which looks to the user like a broken, read-only-seeming field with no error thrown.
-- **File inputs can never be controlled** — `<input type="file" value={...}>` throws a runtime error/warning because browsers refuse to let JavaScript set a file input's value programmatically, for security reasons (preventing pages from pre-filling a fake file path). Use `ref` and read `.files` instead, always.
-- **Switching a field between controlled and uncontrolled mid-lifecycle (state starting as `undefined`, later becoming a string) triggers a development warning and can cause the DOM value to briefly desync from state** — always seed initial state with the correctly-typed empty value (`''`, `0`, `false`), never `undefined` or `null`, for any field that will eventually be controlled.
-- **`defaultValue` only applies once, at mount** — changing the `defaultValue` prop on a re-render does *not* update an already-mounted uncontrolled input's current value; only remounting it (e.g. via a changed `key`, chapter 13) would reset it, which is rarely what's intended.
-- **Checkbox and radio inputs use `checked`/`defaultChecked`, not `value`/`defaultValue`, to control their toggled state** — passing `value` alone to a checkbox sets the value submitted with the form but has no effect on whether it visually appears checked, a mismatch that's easy to write by habit from text-input patterns.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] Controlled input with value but NO onChange → silently rejects all keyboard
+// input. React overwrites the DOM value back to the unchanging state on every render.
+// No error thrown — the input just looks broken/read-only.
+
+// [Gotcha] File inputs can NEVER be controlled. Browsers refuse to let JS set a file
+// input's value (security). Always use ref + .files[0].
+
+// [Gotcha] Switching between controlled and uncontrolled mid-lifecycle (state starts
+// as undefined, becomes a string) triggers the controlled/uncontrolled warning.
+// Always seed initial state with a typed empty value: '', 0, false — never undefined/null.
+
+// [Gotcha] defaultValue only applies ONCE at mount. Changing defaultValue on re-render
+// does NOT update an already-mounted uncontrolled input. Remount via key or go controlled.
+
+// [Gotcha] Checkboxes and radios use checked/defaultChecked, NOT value/defaultValue.
+// Passing value to a checkbox sets the form submission value but does NOT control
+// whether it's checked.
+
+// [Gotcha] <select multiple> with value={state} expects an ARRAY of selected option
+// values, not a single string. value={['apple', 'banana']} not value="apple".
+
+// [Gotcha] <input type="number"> with value={NaN}: parseInt('') returns NaN,
+// NaN || 0 evaluates to 0 (NaN is falsy). The input snaps to 0 when the user
+// tries to clear it. Store the raw string and parse only on submit/blur.
+
+// [Gotcha] FormData.entries() returns only the LAST value for fields with duplicate
+// names (multiple checkboxes with name="interests"). Use formData.getAll('interests')
+// to get all values as an array.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A "quantity" stepper input in a shopping cart is supposed to let users type any number, but every time they try to clear the field to type a new value, it immediately snaps back to `0`.
+A "quantity" stepper input is supposed to let users type any number, but every time they try to clear the field to type a new value, it immediately snaps back to `0`:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
 function QuantityInput({ onChange }) {
   const [quantity, setQuantity] = useState(1)
@@ -282,17 +823,54 @@ function QuantityInput({ onChange }) {
 <details>
 <summary>Answer</summary>
 
-Clearing the input produces an empty string, and `parseInt('', 10)` returns `NaN`. `setQuantity(NaN)` sets state to `NaN`, and on the next render, `quantity || 0` evaluates: `NaN` is falsy in JavaScript, so the `||` falls through to `0` — the input is forced back to displaying `0` on every keystroke that produces an intermediate invalid/empty value, making it impossible to ever type a fresh multi-digit number by clearing the field first.
+Clearing the input produces an empty string, and `parseInt('', 10)` returns `NaN`. `setQuantity(NaN)` sets state to `NaN`, and on the next render, `quantity || 0` evaluates: `NaN` is falsy in JavaScript, so the `||` falls through to `0` — the input is forced back to displaying `0` on every keystroke that produces an intermediate empty/invalid value. The user can never clear the field to type a fresh multi-digit number.
 
-**The lesson**: when deriving a controlled input's displayed `value` from state with a fallback like `|| 0`, remember that `NaN`, `0`, and `''` are all falsy — a fallback meant to handle only the "never been set" case ends up incorrectly overriding legitimate in-progress states like a temporarily empty or unparseable field; store and display the raw string, then parse only when the value is actually needed (e.g. on submit or blur).
+**Fix**: store the raw string, display it directly, and parse only when the value is actually needed:
+
+```javascript
+function QuantityInput({ onChange }) {
+  const [rawValue, setRawValue] = useState('1')
+
+  function handleChange(e) {
+    const str = e.target.value
+    setRawValue(str)
+    const parsed = parseInt(str, 10)
+    if (!isNaN(parsed)) onChange(parsed)
+  }
+
+  return <input type="number" value={rawValue} onChange={handleChange} />
+}
+```
+
+By storing the raw string, the input can display `''` (empty) while the user types — no `|| 0` fallback fighting the user. The numeric parse happens only for the `onChange` callback, guarded by `isNaN`.
 
 </details>
 
 ## Key Takeaways
 
-- Controlled inputs keep React state as the single source of truth via `value` + `onChange`; uncontrolled inputs let the DOM track its own value, read on demand via `ref`.
-- File inputs are always uncontrolled by browser design — `value` cannot be set on them programmatically under any circumstances.
-- Mixing `value` without `onChange`, or letting initial state start as `undefined`, are the two most common causes of the controlled/uncontrolled warning and of inputs that silently reject typing.
-- A single object in state with a shared `name`-keyed `handleChange` scales better than one `useState` per field once a form has more than a handful of fields.
-- Validate on blur for immediate feedback and again on submit as a final gate — a user can reach submit without ever triggering an individual field's blur event.
-- Form libraries like react-hook-form (uncontrolled-first, fewer re-renders) and Formik (controlled-first, simpler mental model) exist to remove the boilerplate of touched/error/submission tracking once hand-rolled forms get large — neither is a strictly superior default.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. Controlled: value={state} + onChange → React owns the value, re-renders per keystroke.
+//    Uncontrolled: defaultValue + ref → DOM owns the value, read on demand at submit.
+
+// 2. Always initialize controlled state to a typed empty value ('', 0, false) —
+//    never undefined/null. undefined → uncontrolled first render → warning.
+
+// 3. File inputs are ALWAYS uncontrolled by browser design. Use ref + .files[0].
+
+// 4. defaultValue/defaultChecked apply ONCE at mount — do NOT update on re-render.
+//    To sync with changing props: remount via key, or switch to controlled.
+
+// 5. FormData reads all named fields in one call. Use getAll() for multi-value fields.
+//    Pass FormData directly to fetch body for multipart/form-data file uploads.
+
+// 6. 2-3 fields: one useState per field. 5-15: single state object + name-keyed handler.
+//    Complex (multi-step, dependent validation, async submit): useReducer. See Ch 10.
+
+// 7. Validate on blur for immediate feedback + validate on submit as a final gate.
+//    noValidate disables browser popups but NOT CSS :invalid — HTML constraints still apply.
+
+// 8. Checkboxes/radios use checked/defaultChecked, NOT value/defaultValue.
+//    <select multiple> expects an array of values, not a string.
+```
+::

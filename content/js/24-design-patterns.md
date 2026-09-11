@@ -1,158 +1,370 @@
-# 24 — Design Patterns
+---
+title: "JavaScript 24 — Design Patterns: Module, Observer, Strategy & State Machine"
+description: "Deep-dive into production design patterns in JavaScript: the revealing module pattern, pub-sub with WeakRef cleanup, strategy pattern for interchangeable algorithms, the state machine pattern, and the builder pattern for fluent APIs. Code-first reference for senior engineers."
+---
 
-## Module Pattern
+# 24 — Design Patterns: Module, Observer, Strategy & State Machine
+
+## Module Pattern (Revealing Module)
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// ES module — the modern module pattern
-// math.js
-export const add = (a, b) => a + b
-export const subtract = (a, b) => a - b
-// private: anything not exported is private
+// ── Revealing module pattern: private state via closures, public API via return ──
+const UserService = (() => {
+    // Private state (closure-captured, not accessible outside)
+    const users = new Map();
+    let nextId = 1;
+
+    // Private methods
+    const validate = (user) => {
+        if (!user.name || typeof user.name !== "string") {
+            throw new Error("invalid name");
+        }
+    };
+
+    const generateId = () => nextId++;
+
+    // Public API (revealed via the return object)
+    const create = (userData) => {
+        validate(userData);
+        const id = generateId();
+        const user = { id, ...userData, createdAt: Date.now() };
+        users.set(id, user);
+        return user;
+    };
+
+    const getById = (id) => users.get(id);
+    const getAll = () => [...users.values()];
+    const remove = (id) => users.delete(id);
+
+    return { create, getById, getAll, remove };  // reveal only the public API
+})();
+
+// Usage:
+UserService.create({ name: "Alice" });
+UserService.create({ name: "Bob" });
+console.log(UserService.getAll());  // [{ id: 1, name: "Alice", ... }, { id: 2, ... }]
+// UserService.validate({});  // ✗ TypeError: not a function (private — not revealed)
 ```
 ::
-::
 
-## Factory Pattern
-
-::code-wrapper{language="javascript"}
-```javascript
-function createUser(name, role) {
-  return {
-    name,
-    role,
-    greet() { return `Hi, I'm ${this.name}` },
-    hasPermission(action) {
-      return permissions[this.role]?.includes(action) ?? false
-    }
-  }
-}
-
-const admin = createUser('Alice', 'admin')
-const user = createUser('Bob', 'user')
-```
-::
-::
-
-## Observer / Pub-Sub
+## Observer / Pub-Sub Pattern
 
 ::code-wrapper{language="javascript"}
 ```javascript
+// ── Observer pattern: subjects notify subscribers on state change ──
 class EventEmitter {
-  #events = new Map()
+    #handlers = new Map();
 
-  on(event, callback) {
-    if (!this.#events.has(event)) this.#events.set(event, [])
-    this.#events.get(event).push(callback)
-  }
+    on(event, handler) {
+        if (!this.#handlers.has(event)) this.#handlers.set(event, new Set());
+        this.#handlers.get(event).add(handler);
+        return () => this.off(event, handler);  // return unsubscribe function
+    }
 
-  emit(event, data) {
-    this.#events.get(event)?.forEach(cb => cb(data))
-  }
+    once(event, handler) {
+        const unsubscribe = this.on(event, (...args) => {
+            unsubscribe();  // auto-remove after first call
+            handler(...args);
+        });
+        return unsubscribe;
+    }
 
-  off(event, callback) {
-    const cbs = this.#events.get(event)
-    if (cbs) this.#events.set(event, cbs.filter(cb => cb !== callback))
-  }
+    off(event, handler) {
+        this.#handlers.get(event)?.delete(handler);
+    }
+
+    emit(event, ...args) {
+        const handlers = this.#handlers.get(event);
+        if (handlers) for (const handler of handlers) handler(...args);
+    }
+
+    clear() {
+        this.#handlers.clear();
+    }
 }
 
-const bus = new EventEmitter()
-const handler = (data) => console.log(data)
-bus.on('update', handler)
-bus.emit('update', { count: 1 })
-bus.off('update', handler)
+// ── Usage ──
+const emitter = new EventEmitter();
+const unsubscribe = emitter.on("data", (data) => console.log("received:", data));
+emitter.emit("data", { id: 1 });  // "received: { id: 1 }"
+unsubscribe();  // remove the listener
+emitter.emit("data", { id: 2 });  // no output (listener removed)
+
+// ── WeakRef for auto-cleanup (subscriber can be GC'd without unsubscribing) ──
+class WeakEventEmitter {
+    #handlers = new Map();
+
+    on(event, handler, target = {}) {
+        if (!this.#handlers.has(event)) this.#handlers.set(event, new Map());
+        const weakTarget = new WeakRef(target);
+        this.#handlers.get(event).set(handler, { weakTarget, handler });
+    }
+
+    emit(event, ...args) {
+        const handlers = this.#handlers.get(event);
+        if (!handlers) return;
+        for (const [handler, { weakTarget }] of handlers) {
+            if (weakTarget.deref()) {  // only call if the target still exists
+                handler(...args);
+            } else {
+                handlers.delete(handler);  // auto-cleanup: target was GC'd
+            }
+        }
+    }
+}
 ```
 ::
-::
 
-## Singleton
+## Strategy Pattern
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// ES module is already a singleton — imported once, shared
-// config.js
-export const config = Object.freeze({
-  apiUrl: 'https://api.example.com',
-  timeout: 5000
-})
+// ── Strategy: interchangeable algorithms behind a common interface ──
+class Sorter {
+    constructor(strategy) {
+        this.strategy = strategy;
+    }
 
-// Class-based singleton
-class Database {
-  static #instance = null
-  static get instance() {
-    if (!Database.#instance) Database.#instance = new Database()
-    return Database.#instance
-  }
-  #connected = false
-  connect() { this.#connected = true }
+    setStrategy(strategy) {
+        this.strategy = strategy;
+    }
+
+    sort(data) {
+        return this.strategy(data);
+    }
+}
+
+// Concrete strategies (interchangeable algorithms)
+const strategies = {
+    ascending: (data) => [...data].sort((a, b) => a - b),
+    descending: (data) => [...data].sort((a, b) => b - a),
+    shuffle: (data) => [...data].sort(() => Math.random() - 0.5),
+    alphabetical: (data) => [...data].sort((a, b) => String(a).localeCompare(String(b))),
+};
+
+// Usage:
+const sorter = new Sorter(strategies.ascending);
+console.log(sorter.sort([3, 1, 2]));  // [1, 2, 3]
+sorter.setStrategy(strategies.descending);
+console.log(sorter.sort([3, 1, 2]));  // [3, 2, 1]
+sorter.setStrategy(strategies.shuffle);
+console.log(sorter.sort([1, 2, 3, 4, 5]));  // shuffled
+
+// ── Strategy for payment processing ──
+const paymentStrategies = {
+    creditCard: (amount, cardInfo) => {
+        // process credit card payment
+        return { status: "paid", method: "creditCard", amount };
+    },
+    paypal: (amount, paypalInfo) => {
+        return { status: "paid", method: "paypal", amount };
+    },
+    crypto: (amount, walletInfo) => {
+        return { status: "paid", method: "crypto", amount };
+    },
+};
+
+function processPayment(method, amount, info) {
+    const strategy = paymentStrategies[method];
+    if (!strategy) throw new Error(`unknown payment method: ${method}`);
+    return strategy(amount, info);
 }
 ```
 ::
+
+## State Machine Pattern
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Finite state machine: explicit states, transitions, and side effects ──
+class StateMachine {
+    #state;
+    #states;
+    #emitter = new EventEmitter();
+
+    constructor(initialState, states) {
+        this.#state = initialState;
+        this.#states = states;
+    }
+
+    get state() { return this.#state; }
+
+    transition(action) {
+        const currentState = this.#states[this.#state];
+        const nextState = currentState?.transitions?.[action];
+        if (!nextState) {
+            throw new Error(`invalid transition: ${this.#state} → ${action}`);
+        }
+        // Run exit action for current state
+        currentState.onExit?.(this);
+        // Transition
+        this.#state = nextState;
+        // Run entry action for new state
+        this.#states[nextState].onEntry?.(this);
+        // Notify listeners
+        this.#emitter.emit("transition", { from: currentState, action, to: nextState });
+    }
+
+    on(event, handler) { return this.#emitter.on(event, handler); }
+    can(action) { return Boolean(this.#states[this.#state]?.transitions?.[action]); }
+}
+
+// ── Traffic light state machine ──
+const trafficLight = new StateMachine("red", {
+    red:    { transitions: { go: "green" }, onEntry: (m) => console.log("STOP") },
+    green:  { transitions: { warn: "yellow" }, onEntry: (m) => console.log("GO") },
+    yellow: { transitions: { stop: "red" }, onEntry: (m) => console.log("SLOW DOWN") },
+});
+
+trafficLight.on("transition", ({ to }) => console.log(`→ ${to}`));
+trafficLight.transition("go");    // → green, "GO"
+trafficLight.transition("warn");  // → yellow, "SLOW DOWN"
+trafficLight.transition("stop");  // → red, "STOP"
+// trafficLight.transition("go"); from yellow → Error: invalid transition
+
+// ── HTTP request state machine ──
+const requestStates = {
+    idle: { transitions: { send: "pending" } },
+    pending: { transitions: { resolve: "success", reject: "error" } },
+    success: { transitions: { reset: "idle" } },
+    error: { transitions: { retry: "pending", reset: "idle" } },
+};
+```
+::
+
+## Builder Pattern for Fluent APIs
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Builder: construct complex objects step-by-step with method chaining ──
+class QueryBuilder {
+    #table = "";
+    #columns = [];
+    #conditions = [];
+    #orderBy = "";
+    #limit = null;
+
+    select(...columns) { this.#columns = columns; return this; }
+    from(table) { this.#table = table; return this; }
+    where(condition) { this.#conditions.push(condition); return this; }
+    orderBy(column) { this.#orderBy = column; return this; }
+    limit(n) { this.#limit = n; return this; }
+
+    build() {
+        let sql = `SELECT ${this.#columns.join(", ") || "*"} FROM ${this.#table}`;
+        if (this.#conditions.length) sql += ` WHERE ${this.#conditions.join(" AND ")}`;
+        if (this.#orderBy) sql += ` ORDER BY ${this.#orderBy}`;
+        if (this.#limit !== null) sql += ` LIMIT ${this.#limit}`;
+        return sql;
+    }
+}
+
+// Fluent API (method chaining — each method returns `this`)
+const query = new QueryBuilder()
+    .select("name", "email")
+    .from("users")
+    .where("age > 18")
+    .where("active = true")
+    .orderBy("name")
+    .limit(10)
+    .build();
+console.log(query);  // "SELECT name, email FROM users WHERE age > 18 AND active = true ORDER BY name LIMIT 10"
+```
 ::
 
 ## 💡 Tips & Tricks
 
-**Private fields (`#field`) enforce true encapsulation** — Unlike `_field` naming conventions, `#events` in the `EventEmitter` example is genuinely inaccessible from outside the class — `instance.#events` throws a `SyntaxError` outside the class body, not just a lint warning.
+::code-wrapper{language="javascript"}
+```javascript
+// ── Factory pattern for object creation ──
+function createButton({ text = "Click", onClick = () => {}, disabled = false } = {}) {
+    const button = document.createElement("button");
+    button.textContent = text;
+    button.disabled = disabled;
+    button.addEventListener("click", onClick);
+    return button;
+}
 
-**Factory functions sidestep `this`-binding bugs entirely** — Since `createUser` returns a plain object with methods closing over local variables (or using object shorthand), you never have to worry about `new` being forgotten or a method losing its `this` when passed as a callback.
+// ── Singleton via module (ESM is a singleton by default) ──
+// config.js:
+// const config = { apiUrl: "..." };
+// export default config;  // ESM modules are singletons (same instance everywhere)
 
-**Module pattern for true private state without classes** — Wrapping variables in a function scope and exporting only what's needed (as in `math.js`) gives you privacy for free — no `#` syntax needed, and it predates ES6 classes entirely.
+// ── Singleton with lazy initialization ──
+let _instance = null;
+class Database {
+    constructor() {
+        if (_instance) return _instance;  // return existing instance
+        _instance = this;
+        this.connection = connect();
+    }
+}
 
-**Lazy singleton initialization saves startup cost** — The `static get instance()` pattern only constructs `Database` on first access, not at module load — useful when the singleton is expensive to create but not always needed.
-
-**Observer pattern decouples emitters from listeners for testing** — Because `EventEmitter.emit` doesn't know or care who's listening, you can test emitted events in isolation by attaching a throwaway listener and asserting on what it received.
+// ── Decorator pattern (function decorators) ──
+function withLogging(fn) {
+    return function(...args) {
+        console.log(`calling ${fn.name} with`, args);
+        const result = fn.apply(this, args);
+        console.log(`result:`, result);
+        return result;
+    };
+}
+const add = withLogging((a, b) => a + b);
+add(1, 2);  // logs "calling with [1, 2]", "result: 3"
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-**Singletons complicate testing** — A module-level singleton (like the class-based `Database.instance`) persists state across test files unless explicitly reset, causing tests to pass or fail depending on run order — a classic "works alone, fails in the suite" bug.
+::code-wrapper{language="javascript"}
+```javascript
+// ── Event listeners and memory leaks ──
+// Always provide a way to unsubscribe (return a cleanup function or use AbortController).
+// If the subscriber is GC'd but the publisher holds a strong reference, the listener leaks.
 
-**Forgetting to `off()` an EventEmitter listener leaks memory** — Each `bus.on('update', handler)` call keeps a reference to `handler` alive inside `#events` forever unless `bus.off('update', handler)` is called — in long-lived apps (SPAs), this silently accumulates listeners and can cause the same event to fire the same stale callback multiple times.
+// ── `this` in strategy methods ──
+// When passing a method as a strategy, `this` is lost (detached).
+// Fix: use .bind(this) or arrow functions: strategy = strategy.bind(this)
 
-**`off()` requires the exact same function reference, just like DOM events** — `bus.on('update', data => log(data)); bus.off('update', data => log(data))` fails silently — the two arrow functions are different objects, so the filter in `off` never matches and the original listener keeps firing.
+// ── State machine: invalid transitions should throw (not silently ignore) ──
+// Silent ignoring makes debugging harder. Explicit errors catch bugs early.
 
-**`Object.freeze` on a config object doesn't stop new property additions from being silently ignored** — In non-strict mode, `frozenConfig.newProp = 'x'` doesn't throw, it just does nothing — leading developers to think the assignment worked when it was silently dropped.
+// ── Singleton is an anti-pattern for testing ──
+// Singletons make testing harder (global state, hard to reset between tests).
+// Use dependency injection instead for testable code.
 
-**Factory-created objects don't share methods across instances** — Each call to `createUser()` defines a **new** `greet` function on the returned object, unlike class instances which share methods via the prototype. This means factories use more memory per instance if you create thousands of objects — a real trade-off, not just a style choice.
+// ── Builder must return `this` for chaining ──
+// Forgetting `return this` breaks the chain — each method returns undefined.
+```
+::
 
-## 🧠 Spot the Bug
+## 🧠 Quick Quiz
 
-What does this log?
+What pattern is this, and what's the issue?
 
 ::code-wrapper{language="javascript"}
 ```javascript
-class Counter {
-  static #instance = null
-  #count = 0
-
-  static get instance() {
-    if (!Counter.#instance) Counter.#instance = new Counter()
-    return Counter.#instance
-  }
-
-  increment() { this.#count++; return this.#count }
-}
-
-const a = Counter.instance
-const b = new Counter()
-
-console.log(a.increment())
-console.log(b.increment())
-console.log(a === b)
+const emitter = new EventEmitter();
+emitter.on("update", function() { this.render(); });
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Logs `1`, `1`, and `false`. The singleton pattern via `Counter.instance` only guarantees a single instance **if every caller goes through the getter** — nothing stops code from calling `new Counter()` directly, which happily creates a second, independent instance with its own `#count`. `a` and `b` are different objects, so each `increment()` starts from its own zero.
+This is the **Observer pattern** (event emitter), but there's a `this` binding issue.
 
-**The lesson**: a "singleton" enforced only by convention isn't enforced at all — if true single-instance guarantees matter, the constructor itself must throw when called a second time, or be made inaccessible (e.g. via a module-private class not exported directly).
+When the emitter calls the handler, `this` inside the regular function is determined by the **call site** — which is the emitter (not the component that registered the handler). So `this.render()` would fail because `this` is the emitter, not the component.
+
+**Fix**: use an arrow function (lexical `this`) or `bind`:
+
+```javascript
+emitter.on("update", () => this.render());  // arrow: `this` is the enclosing scope
+// or:
+emitter.on("update", this.render.bind(this));  // bind: `this` is the component
+```
+
+**The lesson**: event handler callbacks lose their `this` binding (the emitter's call site determines `this`, not the registration site). Use arrow functions or `.bind(this)` to preserve the correct `this`.
 
 </details>
-
-## Key Takeaways
-
-- ES modules are singletons by nature — one instance per import.
-- Factory functions are more flexible than `new` — no `this` binding issues.
-- EventEmitter pattern is everywhere — DOM, Node.js streams, custom events.
-- Freeze config objects to prevent accidental mutation.

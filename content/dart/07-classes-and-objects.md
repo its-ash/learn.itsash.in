@@ -1,388 +1,390 @@
-# 07 — Classes & Objects
+---
+title: "Dart — Classes, Sealed Hierarchies & Mixin Composition"
+description: "Deep-dive into Dart class mechanics, const constructors and canonicalization, sealed class exhaustiveness, mixin linearization, factory patterns, and value equality. Code-first engineering reference."
+---
 
-Dart is a class-based, object-oriented language with single inheritance, mixins, interfaces (implicit), and extension methods.
+# Dart — Classes, Sealed Hierarchies & Mixin Composition
 
-## Defining a Class
+## Const Constructors — Canonicalization & Immutability
 
 ::code-wrapper{language="dart"}
 ```dart
+// A const constructor creates compile-time constant instances.
+// Requirements: all fields final, no body, all constructor params const-eligible.
+// Benefit: canonicalization — identical const instances are the SAME object.
+
+class Color {
+  final int r, g, b;
+  const Color(this.r, this.g, this.b);
+
+  // Static const instances — shared everywhere, zero allocation.
+  static const red = Color(255, 0, 0);
+  static const green = Color(0, 255, 0);
+  static const blue = Color(0, 0, 255);
+
+  @override
+  bool operator ==(Object other) =>
+      other is Color && r == other.r && g == other.g && b == other.b;
+
+  @override
+  int get hashCode => Object.hash(r, g, b);
+}
+
+void main() {
+  const a = Color(255, 0, 0);
+  const b = Color(255, 0, 0);
+  print(identical(a, b));  // true — same object (canonicalized at compile time)
+  print(a == b);           // true — value equality (overridden)
+
+  final c = Color(255, 0, 0);  // non-const — runtime allocation
+  final d = Color(255, 0, 0);  // non-const — another allocation
+  print(identical(c, d));  // false — distinct heap objects
+  print(c == d);           // true — value equality (overridden)
+
+  // const in a non-const context: `const Color(...)` is always canonicalized,
+  // `Color(...)` (no const) always allocates. Use const for fixed values.
+}
+```
+::
+
+### The Value Equality Trap
+
+::code-wrapper{language="dart"}
+```dart
+// ❌ Anti-pattern: a "value class" without == / hashCode override.
+class PointBad {
+  final double x, y;
+  const PointBad(this.x, this.y);
+}
+
+var a = PointBad(1, 2);
+var b = PointBad(1, 2);
+print(a == b);  // false — default == is identity (different objects)
+print({a, b}.length);  // 2 — both in the Set (different hashes by default)
+
+// ✓ Correct: override == and hashCode together (consistency required).
 class Point {
-	final double x;
-	final double y;
+  final double x, y;
+  const Point(this.x, this.y);
 
-	// Constructor
-	Point(this.x, this.y);
+  @override
+  bool operator ==(Object other) =>
+      other is Point && x == other.x && y == other.y;
 
-	// Named constructor
-	Point.origin() : x = 0, y = 0;
-
-	// Redirecting constructor
-	Point.alongXAxis(double x) : this(x, 0);
-
-	// Method
-	double distanceTo(Point other) {
-		var dx = x - other.x;
-		var dy = y - other.y;
-		return sqrt(dx * dx + dy * dy);
-	}
-
-	// Getter
-	bool get isOrigin => x == 0 && y == 0;
-
-	// toString
-	@override
-	String toString() => 'Point($x, $y)';
+  @override
+  int get hashCode => Object.hash(x, y);  // must be consistent with ==
 }
+
+var a2 = Point(1, 2);
+var b2 = Point(1, 2);
+print(a2 == b2);  // true — value equality
+print({a2, b2}.length);  // 1 — same hash, same == → deduplicated in Set
+
+// Or use records (Dart 3) for automatic value equality:
+var ra = (1.0, 2.0);
+var rb = (1.0, 2.0);
+print(ra == rb);  // true — structural equality built in, no override needed
 ```
 ::
-### Constructors
 
-- **Default** — `Point(this.x, this.y)` — `this.x` assigns the field `x` from the param `x` (shorthand).
-- **Named** — `Point.origin()` — multiple constructors per class, named for clarity.
-- **Redirecting** — `Point.alongXAxis(double x) : this(x, 0)` — delegates to another constructor.
-- **Initializer list** — `Point(double x, double y) : x = x.abs(), y = y.abs();` — runs before the body, can use `assert`.
-- **Factory** — `factory Point(...) { return ...; }` — doesn't always create a new instance (can return a cached/subtype).
-
-### `const` constructor
+## Sealed Classes — Closed Hierarchies & Exhaustiveness
 
 ::code-wrapper{language="dart"}
 ```dart
-class ImmutablePoint {
-	final double x;
-	final double y;
-	const ImmutablePoint(this.x, this.y);
+// sealed: all direct subtypes must be in the same library. The compiler
+// knows the complete set → exhaustive switches without `default`.
+// Adding a subtype → compile error at every non-exhaustive switch.
+
+sealed class Result<T> {
+  const Result();
 }
 
-const p = ImmutablePoint(1, 2);   // compile-time constant instance
-const q = ImmutablePoint(1, 2);
-print(identical(p, q));   // true — canonicalized
+class Success<T> extends Result<T> {
+  final T value;
+  const Success(this.value);
+}
+
+class Failure<T> extends Result<T> {
+  final String error;
+  const Failure(this.error);
+}
+
+// Pattern matching with destructuring — no casts, no defaults:
+T unwrap<T>(Result<T> r) => switch (r) {
+  Success(:final value) => value,  // destructures .value directly
+  Failure(:final error) => throw Exception(error),
+};
+
+// Exhaustiveness: if you add `class Loading<T> extends Result<T> {}`,
+// this switch becomes a compile error: "Loading not handled."
+
+// Real-world: state machines, AST nodes, Either/Option types.
+sealed class AppState {}
+class Idle extends AppState {}
+class Loading extends AppState {}
+class Loaded<T> extends AppState { final T data; Loaded(this.data); }
+class Error extends AppState { final String message; Error(this.message); }
+
+Widget renderState(AppState state) => switch (state) {
+  Idle() => Text('Idle'),
+  Loading() => CircularProgressIndicator(),
+  Loaded(:final data) => DataWidget(data),
+  Error(:final message) => ErrorWidget(message),
+};
 ```
 ::
-`const` constructors create compile-time constant instances — all `const` instances with the same args are the same object (canonicalized). All fields must be `final`, and the constructor has no body.
 
-### Factory constructors
+## Mixins — Linearization & Constraints
 
 ::code-wrapper{language="dart"}
 ```dart
+// Mixins provide reusable implementation across unrelated class hierarchies.
+// Dart has single inheritance — mixins fill the multiple-inheritance gap.
+// Mixins can't have constructors (applied via `with`, not instantiated).
+
+mixin Drawable {
+  void draw() => print('Drawing $this');
+
+  // Mixin can define fields — they become part of the applying class.
+  bool _dirty = true;
+  void markDirty() => _dirty = true;
+  void markClean() => _dirty = false;
+}
+
+mixin Loggable {
+  void log(String msg) => print('[$runtimeType] $msg');
+}
+
+// `on` constraint: the mixin can only be applied to subclasses of the constraint.
+// This gives the mixin access to the constraint's methods.
+mixin disposableView on StatefulWidget {
+  void registerDispose(void Function() fn) {
+    // Can access State methods because of the `on` constraint.
+    // addCallback(() => fn());
+  }
+}
+
+// Multiple mixins — applied left-to-right (linearization):
+class Canvas with Drawable, Loggable {
+  final String name;
+  Canvas(this.name);
+
+  @override
+  String toString() => 'Canvas($name)';
+}
+
+var canvas = Canvas('main');
+canvas.draw();  // 'Drawing Canvas(main)' — from Drawable
+canvas.log('Created');  // '[Canvas] Created' — from Loggable
+
+// ❌ Anti-pattern: mixins with state that conflict.
+mixin A { int value = 1; }
+mixin B { int value = 2; }
+// class C with A, B { }  // compile error: value is defined in both A and B
+```
+::
+
+## Factory Constructors — Caching & Subtypes
+
+::code-wrapper{language="dart"}
+```dart
+// factory constructors don't always create a new instance — they can return
+// a cached instance, a subtype, or compute which to return. Like a static method
+// that returns an instance of the class (or a subtype).
+
 class Logger {
-	static final _cache = <String, Logger>{};
+  static final _cache = <String, Logger>{};
+  final String name;
 
-	final String name;
-	Logger._internal(this.name);
+  // Private generative constructor — only accessible within the library.
+  Logger._internal(this.name);
 
-	factory Logger(String name) {
-		return _cache.putIfAbsent(name, () => Logger._internal(name));
-	}
+  // Factory — returns cached instance if available.
+  factory Logger(String name) {
+    return _cache.putIfAbsent(name, () => Logger._internal(name));
+  }
 }
 
 var a = Logger('app');
 var b = Logger('app');
-print(identical(a, b));   // true — cached
-```
-::
-`factory` runs like a static method — it can return a cached instance, a subtype, or compute the instance. Use for caching, singletons, or returning subtypes.
+print(identical(a, b));  // true — cached, same instance
 
-## Fields and Properties
-
-::code-wrapper{language="dart"}
-```dart
-class Person {
-	String name;          // mutable field
-	int _age;             // private (library-private, by convention)
-
-	Person(this.name, this._age);
-
-	int get age => _age;                          // getter
-	set age(int value) {                          // setter
-		if (value < 0) throw ArgumentError();
-		_age = value;
-	}
-
-	String get displayName => name.toUpperCase();
-}
-```
-::
-- Fields without `final` are mutable.
-- `_` prefix makes a name library-private (not truly private — accessible within the same library/file, but not from other files).
-- Getters and setters use `get`/`set` — access them like fields (`person.age`, not `person.age()`).
-
-### `late` fields
-
-::code-wrapper{language="dart"}
-```dart
-class Config {
-	late final String value = _load();   // lazy, runs on first access
-	String _load() { /* expensive */ return 'loaded'; }
-}
-```
-::
-`late final` with an initializer runs the initializer on first access (lazy). Useful for expensive fields.
-
-## Inheritance
-
-::code-wrapper{language="dart"}
-```dart
-class Animal {
-	String name;
-	Animal(this.name);
-
-	void speak() => print('$name makes a sound');
+// Factory returning a subtype based on input:
+abstract class Animal {
+  final String name;
+  Animal(this.name);
+  factory Animal.fromType(String type, String name) {
+    return switch (type) {
+      'dog' => Dog(name),
+      'cat' => Cat(name),
+      _ => throw ArgumentError('Unknown animal type: $type'),
+    };
+  }
+  String speak();
 }
 
 class Dog extends Animal {
-	Dog(String name) : super(name);
-
-	@override
-	void speak() => print('$name barks');
+  Dog(super.name);
+  @override
+  String speak() => '$name barks';
 }
 
-var dog = Dog('Rex');
-dog.speak();   // 'Rex barks'
+class Cat extends Animal {
+  Cat(super.name);
+  @override
+  String speak() => '$name meows';
+}
+
+var pet = Animal.fromType('dog', 'Rex');  // returns Dog (a subtype of Animal)
+print(pet.speak());  // 'Rex barks'
 ```
 ::
-`extends` for single inheritance. `super` calls the parent. `@override` is a hint (not enforced, but recommended) for overriding methods. Dart has **single inheritance** (one parent), unlike C++/Python.
 
-## Interfaces (implicit)
-
-Every class is an implicit interface. Any class can `implement` another (or multiple):
+## Enhanced Enums — Stateful Enumerations
 
 ::code-wrapper{language="dart"}
 ```dart
-class Flyer {
-	void fly() => print('Flying');
+// Dart 2.17+ enhanced enums: fields, methods, constructors (like a class).
+// All instances are const. Can implement interfaces, use mixins (no `with`).
+
+enum HttpStatus {
+  ok(200, 'OK'),
+  created(201, 'Created'),
+  badRequest(400, 'Bad Request'),
+  unauthorized(401, 'Unauthorized'),
+  notFound(404, 'Not Found'),
+  serverError(500, 'Internal Server Error');
+
+  final int code;
+  final String label;
+  const HttpStatus(this.code, this.label);
+
+  // Methods on enum values:
+  bool get isSuccess => code >= 200 && code < 300;
+  bool get isClientError => code >= 400 && code < 500;
+  bool get isServerError => code >= 500;
+
+  static HttpStatus fromCode(int code) =>
+      values.firstWhere((s) => s.code == code,
+          orElse: () => throw ArgumentError('No status for code $code'));
 }
 
-class Bird extends Animal implements Flyer {
-	Bird(String name) : super(name);
+// Usage:
+print(HttpStatus.ok.isSuccess);  // true
+print(HttpStatus.notFound.isClientError);  // true
+print(HttpStatus.fromCode(404).label);  // 'Not Found'
 
-	@override
-	void fly() => print('$name flies');
-}
+// Exhaustive switch over enhanced enum (no default needed):
+String describe(HttpStatus s) => switch (s) {
+  HttpStatus.ok => 'Success',
+  HttpStatus.created => 'Created',
+  HttpStatus.badRequest => 'Client error: bad request',
+  HttpStatus.unauthorized => 'Client error: auth',
+  HttpStatus.notFound => 'Client error: not found',
+  HttpStatus.serverError => 'Server error',
+};
+// Adding a new HttpStatus value → compile error here (non-exhaustive).
 ```
 ::
-`implements` means "I provide the methods of this interface" — you must implement all methods (even if the class has them). `extends` means "I am a subclass" — you inherit the implementation.
 
-A class can `implements` multiple interfaces (but `extends` only one):
+## Extension Methods — Adding to Existing Types
 
 ::code-wrapper{language="dart"}
 ```dart
-class Duck extends Animal implements Flyer, Swimmer { ... }
+// Extensions add methods to existing types (even library types like String, int).
+// They don't modify the original type — they're syntactic sugar for static methods.
+
+extension StringX on String {
+  bool get isPalindrome => this == reversed;
+  String get reversed => split('').reversed.join();
+  String capitalize() => isEmpty ? this : this[0].toUpperCase() + substring(1);
+  String truncate(int maxLen) =>
+      length <= maxLen ? this : '${substring(0, maxLen - 3)}...';
+}
+
+print('racecar'.isPalindrome);  // true
+print('hello'.reversed);        // 'olleh'
+print('hello world'.capitalize());  // 'Hello world'
+print('A very long string here'.truncate(10));  // 'A very...'
+
+// Extension on a generic type:
+extension ListX<T> on List<T> {
+  T? get firstOrNull => isEmpty ? null : first;
+  List<T> separatedBy(T separator) {
+    if (isEmpty) return [];
+    final result = <T>[];
+    for (var i = 0; i < length; i++) {
+      result.add(this[i]);
+      if (i < length - 1) result.add(separator);
+    }
+    return result;
+  }
+}
+
+print([1, 2, 3].separatedBy(0));  // [1, 0, 2, 0, 3]
+
+// Extensions are resolved at compile time — they don't participate in polymorphism.
+// An extension method on `Object` is available everywhere but can be surprising.
 ```
 ::
-## Abstract Classes
-
-::code-wrapper{language="dart"}
-```dart
-abstract class Shape {
-	double area();          // abstract method (no body)
-	void describe() => print('Area: ${area()}');   // concrete method
-}
-
-class Circle extends Shape {
-	final double radius;
-	Circle(this.radius);
-
-	@override
-	double area() => 3.14159 * radius * radius;
-}
-```
-::
-`abstract class` can't be instantiated — subclasses implement the abstract methods. Can have concrete methods too.
-
-## Mixins
-
-Mixins reuse code across class hierarchies (Dart has single inheritance, so mixins fill the multiple-inheritance gap):
-
-::code-wrapper{language="dart"}
-```dart
-mixin Drawable {
-	void draw() => print('Drawing $this');
-}
-
-mixin Resizable {
-	double size = 1.0;
-	void resize(double factor) => size *= factor;
-}
-
-class Icon with Drawable, Resizable {
-	final String name;
-	Icon(this.name);
-
-	@override
-	String toString() => name;
-}
-
-var icon = Icon('star')..draw()..resize(2.0);   // 'Drawing star', size 2.0
-```
-::
-`mixin` defines reusable code; `with` applies it to a class. A class can use multiple mixins. Mixins can't be instantiated (no constructor).
-
-### Mixin constraints
-
-::code-wrapper{language="dart"}
-```dart
-mixin Flyable on Animal {   // can only be applied to Animal subclasses
-	void fly() => print('$name flies');
-}
-
-class Bird extends Animal with Flyable { ... }
-```
-::
-`mixin X on Y` — the mixin can only be used on `Y` or its subclasses (access to `Y`'s methods).
-
-## Static members
-
-::code-wrapper{language="dart"}
-```dart
-class MathUtils {
-	static const pi = 3.14159;
-	static double square(double x) => x * x;
-}
-
-MathUtils.pi;          // 3.14159
-MathUtils.square(5);   // 25.0
-```
-::
-`static` members belong to the class, not instances. No `this` in static methods.
-
-## Extension methods
-
-::code-wrapper{language="dart"}
-```dart
-extension StringExtension on String {
-	bool get isPalindrome => this == reversed;
-	String get reversed => split('').reversed.join();
-}
-
-'racecar'.isPalindrome;   // true
-'hello'.reversed;         // 'olleh'
-```
-::
-Extensions add methods to existing types (even library types like `String`). Useful for utility methods without subclassing.
-
-## `enum` (enhanced, Dart 2.17+)
-
-::code-wrapper{language="dart"}
-```dart
-enum Status {
-	pending('Pending', 0),
-	active('Active', 1),
-	completed('Completed', 2);
-
-	final String label;
-	final int code;
-	const Status(this.label, this.code);
-}
-
-Status.pending.label;   // 'Pending'
-Status.values;          // [pending, active, completed]
-```
-::
-Enhanced enums can have fields, methods, and constructors (like a class). All instances are `const`.
-
-## Sealed classes (Dart 3)
-
-::code-wrapper{language="dart"}
-```dart
-sealed class Result {}
-
-class Success extends Result { final int value; Success(this.value); }
-class Failure extends Result { final String error; Failure(this.error); }
-
-String describe(Result r) => switch (r) {
-	Success(:var value) => 'Success: $value',
-	Failure(:var error) => 'Failure: $error',
-};   // exhaustive — no default needed
-```
-::
-`sealed` means all direct subtypes are in the same library. The compiler knows all subtypes, enabling exhaustive switches (no `default` needed, and adding a subtype flags non-exhaustive switches). Use for closed hierarchies (Result, Option, states).
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `this.x` in constructors for simple field assignment — `Point(this.x, this.y)` is the concise Dart idiom (no `this.x = x` body). For validation or transformation, use an initializer list: `Point(this.x, this.y) : assert(x >= 0)`.
-- **Idiom**: use factory constructors for caching/subtypes — `factory Logger(name)` can return a cached instance or a subtype. Use for singletons, caching, or when the "constructor" should return an existing object.
-- **Idiom**: use `const` constructors for immutable value types — `const ImmutablePoint(x, y)` creates canonicalized compile-time constants. All fields `final`, no body. Use for value types (points, colors, config).
-- **Idiom**: use mixins (`mixin` + `with`) for reusable horizontal code — `class Icon with Drawable, Resizable`. Mixins fill the multiple-inheritance gap (Dart has single inheritance). Use for capabilities (Drawable, Comparable) shared across unrelated classes.
-- **Idiom**: use sealed classes (Dart 3) for closed hierarchies and exhaustive switches — `sealed class Result {}` with subtypes enables the compiler to check all cases are handled. Adding a subtype flags non-exhaustive switches. Use for Result, states, ASTs.
+- **Idiom**: use `sealed` for closed hierarchies (Result, Option, states, ASTs) — the compiler enforces exhaustiveness, so adding a subtype flags every switch that needs updating. Use `abstract class` for open hierarchies.
+- **Idiom**: always override `==` and `hashCode` together on value classes — the default `==` is identity (different instances are "not equal"). Use `Object.hash(field1, field2)` for the hash. Or use records (Dart 3) for automatic structural equality.
+- **Idiom**: use `factory` constructors for caching/singleton/subtype dispatch — `factory Logger(name)` returns a cached instance. `factory Animal.fromType(type)` returns a subtype. The factory is a static method disguised as a constructor.
+- **Idiom**: use `const` constructors for immutable value types — `const Point(x, y)` is canonicalized (same instance everywhere). All fields must be `final`. Zero allocation at runtime. Use for colors, points, config constants.
+- **Idiom**: use mixins (`mixin` + `with`) for cross-hierarchy reuse — `class Canvas with Drawable, Loggable`. Mixins can't have constructors. Use `on` constraints to restrict to a base type and access its methods.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`_` prefix is library-private, not class-private**: `int _age` is accessible from other classes in the *same file*, but not from other files. Dart has no true class-private; `_` is library-level.
-- **`@override` is a hint, not enforced**: forgetting `@override` still overrides (if the signature matches). But the annotation catches typos (a method that doesn't actually override is flagged). Always use it.
+- **`_` prefix is library-private, not class-private**: `int _x` in a class is accessible from other classes in the same file/library. Dart has no class-private visibility. If you need class-private, use a closure or a nested class.
+- **`@override` is a hint, not enforced at runtime**: forgetting `@override` still overrides (if the signature matches). But the annotation catches typos (a method that doesn't actually override is flagged). Always use it.
 - **`const` constructor requires all fields `final` and no body**: `const Point(this.x, this.y);` — `final` fields, no body. A non-`final` field or a body disqualifies `const`.
-- **`const` instances are canonicalized**: `const Point(1,2)` is the same object everywhere (`identical` is true). Useful for equality and memory.
-- **`implements` requires all methods**: `class X implements Y` — X must implement all of Y's methods (even if Y has them). Use `extends` to inherit, `implements` for interface.
+- **`implements` requires all methods**: `class X implements Y` — X must implement ALL of Y's methods (even if Y has implementations). Use `extends` to inherit, `implements` for interface contract.
 - **Mixins can't have constructors**: `mixin X { X(); }` is invalid. Mixins are applied via `with`, not instantiated. Initialize via the class's constructor.
-- **`late` fields throw on early access**: `late int x; print(x)` throws `LateInitializationError`. Ensure `late` fields are assigned before first read.
-- **Sealed classes' subtypes must be in the same library**: you can't add a subtype from another file. This is what enables exhaustive checking. Use abstract classes if the hierarchy is open.
-- **Enhanced enums are const**: `enum Status { a, b }` — all instances are `const`. You can use them in `const` contexts and switch expressions.
+- **Sealed subtypes must be in the same library**: you can't add a subtype from another file. This is what enables exhaustive checking. Use `abstract class` if the hierarchy is open.
 - **Factory constructors can't use `this`**: `factory Point()` is like a static method — no `this` (no instance yet). It returns an instance (cached, subtype, or new).
+- **Enhanced enums are `const`**: all enum instances are `const`. You can use them in `const` contexts and switch expressions. They can have fields, methods, and implement interfaces.
+- **Extension methods don't participate in polymorphism**: they're resolved at compile time. An extension on `Object` is available everywhere but can be surprising. Use extensions for utility methods, not for overriding behavior.
+- **`late` fields throw on early read**: `late int x; print(x)` throws `LateInitializationError`. Use `late final x = initializer` for safe lazy initialization.
 
 ## 🧠 Spot the Bug
 
-A developer makes an immutable `Point` class, but two points with the same coordinates aren't equal:
+A developer uses a sealed `Result` type but adds a `default` case "just in case":
 
 ::code-wrapper{language="dart"}
 ```dart
-class Point {
-	final double x;
-	final double y;
-	const Point(this.x, this.y);
-}
+sealed class Result<T> {}
+class Success<T> extends Result<T> { final T value; Success(this.value); }
+class Failure<T> extends Result<T> { final String error; Failure(this.error); }
 
-void main() {
-	var a = Point(1, 2);
-	var b = Point(1, 2);
-	print(a == b);   // false
-}
+T unwrap<T>(Result<T> r) => switch (r) {
+  Success(:final value) => value,
+  _ => throw Exception('Unexpected'),
+};
 ```
 ::
 
-What's wrong?
+Later, `Loading<T>` is added to the sealed class. What happens?
 
 <details>
 <summary>Answer</summary>
 
-`a == b` is `false` because `Point` doesn't override `==` — the default `==` is identity (same object). `a` and `b` are different instances, so they're not equal, even with the same coordinates. (Note: `const Point(1,2)` twice would be the same object — canonicalized — but `Point(1,2)` without `const` creates two distinct instances.)
+The `_` (wildcard) catches `Loading` and throws `Exception('Unexpected')` — a runtime error that should have been a compile-time error. The wildcard defeats the exhaustiveness checking that sealed classes provide.
 
-The fix — override `==` and `hashCode`:
+Without `_`, adding `Loading` would cause a **compile error**: "The switch expression does not exhaustively cover all possible cases of Result<T>." The compiler would force you to handle `Loading` before the code even compiles.
 
-```dart
-class Point {
-	final double x;
-	final double y;
-	const Point(this.x, this.y);
-
-	@override
-	bool operator ==(Object other) =>
-			other is Point && x == other.x && y == other.y;
-
-	@override
-	int get hashCode => Object.hash(x, y);
-}
-
-void main() {
-	var a = Point(1, 2);
-	var b = Point(1, 2);
-	print(a == b);   // true
-}
-```
-::
-`Object.hash(x, y)` combines the fields into a hash. Override both `==` and `hashCode` (they must be consistent: equal objects have equal hashes).
-
-Or, use a `record` (Dart 3) for automatic value equality:
+The fix — remove `_`, handle every case explicitly:
 
 ```dart
-// (double, double) — a record
-var a = (1.0, 2.0);
-var b = (1.0, 2.0);
-print(a == b);   // true — records have value equality
+T unwrap<T>(Result<T> r) => switch (r) {
+  Success(:final value) => value,
+  Failure(:final error) => throw Exception(error),
+  Loading() => throw Exception('Still loading — unwrap called too early'),
+};
 ```
-::
-**The lesson**: Dart's default `==` is identity (like Java, unlike Kotlin data classes). For value equality, override `==` and `hashCode` (use `Object.hash()` for the hash). Or use records (Dart 3) which have automatic value equality.
+
+Now adding a new subtype to `Result` causes a compile error here, forcing you to decide how to handle it. This is the entire point of sealed classes — **never add `_` or `default` to a switch over a sealed type.**
 
 </details>
-
-## Summary
-
-You can define classes (constructors: default, named, redirecting, initializer list, factory, `const`), fields and properties (getters/setters, `late`, `_` private), inheritance (`extends`, `super`, `@override`), interfaces (implicit `implements`), abstract classes, mixins (`mixin`/`with`, constraints), static members, extension methods, enhanced enums, and sealed classes (Dart 3, exhaustive) — with the default-`==`-is-identity and `_`-is-library-private traps avoided. Next: null safety in depth.

@@ -1,71 +1,67 @@
+---
+title: "22 — Server Components and SSR"
+description: "RSC vs SSR vs CSR, Next.js App Router, server/client component boundary, 'use client' directive, data fetching in server components, streaming with Suspense, hydration, metadata, and zero-bundle-size components. Code-first reference for mid-to-senior React engineers."
+---
+
 # 22 — Server Components and SSR
 
-Every prior chapter assumed a component runs in the browser: it renders, it can hold state, it can attach event handlers, and its code ships to the client as part of the JavaScript bundle. **React Server Components (RSC)** break that assumption — a server component renders exclusively on the server, never ships its code to the browser at all, and cannot hold state or attach event handlers. This chapter covers what RSC actually is, how it differs from the traditional server-side rendering (SSR) React has supported since version 16, and the client/server boundary rules that trip up most newcomers.
+## CSR vs SSR vs RSC — Three Rendering Models
 
-## SSR vs. RSC: Two Different Problems
-
-Traditional SSR (via `renderToString`/`renderToPipeableStream` in `react-dom/server`) solves a narrower problem than RSC, and conflating the two is the most common source of confusion in this area.
-
-**Server-side rendering** takes an ordinary React component tree — the same components that would otherwise render only in the browser — and renders it to an HTML string on the server for the initial page load, so the user sees content immediately instead of a blank page while JavaScript downloads and executes. Critically, the *same component code* still ships to the browser afterward, because the page needs to **hydrate**: React re-runs those components client-side, attaching event listeners to the server-rendered HTML so the page becomes interactive.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="rendering_models.js"}
 ```javascript
-// Traditional SSR: this component's code ships to the browser regardless —
-// SSR only changes WHEN it first renders (server, for initial HTML), not WHETHER
-// its code is part of the client bundle.
-function ProductCard({ product }) {
-  const [isFavorited, setIsFavorited] = useState(false)
-  return (
-    <div onClick={() => setIsFavorited(f => !f)}>
-      {product.name} {isFavorited ? '♥' : '♡'}
-    </div>
-  )
-}
+// CSR (Client-Side Rendering) — the default for pre-RSC React SPAs:
+// 1. Browser downloads empty HTML + JS bundle
+// 2. React renders the entire tree in the browser
+// 3. Data fetching happens in useEffect after mount (waterfall)
+// Pros: simple, no server needed, rich interactivity
+// Cons: slow first paint, poor SEO, empty HTML on initial load
+
+// SSR (Server-Side Rendering) — traditional React SSR:
+// 1. Server renders components to HTML string
+// 2. Browser receives HTML (visible immediately)
+// 3. Browser downloads JS, hydrates (reattaches event listeners)
+// 4. SAME component code ships to browser — it must hydrate
+// Pros: fast first paint, good SEO
+// Cons: ALL component code still ships to client bundle
+
+// RSC (React Server Components):
+// 1. Server components render on server, output serialized UI description
+// 2. Server component code NEVER ships to browser (zero client bundle)
+// 3. Only client components (marked 'use client') ship to browser
+// 4. Can be async, fetch data directly, access server resources
+// Pros: smaller bundles, no data waterfall, server-only deps stay server-side
+// Cons: no useState/useEffect/event handlers in server components
+
+// KEY DISTINCTION:
+// SSR = WHEN rendering first happens (server first, then hydrate)
+// RSC = WHERE a component's code permanently lives (some never leave server)
+// A framework can use BOTH — which is what Next.js App Router does.
 ```
 ::
 
-**React Server Components** solve a different problem: reducing the amount of code and data that ever needs to reach the browser in the first place. A server component's code — its imports, its logic, any heavy dependencies it pulls in — never becomes part of the client JavaScript bundle at all. It runs once on the server, produces a description of UI (not HTML, and not JSX — a special serialized format), and that description streams to the client alongside whatever client components are interspersed in the tree.
+## Server Components — The Default
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="server_component.js"}
 ```javascript
-// A Server Component (no 'use client' directive) — runs ONLY on the server.
-// Can be async directly, can query a database or read the filesystem,
-// and none of this code — including the `db` import — reaches the browser bundle.
-import { db } from './db'
+// Server Component (default — no directive needed)
+// Can: be async, fetch data directly, access databases/filesystem/secrets
+// Cannot: use useState/useEffect/any hook, attach event handlers, use browser APIs
 
-async function ProductList({ categoryId }) {
-  const products = await db.products.findMany({ where: { categoryId } })
-  return (
-    <ul>
-      {products.map(p => <ProductListItem key={p.id} product={p} />)}
-    </ul>
-  )
-}
-```
-::
-
-The practical difference: SSR is about *when* rendering first happens (server first, then the browser takes over via hydration); RSC is about *where* a component's code lives permanently (some components never leave the server, ever). A framework can use both together, which is exactly what Next.js's App Router does by default.
-
-## The Client/Server Boundary
-
-React Server Components require every component to be classified as either a **server component** (the default, no directive needed) or a **client component** (opted into with a `'use client'` directive at the top of the file). The two have fundamentally different capabilities.
-
-::code-wrapper{language="javascript"}
-```javascript
-// ProductPage.js — Server Component (default, no directive)
-// Can: be async, fetch data directly, access server-only resources (databases, file system, secrets)
-// Cannot: use useState/useEffect/any hook that requires the browser, attach event handlers, use browser APIs
 import { db } from './db'
 import AddToCartButton from './AddToCartButton'
 
 export default async function ProductPage({ productId }) {
+  // Direct async data fetching — no useEffect, no loading state,
+  // no client-side waterfall. The component simply doesn't render
+  // until its data is ready.
   const product = await db.products.findUnique({ where: { id: productId } })
+
   return (
     <div>
       <h1>{product.name}</h1>
       <p>${product.price}</p>
-      {/* Interactivity is delegated to a client component — server components
-          cannot attach onClick handlers themselves */}
+      {/* Interactivity is delegated to a client component —
+          server components cannot attach onClick handlers */}
       <AddToCartButton productId={product.id} />
     </div>
   )
@@ -73,9 +69,13 @@ export default async function ProductPage({ productId }) {
 ```
 ::
 
-::code-wrapper{language="javascript"}
+## Client Components — 'use client' Directive
+
+::code-wrapper{language="javascript" filename="client_component.js"}
 ```javascript
-// AddToCartButton.js — Client Component (explicit opt-in required)
+// Client Component (explicit opt-in required)
+// The 'use client' directive marks the boundary: everything in this file
+// (and everything it imports that isn't passed from outside) is client bundle.
 'use client'
 
 import { useState } from 'react'
@@ -85,26 +85,43 @@ export default function AddToCartButton({ productId }) {
 
   async function handleClick() {
     setIsAdding(true)
-    await fetch('/api/cart', { method: 'POST', body: JSON.stringify({ productId }) })
+    await fetch('/api/cart', {
+      method: 'POST',
+      body: JSON.stringify({ productId }),
+      headers: { 'Content-Type': 'application/json' },
+    })
     setIsAdding(false)
   }
 
-  return <button onClick={handleClick} disabled={isAdding}>{isAdding ? 'Adding…' : 'Add to Cart'}</button>
+  return (
+    <button onClick={handleClick} disabled={isAdding}>
+      {isAdding ? 'Adding…' : 'Add to Cart'}
+    </button>
+  )
 }
+
+// 'use client' does NOT mean "only renders on the client" — a client
+// component still participates in SSR for the initial page load.
+// It means: "this component's code is allowed to run in the browser,
+// and therefore must be included in the client bundle" — which is
+// also the ONLY way to use useState, useEffect, event handlers, or
+// any browser-only API (window, localStorage).
 ```
 ::
 
-`'use client'` doesn't mean "this component only renders on the client" — a client component still participates in SSR for the initial page load, same as any pre-RSC React component always has. It means "this component's code is allowed to run in the browser, and therefore must be included in the client bundle" — which is also the only way to use `useState`, `useEffect`, event handlers, or any browser-only API (`window`, `localStorage`) at all.
-
 ## The Boundary Only Goes One Direction
 
-A server component can import and render a client component directly — that's the `ProductPage`/`AddToCartButton` example above. The reverse is not allowed: a client component cannot import a server component, because once you're inside client-component code, everything it imports must also be safe to ship to the browser, and server components frequently aren't (they may import database clients, filesystem APIs, or secrets that must never reach client JavaScript).
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="boundary_direction.js"}
 ```javascript
+// A server component CAN import and render a client component directly.
+// The REVERSE is NOT allowed: a client component CANNOT import a server
+// component, because everything inside client-component code must be
+// safe to ship to the browser, and server components may import
+// database clients, filesystem APIs, or secrets.
+
 // BROKEN: a client component cannot import a server component directly
 'use client'
-import ProductReviews from './ProductReviews' // ProductReviews is a server component — this fails
+import ProductReviews from './ProductReviews'  // server component — FAILS
 
 function ProductDetailClient({ productId }) {
   const [tab, setTab] = useState('description')
@@ -118,13 +135,16 @@ function ProductDetailClient({ productId }) {
 ```
 ::
 
-The escape hatch is passing a server component as `children` (or any other prop) from a parent server component — the client component never imports it, just renders whatever was handed to it, so the composition happens *above* the client boundary rather than inside it.
+### The Children-as-Props Escape Hatch
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="children_slot.js"}
 ```javascript
-// ProductDetailClient.js — Client Component, renders whatever `children` it's given
-// without ever importing it — it doesn't know or care that children is a Server Component.
+// ProductDetailClient.js — Client Component, renders whatever `children`
+// it's given without ever importing it — it doesn't know or care that
+// children is a Server Component.
 'use client'
+
+import { useState } from 'react'
 
 function ProductDetailClient({ children }) {
   const [tab, setTab] = useState('description')
@@ -138,51 +158,66 @@ function ProductDetailClient({ children }) {
 ```
 ::
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="children_slot_composition.js"}
 ```javascript
 // ProductPage.js — Server Component composes the two, passing the server
 // component as children INTO the client component from outside its own file.
-export default function ProductPage({ productId }) {
+// The composition happens ABOVE the client boundary, not inside it.
+
+import ProductDetailClient from './ProductDetailClient'
+import ProductReviews from './ProductReviews'
+
+export default async function ProductPage({ productId }) {
   return (
     <ProductDetailClient>
       <ProductReviews productId={productId} />
     </ProductDetailClient>
   )
 }
+
+// This "slot" pattern — server components composed into client components
+// via children/props rather than direct imports — is the standard trick
+// for maximizing how much of a tree stays server-only while still
+// allowing interactive islands where they're genuinely needed.
 ```
 ::
 
-This "slot" pattern — server components composed into client components via `children`/props rather than direct imports — is the single most useful trick for maximizing how much of a tree stays server-only while still allowing interactive islands where they're genuinely needed.
+## Zero-Bundle-Size Components
 
-## Why This Matters: Zero-Bundle-Size Components
-
-The concrete payoff of RSC is bundle size and data-fetching waterfalls, not a stylistic preference. A server component that imports a large formatting library, a markdown renderer, or a syntax highlighter contributes **zero bytes** to the client bundle — that code runs once on the server and only its rendered *output* is sent down, never its source.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="zero_bundle.js"}
 ```javascript
-// Server Component: `marked` (a markdown parser) and its dependencies never ship
-// to the browser at all — only the resulting HTML-like output does.
+// Server Component: `marked` (a markdown parser) and its dependencies
+// NEVER ship to the browser at all — only the resulting HTML-like output does.
 import { marked } from 'marked'
+import { db } from './db'
 
 async function ArticleBody({ articleId }) {
   const article = await db.articles.findUnique({ where: { id: articleId } })
-  const html = marked(article.markdownContent)
+  const html = marked(article.markdownContent)  // runs on server only
   return <div dangerouslySetInnerHTML={{ __html: html }} />
 }
+
+// Contrast with pre-RSC: `marked` would be a client-side dependency
+// (bundled and downloaded by every visitor) purely because it ran
+// inside a component, even though its output is static text with
+// no interactivity. RSC lets bundle size scale with how much of an
+// app is actually INTERACTIVE, not with how much of it merely RENDERS.
+
+// ANTI-PATTERN: marking a file 'use client' when only a tiny part
+// needs interactivity. The ENTIRE file + its imports ship to the client.
+// Extract the interactive bit into its own 'use client' leaf component
+// and keep the rest server-only.
 ```
 ::
 
-Contrast this with the pre-RSC equivalent, where `marked` would need to be a client-side dependency (bundled and downloaded by every visitor) purely because it happened to run inside a component, even though its output is static text with no interactivity whatsoever. RSC lets bundle size scale with how much of an app is actually *interactive*, not with how much of it merely *renders*.
-
 ## Data Fetching Without a Waterfall
 
-Server components can be `async` directly and fetch data with a plain `await` — no `useEffect`, no loading state management for the initial render, since the component simply doesn't render at all until its data is ready.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="data_fetching.js"}
 ```javascript
-// Sibling server components fetching independently both start their requests
-// concurrently on the server as soon as the tree begins rendering — this is
-// NOT a client-side waterfall of sequential useEffect calls.
+// Sibling server components fetching independently both start their
+// requests CONCURRENTLY on the server — NOT a client-side waterfall
+// of sequential useEffect calls.
+
 async function ProductPage({ productId }) {
   return (
     <div>
@@ -197,103 +232,416 @@ async function ProductInfo({ productId }) {
   const product = await db.products.findUnique({ where: { id: productId } })
   return <h1>{product.name}</h1>
 }
+
+async function ProductReviews({ productId }) {
+  const reviews = await db.reviews.findMany({ where: { productId } })
+  return reviews.map(r => <Review key={r.id} review={r} />)
+}
+
+// All three async components start fetching in parallel — the server
+// renders them concurrently, no useEffect waterfall, no loading states
+// for the initial render. The page simply isn't sent until all data
+// is ready (unless streaming with Suspense — see below).
 ```
 ::
 
-Wrapping a slower server component in `<Suspense>` lets faster siblings stream to the browser first, rather than the entire page waiting on the slowest piece of data — the same `<Suspense>` primitive from chapters 20-21, now doing double duty as the actual data-loading mechanism rather than a conceptual illustration.
+## Streaming with Suspense
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="streaming_suspense.js"}
 ```javascript
+import { Suspense } from 'react'
+
+// Wrapping a slower server component in <Suspense> lets faster siblings
+// STREAM to the browser first — the same <Suspense> primitive from Ch 20-21,
+// now doing double duty as the actual data-loading mechanism.
+
 async function ProductPage({ productId }) {
   return (
     <div>
+      {/* ProductInfo is fast — renders immediately */}
       <ProductInfo productId={productId} />
-      {/* Reviews are slow to fetch — Suspense lets the rest of the page
-          stream to the browser without waiting on this specific piece */}
+
+      {/* Reviews are slow — Suspense lets the rest of the page stream
+          to the browser without waiting on this specific piece */}
       <Suspense fallback={<ReviewsSkeleton />}>
         <ProductReviews productId={productId} />
       </Suspense>
+
+      {/* Related products also slow — independent Suspense boundary */}
+      <Suspense fallback={<RelatedSkeleton />}>
+        <RelatedProducts productId={productId} />
+      </Suspense>
+    </div>
+  )
+}
+
+// The browser receives the page shell + product info first, then reviews
+// and related products stream in as their data resolves — progressive
+// rendering without the user staring at a blank page or a single spinner.
+```
+::
+
+## Next.js App Router — Where RSC Lives
+
+::code-wrapper{language="bash" filename="nextjs_setup.sh"}
+```bash
+# Next.js App Router is the primary production environment for RSC today.
+# Every file under app/ is a server component by default unless it opts
+# in with 'use client'.
+
+npx create-next-app@latest my-app
+# Would you like to use the App Router? Yes
+cd my-app
+npm run dev
+```
+::
+
+::code-wrapper{language="javascript" filename="nextjs_structure.js"}
+```javascript
+// Next.js App Router file conventions:
+// app/
+//   layout.js        — root layout (server component by default), wraps every page
+//   page.js          — route's UI (server component by default)
+//   loading.js       — Suspense fallback for the route (auto-wrapped in <Suspense>)
+//   error.js         — error boundary for the route (must be a client component)
+//   not-found.js     — 404 UI for the route
+//   [id]/            — dynamic segment (useParams equivalent)
+//   products/
+//     page.js        — /products route
+//     [productId]/
+//       page.js      — /products/:productId route
+
+// app/products/[productId]/page.js — Server Component by default
+import { db } from '@/lib/db'
+
+export default async function ProductPage({ params }) {
+  const product = await db.products.findUnique({ where: { id: params.productId } })
+  return (
+    <div>
+      <h1>{product.name}</h1>
+      <p>{product.price}</p>
+    </div>
+  )
+}
+
+// app/products/[productId]/loading.js — auto-wrapped in <Suspense>
+export default function Loading() {
+  return <ProductSkeleton />
+}
+```
+::
+
+## Hydration — Server HTML Meets Client JS
+
+::code-wrapper{language="javascript" filename="hydration.js"}
+```javascript
+// Hydration = React attaching event listeners and internal state to
+// already-rendered server HTML rather than re-creating DOM nodes.
+// CRITICAL: the HTML the server sends and the first client render
+// MUST MATCH, or React logs a hydration mismatch warning and
+// DISCARDS the server HTML, re-rendering client-side — losing the
+// fast-paint benefit SSR was meant to provide.
+
+// BROKEN: Date.now() / Math.random() / typeof window checks differ
+// between server and client render → hydration mismatch.
+'use client'
+import { useState } from 'react'
+
+function Timestamp() {
+  // Server renders this at time T1, client hydrates at time T2.
+  // T1 !== T2 → mismatch → React discards server HTML, re-renders.
+  return <span>{new Date().toLocaleTimeString()}</span>
+}
+```
+::
+
+### Fixing Hydration Mismatches
+
+::code-wrapper{language="javascript" filename="hydration_fix.js"}
+```javascript
+'use client'
+import { useState, useEffect } from 'react'
+
+// FIXED: render nothing (or a static placeholder) on the server/first
+// client render, then swap in the real, environment-dependent value
+// only after mount — by which point hydration has completed and a
+// mismatch can't occur.
+function Timestamp() {
+  const [time, setTime] = useState(null)
+
+  useEffect(() => {
+    setTime(new Date().toLocaleTimeString())
+  }, [])
+
+  return <span>{time ?? '--:--:--'}</span>
+  // Server renders "--:--:--", client first render also renders "--:--:--"
+  // (match!), then useEffect runs and updates to the real time.
+}
+
+// Pattern for any environment-dependent value:
+function ClientOnly({ children }) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+  return mounted ? children : null
+  // Server renders null, client first render renders null (match!),
+  // then after mount, children render. Use sparingly — it means SSR
+ // provides no content for this subtree.
+}
+```
+::
+
+## Metadata and SEO
+
+::code-wrapper{language="javascript" filename="metadata.js"}
+```javascript
+// Next.js App Router: metadata API for server components.
+// Server-side metadata = SEO-friendly, no client JS needed for crawlers.
+
+// Static metadata:
+export const metadata = {
+  title: 'Product Catalog',
+  description: 'Browse our full product range',
+}
+
+// Dynamic metadata (async — can fetch data):
+export async function generateMetadata({ params }) {
+  const product = await db.products.findUnique({ where: { id: params.productId } })
+  return {
+    title: product.name,
+    description: product.description,
+    openGraph: {
+      images: [product.imageUrl],
+    },
+  }
+}
+
+// ANTI-PATTERN: setting document.title in a client component useEffect.
+// This runs AFTER hydration — crawlers that don't execute JS see the
+// default title. Use the metadata API in a server component instead.
+```
+::
+
+## Complex Implementation — Full Product Page
+
+::code-wrapper{language="javascript" filename="complex_product_page.js"}
+```javascript
+// app/products/[productId]/page.js — Server Component
+import { Suspense } from 'react'
+import { db } from '@/lib/db'
+import AddToCartButton from '@/components/AddToCartButton'
+import ProductGallery from '@/components/ProductGallery'
+import ReviewForm from '@/components/ReviewForm'
+
+export async function generateMetadata({ params }) {
+  const product = await db.products.findUnique({ where: { id: params.productId } })
+  return { title: product.name, description: product.description }
+}
+
+export default async function ProductPage({ params }) {
+  const product = await db.products.findUnique({
+    where: { id: params.productId },
+    include: { category: true },
+  })
+
+  if (!product) notFound()
+
+  return (
+    <div>
+      {/* Server component: zero client bundle cost for gallery logic */}
+      <ProductGallery images={product.images} />
+
+      <div>
+        <h1>{product.name}</h1>
+        <p className="text-2xl">${product.price}</p>
+        <p>{product.description}</p>
+
+        {/* Client component: needs interactivity (useState, onClick) */}
+        <AddToCartButton productId={product.id} />
+      </div>
+
+      {/* Reviews stream in independently — no blocking the rest of the page */}
+      <Suspense fallback={<ReviewsSkeleton />}>
+        <ReviewsSection productId={product.id} />
+      </Suspense>
+
+      {/* Review form is a client component (needs form state) */}
+      <ReviewForm productId={product.id} />
+    </div>
+  )
+}
+
+// Server component — fetches reviews, no client bundle cost
+async function ReviewsSection({ productId }) {
+  const reviews = await db.reviews.findMany({
+    where: { productId },
+    orderBy: { createdAt: 'desc' },
+    take: 10,
+  })
+
+  if (reviews.length === 0) return <p>No reviews yet.</p>
+
+  return (
+    <div>
+      <h2>Reviews</h2>
+      {reviews.map(review => (
+        <div key={review.id}>
+          <p>{review.author}</p>
+          <p>{review.rating} stars</p>
+          <p>{review.comment}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ReviewsSkeleton() {
+  return (
+    <div>
+      <h2>Reviews</h2>
+      <div className="animate-pulse">Loading reviews…</div>
     </div>
   )
 }
 ```
 ::
 
-## Next.js: Where This Is Actually Used Today
+## Anti-Patterns
 
-Hand-rolling an RSC-capable bundler/server setup from scratch is not a realistic undertaking for an application team — RSC requires a build system and server runtime that understand the `'use client'` boundary, know how to serialize server output, and know how to stream it correctly. In practice, **Next.js's App Router** (`app/` directory, as opposed to the older `pages/` directory) is where the overwhelming majority of production RSC usage happens today, treating every file under `app/` as a server component by default unless it opts in with `'use client'`.
-
-::code-wrapper{language="bash"}
-```bash
-npx create-next-app@latest my-app
-# ✔ Would you like to use the App Router? › Yes
-cd my-app
-npm run dev
-```
-::
-
-This chapter deliberately stays framework-agnostic on the concepts, since Next.js's specific conventions (file-based routing, `layout.js`, `loading.js`, server actions for mutations) are a large enough surface for their own dedicated material — the goal here is that the underlying client/server component model makes sense before layering a framework's conventions on top of it.
-
-## Hydration, Revisited
-
-Hydration is the process, mentioned above, of React attaching event listeners and internal state to already-rendered server HTML rather than re-creating DOM nodes from scratch. A subtle but important consequence: **the HTML the server sends and the first client render must match**, or React logs a hydration mismatch warning and, in the mismatched region, discards the server HTML and re-renders it client-side — losing the fast-paint benefit SSR was meant to provide for that section.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="anti_patterns.js"}
 ```javascript
+// ANTI-PATTERN: marking an entire page 'use client' when only one
+// small component needs interactivity. The ENTIRE page + all its
+// imports ship to the client bundle. Extract the interactive bit
+// into its own 'use client' leaf and keep the rest server-only.
+
+// ANTI-PATTERN: a client component importing a server component
 'use client'
-// BROKEN: Date.now() / Math.random() / typeof window checks that differ between
-// server and client render produce a hydration mismatch — the server doesn't
-// know what the client's clock or window object will produce, and vice versa.
-function Timestamp() {
-  return <span>{new Date().toLocaleTimeString()}</span>
+import ServerDataComponent from './ServerDataComponent'  // FAILS at build
+// Fix: pass it as children from a server component parent (slot pattern).
+
+// ANTI-PATTERN: passing non-serializable props from server to client
+// Server component:
+<ClientComponent onClick={() => console.log('hi')} />
+// Functions can't cross the serialization boundary (except Server Actions).
+// Fix: move the interactivity into the client component itself.
+
+// ANTI-PATTERN: Date.now() / Math.random() / window access in a
+// component that renders on both server and client → hydration mismatch.
+// Fix: defer environment-dependent values to useEffect (after mount).
+
+// ANTI-PATTERN: using useEffect for data fetching in a server component
+async function ProductPage({ productId }) {
+  // Server components are ALREADY async — just await directly.
+  // useEffect doesn't exist in server components at all.
+  const product = await fetchProduct(productId)  // correct
+  return <ProductView product={product} />
 }
+
+// ANTI-PATTERN: 'use client' at the top of a shared utility file
+// that's imported by both server and client components. Everything
+// in that file + its deps become client bundle. Split server-only
+// logic and client-facing logic into separate modules.
 ```
 ::
-
-::code-wrapper{language="javascript"}
-```javascript
-'use client'
-// FIXED: render nothing (or a static placeholder) on the server/first client render,
-// then swap in the real, environment-dependent value only after mount —
-// by which point hydration has already completed and a mismatch can't occur.
-function Timestamp() {
-  const [time, setTime] = useState(null)
-  useEffect(() => setTime(new Date().toLocaleTimeString()), [])
-  return <span>{time ?? '--:--:--'}</span>
-}
-```
-::
-
-This is a direct consequence of chapter 21's purity requirement applied to a new context: a component whose output legitimately differs between server and client execution environments needs to explicitly account for that difference, rather than assuming render output is universally identical everywhere it runs.
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Default to server components for anything that doesn't need state, effects, or event handlers — data display, formatting, layout — and reach for `'use client'` only at the specific leaf components that genuinely need interactivity, keeping the client bundle as small as the app's actual interactive surface.
-- **Idiom** — Use the children-as-props "slot" pattern to compose a server component inside a client component's UI without the client component ever importing it directly — this is the standard workaround for the one-directional import restriction, not an obscure trick.
-- **Performance** — Wrap slower, independently-loading sections of a server-rendered page in `<Suspense>` so faster siblings can stream to the browser without waiting on the slowest piece of data — this is where `<Suspense>` moves from a conceptual illustration (chapter 21) to an actual production mechanism.
-- **Debug** — A "you're importing a Server Component into a Client Component" build error almost always means a shared file needs its exports split — keep server-only logic in one module and the client-facing pieces in another, rather than mixing both in a file that gets imported from both sides of the boundary.
-- **Portability** — Treat any value that legitimately differs between server and browser execution (current time, `window`/`navigator` access, random values, locale-dependent formatting without an explicit locale) as a hydration-mismatch risk by default, and defer rendering it until after mount.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Default to server components for anything that doesn't need
+// state, effects, or event handlers — data display, formatting, layout.
+// Reach for 'use client' only at specific leaf components that genuinely
+// need interactivity, keeping the client bundle as small as the app's
+// actual interactive surface.
+
+// [Idiom] Use the children-as-props "slot" pattern to compose a server
+// component inside a client component's UI without the client component
+// ever importing it — the standard workaround for the one-directional
+// import restriction.
+
+// [Performance] Wrap slower, independently-loading sections of a
+// server-rendered page in <Suspense> so faster siblings can stream to
+// the browser without waiting on the slowest piece of data.
+
+// [Debug] A "you're importing a Server Component into a Client Component"
+// build error almost always means a shared file needs its exports split —
+// keep server-only logic in one module and client-facing pieces in another.
+
+// [Portability] Treat any value that legitimately differs between server
+// and browser execution (current time, window/navigator access, random
+// values, locale-dependent formatting) as a hydration-mismatch risk by
+// default — defer rendering it until after mount.
+
+// [Idiom] In Next.js App Router, use the metadata API (export const
+// metadata or generateMetadata) in server components for SEO — setting
+// document.title in a client useEffect runs after hydration and is
+// invisible to crawlers that don't execute JS.
+
+// [Performance] Server components can import heavy libraries (markdown
+// parsers, syntax highlighters, formatting utils) with ZERO client bundle
+// cost — only the rendered output is sent. Move static rendering logic
+// to the server to shrink the bundle.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`'use client'` marks a boundary, not just a single file** — every component imported into a `'use client'` file is treated as part of the client bundle too (unless passed in as `children`/props from outside), so an innocuous-looking import deep in a client component's dependency tree can silently balloon bundle size if it happens to be a large library.
-- **Server components cannot use `useState`, `useEffect`, `useContext`, or any other hook that assumes a browser runtime** — attempting to do so is a build-time/runtime error, not a warning; the fix is either moving that piece into a `'use client'` child or restructuring so the server component doesn't need that state at all.
-- **Props passed from a server component to a client component must be serializable** — functions, class instances, and other non-serializable values can't cross the boundary (with the specific exception of Server Actions, a related but separate mechanism), because the "boundary" is a real serialization step, not merely a logical divide within one running process.
-- **A hydration mismatch doesn't just log a warning and move on cleanly** — React discards and re-renders the mismatched DOM subtree client-side, which means any perceived SSR performance benefit for that specific section is lost, and in some cases visible content can flicker or shift as the corrected client-rendered version replaces the server-rendered one.
-- **RSC and traditional SSR are easy to conflate, but pre-RSC "isomorphic"/"universal" SSR ships every component's code to the client regardless of the component's UI actually needing interactivity** — the historical assumption that "renders on the server" and "must ship to the client" always go together is exactly the assumption RSC breaks; older SSR-only mental models don't automatically transfer.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] 'use client' marks a BOUNDARY, not just a single file —
+// every component imported into a 'use client' file is treated as part
+// of the client bundle too (unless passed in as children/props from
+// outside). An innocuous-looking import deep in a client component's
+// dependency tree can silently balloon bundle size.
+
+// [Gotcha] Server components CANNOT use useState, useEffect, useContext,
+// or any hook that assumes a browser runtime — attempting to do so is a
+// build-time/runtime error. Move that piece into a 'use client' child.
+
+// [Gotcha] Props passed from a server component to a client component
+// MUST be serializable — functions, class instances, and other
+// non-serializable values can't cross the boundary (with the specific
+// exception of Server Actions). The boundary is a real serialization step.
+
+// [Gotcha] A hydration mismatch doesn't just log a warning and move on —
+// React DISCARDS and re-renders the mismatched DOM subtree client-side.
+// The SSR performance benefit for that section is lost, and content can
+// flicker as the corrected client-rendered version replaces the server HTML.
+
+// [Gotcha] RSC and traditional SSR are easy to conflate. Pre-RSC "isomorphic"
+// SSR ships EVERY component's code to the client regardless of whether the
+// component's UI actually needs interactivity. RSC breaks this assumption —
+// older SSR-only mental models don't automatically transfer.
+
+// [Gotcha] In Next.js App Router, 'use client' doesn't mean "this only
+// renders on the client." Client components still SSR for the initial page
+// load — they just ALSO ship to the browser for hydration and interactivity.
+// The directive controls bundle inclusion, not render location.
+
+// [Gotcha] Server components can't use Context (useContext) — context is
+// a runtime concept that requires React's client-side re-rendering model.
+// To share values across server and client components, pass props or use
+// a framework-specific mechanism (Next.js headers(), cookies(), etc.).
+
+// [Gotcha] Dynamic route params in Next.js App Router are promises in
+// Next.js 15+ — you must `await params` before accessing properties.
+// In earlier versions, params was a plain object. Check your version.
+```
+::
 
 ## 🧠 Spot the Bug
 
 A team migrates a product detail page to use Server Components, expecting the bundle size to shrink significantly since most of the page is static content. The bundle barely changes.
 
-::code-wrapper{language="typescript"}
-```typescript
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
+```javascript
 'use client'
 
 import { formatCurrency } from './utils/formatCurrency'
 import { ProductSpecsTable } from './ProductSpecsTable'
+import { useState } from 'react'
 
-export default function ProductDetailPage({ product }: { product: Product }) {
+export default function ProductDetailPage({ product }) {
   const [quantity, setQuantity] = useState(1)
 
   return (
@@ -315,17 +663,78 @@ export default function ProductDetailPage({ product }: { product: Product }) {
 <details>
 <summary>Answer</summary>
 
-The entire page is marked `'use client'` at the top, even though the only genuinely interactive piece is the quantity `<input>`. Because `'use client'` marks the whole file (and everything it imports that isn't passed in from outside) as client-bundle code, `ProductSpecsTable` and the static heading/price markup all ship to the browser and hydrate on the client too — none of the bundle-size benefit RSC offers actually materializes, since only one small input genuinely needs `useState`.
+The entire page is marked `'use client'` at the top, even though the only genuinely interactive piece is the quantity `<input>`. Because `'use client'` marks the whole file (and everything it imports that isn't passed in from outside) as client-bundle code, `ProductSpecsTable`, `formatCurrency`, and the static heading/price markup all ship to the browser and hydrate on the client too — none of the bundle-size benefit RSC offers actually materializes, since only one small input genuinely needs `useState`.
 
-**The lesson**: `'use client'` should be pushed down to the smallest component that actually needs interactivity — here, that means extracting `QuantityInput` into its own `'use client'` file and leaving `ProductDetailPage` (and `ProductSpecsTable`) as server components, so only the input's code and its dependencies ship to the browser instead of the entire page.
+**Fix**: extract `QuantityInput` into its own `'use client'` file and leave `ProductDetailPage` (and `ProductSpecsTable`) as server components:
+
+```javascript
+// ProductDetailPage.js — Server Component (no directive)
+import { formatCurrency } from './utils/formatCurrency'
+import { ProductSpecsTable } from './ProductSpecsTable'
+import QuantityInput from './QuantityInput'
+
+export default async function ProductDetailPage({ productId }) {
+  const product = await db.products.findUnique({ where: { id: productId } })
+  return (
+    <div>
+      <h1>{product.name}</h1>
+      <p>{formatCurrency(product.price)}</p>
+      <ProductSpecsTable specs={product.specs} />
+      <QuantityInput />
+    </div>
+  )
+}
+
+// QuantityInput.js — Client Component (only this ships to browser)
+'use client'
+import { useState } from 'react'
+
+export default function QuantityInput() {
+  const [quantity, setQuantity] = useState(1)
+  return <input type="number" value={quantity} onChange={e => setQuantity(Number(e.target.value))} />
+}
+```
+
+Now only `QuantityInput`'s code and its dependencies ship to the browser instead of the entire page.
+
+**The lesson**: `'use client'` should be pushed down to the smallest component that actually needs interactivity — not applied at the page level when only a tiny part needs state.
 
 </details>
 
 ## Key Takeaways
 
-- SSR (rendering a component tree to HTML on the server, then hydrating in the browser) and RSC (components whose code never ships to the client at all) solve different problems — SSR is about *when* first render happens, RSC is about *where* a component's code permanently lives.
-- Components are server components (the default) unless marked `'use client'`; server components can be `async`, fetch data directly, and access server-only resources, but cannot use hooks, event handlers, or browser APIs.
-- The client/server import boundary is one-directional — a client component cannot import a server component, but a server component can pass another server component as `children`/props into a client component.
-- RSC's real payoff is zero client-bundle cost for server-only dependencies (database clients, markdown parsers, heavy formatting libraries) and concurrent, `Suspense`-streamable data fetching without `useEffect` waterfalls.
-- Hydration requires the server-rendered HTML and the client's first render to match; values that legitimately differ between environments (time, `window`, randomness) need to be deferred until after mount to avoid a hydration mismatch.
-- Next.js's App Router is the primary production environment for RSC today — the client/server component model in this chapter is the foundation its file-based conventions build on top of.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. SSR (rendering to HTML on server, then hydrating) and RSC (components
+//    whose code NEVER ships to client) solve DIFFERENT problems. SSR is
+//    about WHEN first render happens; RSC is about WHERE code lives.
+
+// 2. Components are server components (the default) unless marked
+//    'use client'. Server components can be async, fetch data directly,
+//    and access server-only resources. Client components can use hooks,
+//    event handlers, and browser APIs.
+
+// 3. The client/server import boundary is ONE-DIRECTIONAL — a client
+//    component cannot import a server component, but a server component
+//    can pass another server component as children/props into a client
+//    component (the "slot" pattern).
+
+// 4. RSC's payoff is ZERO client-bundle cost for server-only dependencies
+//    (database clients, markdown parsers, heavy formatting libraries) and
+//    concurrent, Suspense-streamable data fetching without useEffect
+//    waterfalls. Bundle size scales with interactivity, not with rendering.
+
+// 5. Hydration requires server HTML and client's first render to MATCH.
+//    Values that differ between environments (time, window, randomness)
+//    must be deferred until after mount to avoid hydration mismatches.
+
+// 6. Next.js App Router is the primary production RSC environment —
+//    every file under app/ is a server component by default. Use the
+//    metadata API for SEO, loading.js for Suspense fallbacks, and
+//    push 'use client' to the smallest interactive leaf.
+
+// 7. Server components can't use Context (useContext) — it requires
+//    React's client-side re-rendering model. Pass props or use
+//    framework-specific mechanisms for cross-boundary value sharing.
+```
+::

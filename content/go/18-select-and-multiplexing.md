@@ -1,252 +1,402 @@
+---
+title: "18 — Select & Multiplexing"
+description: "Timeout patterns, the time.After leak, fan-in/fan-out, priority selects, for-select loops, and the nil-channel state machine pattern."
+---
+
 # 18 — Select & Multiplexing
 
-`select` lets a goroutine wait on multiple channel operations simultaneously, proceeding with whichever is ready first. It's the heart of Go's concurrent control flow.
+`select` is Go's concurrent control flow — it waits on multiple channel operations, proceeding with whichever is ready first.
 
-## Syntax
-
-::code-wrapper{language="go"}
-```go
-select {
-case v := <-ch1:
-	fmt.Println("received from ch1:", v)
-case ch2 <- 42:
-	fmt.Println("sent to ch2")
-case <-time.After(time.Second):
-	fmt.Println("timeout")
-default:
-	fmt.Println("nothing ready")
-}
-``
-::
-
-- `select` chooses **one** ready case at random (if multiple are ready).
-- If no case is ready and there's a `default`, `default` runs (non-blocking).
-- If no case is ready and no `default`, `select` blocks until one is ready.
-
-## Timeout with `time.After`
+## Select Mechanics
 
 ::code-wrapper{language="go"}
 ```go
-select {
-case v := <-ch:
-	fmt.Println(v)
-case <-time.After(2 * time.Second):
-	fmt.Println("timeout")
-}
-``
-::
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ select chooses ONE ready case:                                       │
+// │   - If multiple cases are ready, picks ONE at RANDOM (no priority)   │
+// │   - If no case is ready and no default → BLOCKS until one is ready   │
+// │   - If no case is ready and default present → runs default           │
+// │   - A nil channel case → never ready (disabled)                     │
+// │   - `select {}` (no cases, no default) → blocks forever             │
+// └──────────────────────────────────────────────────────────────────────┘
 
-`time.After(d)` returns a channel that sends once after `d`. This is the idiomatic timeout pattern — but it leaks a timer if `ch` fires first (the timer goroutine lingers until `d` elapses). For tight loops, use `time.NewTimer` and `Stop` it:
+func selectBasics() {
+	ch1 := make(chan int, 1)
+	ch2 := make(chan int, 1)
+	ch1 <- 1
 
-::code-wrapper{language="go"}
-```go
-timer := time.NewTimer(2 * time.Second)
-defer timer.Stop()   // don't leak the timer
-select {
-case v := <-ch:
-	fmt.Println(v)
-case <-timer.C:
-	fmt.Println("timeout")
+	select {
+	case v := <-ch1:
+		fmt.Println("from ch1:", v)
+	case v := <-ch2:
+		fmt.Println("from ch2:", v)
+	case <-time.After(5 * time.Second):
+		fmt.Println("timeout")
+	default:
+		fmt.Println("nothing ready (non-blocking)")
+	}
 }
 ```
-::
-## Done/Cancellation Pattern
+
+## Timeout — `time.After` and the Leak
 
 ::code-wrapper{language="go"}
 ```go
-func worker(done <-chan struct{}) {
+// ❌ time.After leaks — the timer goroutine lingers until it fires,
+// even if the select took another case. In a hot loop, this accumulates.
+func timeoutBad(input <-chan int) {
+	for {
+		select {
+		case v := <-input:
+			process(v)
+		case <-time.After(2 * time.Second):
+			fmt.Println("timeout")
+		}
+	}
+}
+// Each iteration creates a new time.After timer. If input fires frequently,
+// each unused timer lingers for 2 seconds → thousands of leaked timers.
+
+// ✅ time.NewTimer + Stop — clean up the timer explicitly
+func timeoutGood(input <-chan int) {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+
+	for {
+		timer.Reset(2 * time.Second)  // reset for each iteration
+		select {
+		case v := <-input:
+			process(v)
+		case <-timer.C:
+			fmt.Println("timeout")
+		}
+	}
+}
+// timer.Stop() in the defer cleans up. timer.Reset() reuses the same timer.
+```
+
+## The For-Select Loop — The Standard Pattern
+
+::code-wrapper{language="go"}
+```go
+// Most concurrent Go code is a for loop containing a select.
+// ALWAYS include a done/ctx.Done() case for the exit path.
+
+func worker(ctx context.Context, input <-chan int, output chan<- int) error {
+	for {
+		select {
+		case v, ok := <-input:
+			if !ok {
+				return nil  // input closed — clean exit
+			}
+			select {
+			case output <- process(v):
+			case <-ctx.Done():
+				return ctx.Err()  // cancelled while sending
+			}
+		case <-ctx.Done():
+			return ctx.Err()  // cancelled
+		}
+	}
+}
+
+// ⚠️ `break` in a for-select only breaks the select, not the for loop!
+// Use `return` or a labeled break to exit the loop:
+func forSelectBreak() {
+loop:
 	for {
 		select {
 		case <-done:
-			return   // cancellation signal
-		case v := <-input:
+			break loop  // ✅ labeled break exits the for loop
+		case v := <-ch:
 			process(v)
 		}
 	}
 }
-``
-::
-
-`<-done` (a `chan struct{}` that's closed to signal) lets the goroutine check for cancellation at each `select`. The `context` package (chapter 20) generalizes this.
-
-## Non-Blocking Send/Receive with `default`
-
-::code-wrapper{language="go"}
-```go
-// Non-blocking receive
-select {
-case v := <-ch:
-	fmt.Println("got", v)
-default:
-	fmt.Println("no value ready")
-}
-
-// Non-blocking send
-select {
-case ch <- v:
-	fmt.Println("sent")
-default:
-	fmt.Println("channel full, dropped")
-}
-``
-::
-
-`default` makes the `select` non-blocking — if no case is ready, `default` runs immediately. Use for "try to send/receive, but don't block."
-
-## Random Selection Among Ready Cases
-
-If multiple cases are ready, `select` picks **one at random** — not first-listed, not highest-priority:
-
-::code-wrapper{language="go"}
-```go
-ch1, ch2 := make(chan int, 1), make(chan int, 1)
-ch1 <- 1
-ch2 <- 2
-select {
-case v := <-ch1:   // both ready — picked randomly
-case v := <-ch2:
-}
 ```
-::
-There's no priority. If you need priority, use nested selects (check the priority case first with a non-blocking `select`, then fall back).
 
-## For-Select Loop (the Standard Pattern)
-
-Most concurrent Go code is a `for` loop containing a `select`:
+## Fan-In — Merging Multiple Channels
 
 ::code-wrapper{language="go"}
 ```go
-for {
-	select {
-	case v := <-input:
-		output <- process(v)
-	case <-done:
-		return
-	}
-}
-``
-::
+// Fan-in: merge multiple input channels into one output.
+// Each input channel gets a goroutine that forwards to the output.
 
-This is the worker pattern — process inputs until cancelled. The `done` case provides the exit path.
-
-## Fan-In (Merge Multiple Channels)
-
-::code-wrapper{language="go"}
-```go
-func fanIn[T any](channels ...<-chan T) <-chan T {
+func fanIn[T any](ctx context.Context, channels ...<-chan T) <-chan T {
 	out := make(chan T)
 	var wg sync.WaitGroup
+
 	for _, ch := range channels {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for v := range ch {
-				out <- v
+				select {
+				case out <- v:
+				case <-ctx.Done():
+					return  // cancelled — stop forwarding
+				}
 			}
 		}()
 	}
+
+	// Close out after all forwarders finish
 	go func() {
 		wg.Wait()
-		close(out)   // close after all inputs are done
+		close(out)
 	}()
+
 	return out
 }
-``
-::
 
-Multiple input channels are merged into one output. The `WaitGroup` tracks the input goroutines; when all are done, `out` is closed.
+// Usage:
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-## Quit Channel / Graceful Shutdown
+	ch1 := generate(ctx, 1, 2, 3)
+	ch2 := generate(ctx, 4, 5, 6)
+	ch3 := generate(ctx, 7, 8, 9)
+
+	merged := fanIn(ctx, ch1, ch2, ch3)
+	for v := range merged {
+		fmt.Println(v)  // 1-9 in some order (concurrent)
+	}
+}
+```
+
+## Fan-Out — Distributing Work
 
 ::code-wrapper{language="go"}
 ```go
-func worker(input <-chan int, quit <-chan struct{}) {
+// Fan-out: distribute work from one channel to multiple workers.
+// Workers run concurrently, each processing jobs from the shared channel.
+
+func fanOut(ctx context.Context, jobs <-chan Job, numWorkers int) <-chan Result {
+	results := make(chan Result)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for job := range jobs {
+				select {
+				case results <- process(ctx, job):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
+}
+```
+
+## Priority Select — The Nested Pattern
+
+::code-wrapper{language="go"}
+```go
+// select picks randomly among ready cases — no priority.
+// For priority, use a nested select: try the priority case first
+// (non-blocking), then fall back to a regular select.
+
+func prioritySelect(high, low <-chan int) {
+	for {
+		// First, non-blocking check on high-priority channel:
+		select {
+		case v := <-high:
+			fmt.Println("HIGH:", v)
+			continue
+		default:
+		}
+
+		// Then, regular select on both:
+		select {
+		case v := <-high:
+			fmt.Println("HIGH:", v)
+		case v := <-low:
+			fmt.Println("LOW:", v)
+		}
+	}
+}
+// This drains high before processing low. But ⚠️ if high is always
+// ready, low starves — use a separate goroutine or time-based fairness.
+```
+
+## The Done Channel Pattern (Pre-Context)
+
+::code-wrapper{language="go"}
+```go
+// Before context.Context, the done channel was the standard cancellation pattern.
+// context generalizes this — but the pattern is still useful to understand.
+
+func workerDone(input <-chan int, done <-chan struct{}) {
 	for {
 		select {
 		case v, ok := <-input:
 			if !ok {
-				return   // input closed
+				return
 			}
 			process(v)
-		case <-quit:
-			return   // cancellation
+		case <-done:
+			return  // cancellation signal — close(done) to broadcast
+		}
+	}
+}
+
+// ✅ Prefer context.Context (which wraps this pattern):
+func workerCtx(ctx context.Context, input <-chan int) error {
+	for {
+		select {
+		case v, ok := <-input:
+			if !ok {
+				return nil
+			}
+			if err := process(ctx, v); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
 ```
-::
+
+## Non-Blocking Operations with `default`
+
+::code-wrapper{language="go"}
+```go
+// default makes select non-blocking — runs default if no case is ready.
+
+func nonBlocking(input <-chan int) {
+	select {
+	case v := <-input:
+		fmt.Println("got:", v)
+	default:
+		fmt.Println("no value ready")
+	}
+}
+
+// ─── Drop pattern: send if room, drop if full ───
+func dropPattern(events chan<- Event, e Event) {
+	select {
+	case events <- e:  // sent
+	default:
+		log.Printf("dropping event (queue full): %+v", e)  // drop
+	}
+}
+// Use for metrics/events where dropping under load is acceptable.
+// Without default, a full channel blocks the producer → backpressure.
+
+// ⚠️ Don't use default in a for-select loop — it causes a busy-spin (100% CPU).
+// Only use default for one-shot non-blocking checks.
+```
+
+## Production Pattern — Graceful Shutdown
+
+::code-wrapper{language="go"}
+```go
+func runServer(ctx context.Context, jobs <-chan Job) error {
+	// Process jobs until context is cancelled
+	for {
+		select {
+		case job, ok := <-jobs:
+			if !ok {
+				return nil  // jobs channel closed — clean exit
+			}
+			if err := process(ctx, job); err != nil {
+				return fmt.Errorf("process job %d: %w", job.ID, err)
+			}
+		case <-ctx.Done():
+			// Drain in-flight jobs (optional), then exit
+			return ctx.Err()
+		}
+	}
+}
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	jobs := make(chan Job, 100)
+	// ... start job producers ...
+
+	if err := runServer(ctx, jobs); err != nil &&
+		!errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
+}
+```
+
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `for { select { ... } }` as the standard concurrent loop — process inputs (or timeouts, or cancellation) until done. Always include a `<-done`/`<-ctx.Done()` case so the goroutine can exit; a `select` loop without an exit path is a leak.
-- **Idiom**: use `time.After` for quick timeouts, but `time.NewTimer` + `Stop` in tight loops — `time.After` leaks the timer (and its goroutine) until it fires, even if you've moved on. In a hot loop, that's many lingering timers. `NewTimer` with `Stop` cleans up.
-- **Idiom**: use `default` for non-blocking sends/receives — "try to send, drop if full" (`case ch <- v: ... default: drop`) is the pattern for metrics/events where dropping under load is acceptable. Without `default`, a full channel blocks the producer.
-- **Idiom**: use `select` with a `done`/`ctx.Done()` case in every blocking wait — `select { case v := <-ch: ...; case <-done: return }` lets the goroutine exit even if `ch` never produces. Without the done case, a blocked `<-ch` can't be cancelled (leak).
-- **Idiom**: for priority among cases, use a nested select — first a non-blocking select on the priority channel (`case v := <-priority: ...; default:`), then a regular select for the rest. Go's `select` is random among ready cases; nested selects give you a priority round.
+- **Idiom**: use `for { select { ... } }` as the standard concurrent loop — always include a `<-ctx.Done()` case so the goroutine can exit. A select loop without an exit path is a leak.
+- **Idiom**: use `time.NewTimer` + `Stop` in tight loops, not `time.After` — `time.After` leaks the timer goroutine until it fires. In hot loops, this accumulates thousands of leaked timers.
+- **Idiom**: use `default` for non-blocking sends/receives — "try to send, drop if full" for metrics/events where dropping under load is acceptable. Without `default`, a full channel blocks the producer.
+- **Idiom**: use `select` with `<-ctx.Done()` in every blocking wait — lets the goroutine exit even if the channel never produces. Without the done case, a blocked `<-ch` can't be cancelled.
+- **Idiom**: for priority among cases, use a nested select — first a non-blocking select on the priority channel (`case v := <-priority: ...; default:`), then a regular select. Go's `select` is random, not prioritized.
+- **Debug**: `break` in a `for-select` only breaks the `select`, not the `for` — use `return` or `break loop` (labeled) to exit the loop.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`select` with no cases blocks forever**: `select {}` is a permanent block — used to keep a goroutine alive (e.g., in generated code), but a bug if unintended.
-- **`select` with only `default` runs the default and continues**: `select { default: ... }` is a no-op (default always runs).
+- **`select {}` blocks forever**: no cases, no default — permanent block. Used to keep a goroutine alive, but a bug if unintended.
+- **`select` with only `default` runs the default and continues**: a no-op.
 - **Random selection among ready cases**: no priority. Don't rely on case order.
 - **`time.After` leaks**: the timer's goroutine lingers until the duration elapses, even if the `select` took another case. In hot loops, use `time.NewTimer` + `Stop`.
 - **`default` makes the select non-blocking**: if you want to block (wait for a case), omit `default`.
-- **A nil channel case is never ready**: `select { case x := <-nilch: ... }` — that case never fires. Useful for disabling cases (set the channel to nil to turn it off), a footgun if unintended.
+- **A nil channel case is never ready**: `select { case x := <-nilch: ... }` never fires. Useful for disabling cases, a footgun if unintended.
 - **Sending to a closed channel panics inside `select`**: same rule as outside — `select` doesn't protect against sends on closed channels.
-- **`for-select` with `break` only breaks the `select`, not the `for`**: `for { select { case ...: break } }` — the `break` exits the `select`, then the `for` continues. Use `return` or a labeled `break` to exit the loop.
-- **Starvation**: if one case is always ready, another may never be picked (random selection helps, but isn't fair). For fairness, use separate goroutines or explicit scheduling.
+- **`for-select` with `break` only breaks the `select`**: the `for` continues. Use `return` or labeled `break` to exit the loop.
+- **Starvation**: if one case is always ready, another may never be picked (random helps, but isn't fair). Use separate goroutines or explicit scheduling.
 
-## 🧠 Spot the Bug
-
-A developer writes a worker that should exit when `done` is closed, but it never does:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-func worker(input <-chan int, done <-chan struct{}) {
-	for v := range input {
-		select {
-		case <-done:
-			return   // intends to exit
-		default:
-			process(v)
-		}
+func main() {
+	ch := make(chan int, 1)
+	ch <- 1
+
+	select {
+	case v := <-ch:
+		fmt.Println("received", v)
+	case ch <- 2:
+		fmt.Println("sent 2")
 	}
 }
 ```
+
+Which case runs?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-The `default` case makes the `select` non-blocking — if `<-done` isn't ready (not closed yet), `default` runs immediately and `process(v)` is called. The `select` never blocks on `<-done`, so it only checks `done` when there's an input to process, and even then, only as a non-blocking check.
+The **receive case** runs:
 
-The bigger issue: the `for v := range input` loop only checks `done` after receiving a value. If `input` never produces (or is slow), the worker is stuck in `range input`, never checking `done` — it can't be cancelled while waiting for input.
-
-The fix — put both cases in the same `select` without `default`, so the goroutine blocks on whichever is ready:
-
-```go
-func worker(input <-chan int, done <-chan struct{}) {
-	for {
-		select {
-		case v, ok := <-input:
-			if !ok {
-				return   // input closed
-			}
-			process(v)
-		case <-done:
-			return   // cancellation — fires even if input has nothing
-		}
-	}
-}
 ```
-::
-Now the `select` blocks on either `input` or `done` — whichever becomes ready first. If `done` is closed while the worker is waiting for input, the `<-done` case fires and the worker exits. The `default` was wrong — it prevented blocking on `done`.
+received 1
+```
 
-**The lesson**: `default` makes `select` non-blocking, which prevents waiting on `done`. For cancellation that works even when the main work is idle, block on both (input and done) without `default`.
+Both cases could be ready:
+- `case v := <-ch`: ready — there's a buffered value (1)
+- `case ch <- 2`: NOT ready — the buffer is full (capacity 1, already has 1)
+
+So only the receive case is ready. It runs, printing "received 1".
+
+After the receive, the buffer is empty — but the `select` already chose. The `ch <- 2` send case was not ready (buffer was full), so it was never considered.
+
+If the buffer had capacity 2 (`make(chan int, 2)`), both cases would be ready, and `select` would pick one at random.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now use `select` to multiplex channel operations, add timeouts (`time.After`/`NewTimer`), non-blocking send/receive (`default`), cancellation (`done`/`ctx.Done()`), and build the standard `for-select` loop and fan-in. You understand random selection, nil-channel disabling, and the `default`-prevents-cancellation trap. Next: the `sync` package for lower-level concurrency primitives.
+→ [19 — sync Package](/go/19-sync-package) — Mutex, RWMutex, WaitGroup, Once, Cond, Pool, and Map — the lower-level synchronization primitives.

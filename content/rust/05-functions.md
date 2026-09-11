@@ -1,355 +1,348 @@
 # 05 — Functions
 
-## Basics
+Functions are where expression-oriented design, no-overloading, and monomorphization all become visible at once. Know what a signature costs to call (static vs dynamic dispatch), what it costs to compile, and what it guarantees callers (divergence, panics-as-contract).
+
+## Under-the-Hood Mechanics
+
+### Expressions all the way down
 
 ::code-wrapper{language="rust"}
 ```rust
 fn add(a: i32, b: i32) -> i32 {
-    a + b            // last expression — no semicolon — is the return value
-}
-
-fn no_return() {
-    println!("returns ()");
+    a + b            // last expression, no semicolon — the return value
 }
 ```
 ::
-
-- The last expression (without `;`) is the return value.
-- A trailing `;` makes it a statement returning `()`.
-- `return x;` is for early returns; the implicit last-expression form is idiomatic for the common case.
-
-## Statements vs Expressions
 
 ::code-wrapper{language="rust"}
 ```rust
-let x = (let y = 5;);   // ERROR: statements don't produce values
-let y = {
-    let z = 5;
-    z + 1                // expression — block evaluates to 6
-};
-```
-::
-
-Blocks `{ ... }` are expressions. `if`, `match`, `loop` are also expressions.
-
-## Parameters & Patterns
-
-Parameters can be patterns:
-
-::code-wrapper{language="rust"}
-```rust
-fn print_pair((a, b): (i32, i32)) { println!("{a} {b}"); }
-fn first((a, _): (i32, i32)) -> i32 { a }
-```
-::
-
-## Diverging Functions (`-> !`)
-
-### Why does this exist?
-
-A **diverging function** is a function that *never returns a value to the caller* — either because it loops forever (`loop {}`), because it aborts the process (`std::process::exit`), or because it panics (`panic!`). The return type `!` (pronounced "never") tells the compiler: **"control flow does not continue past this call."**
-
-This matters because Rust's type system is strict about every branch of an `if`/`match` producing the same type. Without `!`, you'd be forced to write awkward placeholder values for unreachable branches. With `!`, the compiler knows that branch *can't* produce a value, so it lets the `!` stand in for *any* type — this is called **never-type coercion**.
-
-### How it works
-
-`!` coerces to any type. That means a `!`-returning function can be used anywhere a value of any type is expected, because the compiler knows that code path is dead.
-
-::code-wrapper{language="rust"}
-```rust
-fn forever() -> ! {
-    loop {}
+fn classify(n: i32) -> &'static str {
+    if n < 0 { "negative" } else { "non-negative" }   // no `;` — this IS the return value
 }
-fn die() -> ! {
-    panic!("bye");
-}
-fn exit_with(code: i32) -> ! {
-    std::process::exit(code);
+
+fn classify_wrong(n: i32) -> &'static str {
+    if n < 0 { "negative" } else { "non-negative" };  // trailing `;` turns it into a STATEMENT, yields ()
+    // COMPILE ERROR here: function must return &'static str, body now yields ()
 }
 ```
 ::
 
-The practical payoff is in `match` arms and `if`/`else` chains — you can mix a real value with a diverging call without a type mismatch:
+### Monomorphization: one function, N compiled copies
 
 ::code-wrapper{language="rust"}
 ```rust
-let v: i32 = match opt {
-    Some(x) => x,
-    None => die(),    // ! coerces to i32 — no mismatch
-};
-```
+fn first<T>(v: &[T]) -> Option<&T> {
+    v.first()
+}
 
-// Without !, you'd have to write something like `None => -1` or `None => panic!()` inline,
-// which is either wrong (-1 is a valid i32!) or verbose when the panic logic is reused.
+fn main() {
+    let n = first(&[1, 2, 3]);        // T = i32 — compiles a SEPARATE first::<i32>
+    let s = first(&["a", "b"]);        // T = &str — compiles a SEPARATE first::<&str>
+    // Zero runtime dispatch cost for either — trait bounds add a compile-time proof, no vtable.
+    println!("{n:?} {s:?}");
+}
 ```
 ::
 
-### When to use it
+### `dyn Trait` takes the opposite trade: one copy, a vtable, an indirect call
 
-You reach for `-> !` whenever you write a helper that **always** terminates the program, panics, or loops. Common real-world cases:
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let items: Vec<Box<dyn std::fmt::Display>> = vec![Box::new(1), Box::new("two")];
+    for item in &items {
+        println!("{item}");   // indirect call through the vtable, every iteration
+    }
+    // One compiled body regardless of how many types implement Display — trades runtime
+    // dispatch cost for compile-time/binary-size savings and heterogeneous storage.
+}
+```
+::
 
-- **A `fatal()` / `abort()` helper** that logs an error and exits — so callers can use it in `unwrap_or_else(|| fatal("..."))` without a type error.
-- **A `TODO()` or `unimplemented!()`-style helper** during development, marking code paths you haven't finished yet.
-- **An infinite event loop** in an embedded `main` or a server's accept loop.
-- **`process::exit` wrappers** in CLI tools that need to set a specific exit code after printing a usage message.
+### The never type and diverging functions
 
 ::code-wrapper{language="rust"}
 ```rust
 fn usage_and_exit() -> ! {
     eprintln!("Usage: prog <input>");
-    std::process::exit(2);
+    std::process::exit(2);   // never returns — no Drop runs for the current stack either
 }
 
 fn main() {
-    let input = std::env::args().nth(1).unwrap_or_else(|| usage_and_exit());
-    // unwrap_or_else expects an fn() -> String, but usage_and_exit returns !,
-    // so it coerces to String — no need to fabricate a dummy String.
+    let arg: String = std::env::args().nth(1).unwrap_or_else(|| usage_and_exit());
+    // Type-checks because `!` coerces to String — the diverging branch contributes nothing to unify.
+    println!("{arg}");
 }
 ```
 ::
 
-### How `!` differs from `()`
-
-- `()` means "returns, but the value is the unit value (nothing meaningful)." Control flow *continues*.
-- `!` means "does not return at all." Control flow *stops*. There is no value, and the compiler can prove it.
-
-This distinction is what enables never-type coercion: `()` can't coerce to `i32` (they're different types), but `!` can coerce to *anything*, because a value of type `!` can never actually exist at runtime.
-
-## Default & Optional Parameters?
-
-### Why doesn't Rust have them?
-
-Rust deliberately omits function overloading and default parameters because they make call resolution ambiguous and complicate the type system (which overload is picked? which defaults apply?). Instead, Rust pushes you toward patterns that are explicit and unambiguous at each call site.
-
-### What to use instead
-
-- **Builder pattern** — for functions/structs with many optional fields. A `Builder` struct accumulates options via chained `.with_x()` calls, then `.build()` produces the final value. This is idiomatic for anything with more than ~3 optional knobs.
-- **Multiple associated functions** — e.g., `Vec::new()` vs `Vec::with_capacity(n)` instead of `Vec::new(capacity = 0)`.
-- **Traits for "overloading" semantics** — `From`/`Into` let you write `fn from<T: Into<Self>>(t: T)` and accept any convertible type, which covers most real "overloading" needs without ambiguity.
-- **Option arguments** — `fn f(name: Option<&str>)` with `None` as the "default." Verbose but explicit.
-
-## Generic Functions (preview)
-
-### Why does this exist?
-
-Suppose you want a `first` function that returns the first element of *any* slice — `&[i32]`, `&[String]`, `&[Vec<f64>]`. Without generics, you'd write a separate `first_i32`, `first_string`, `first_vec_f64`... — an explosion of near-identical code. **Generics** let you write the function *once*, parametrized over a type placeholder, and the compiler stamps out a specialized copy for each concrete type you call it with. This is called **monomorphization** — you get the performance of hand-written specialized code without the duplication.
-
-The `<T>` declares a **type parameter**: a placeholder name that stands for "whatever type the caller uses here." It's a compile-time mechanism — at runtime there is no `T`, only the concrete types that were substituted in.
-
-### What is `T`?
-
-`T` is just a conventional name (short for "Type"). It's a **type variable** — you could name it anything (`<Element>`, `<Item>`), but `T`, `U`, `V` are idiomatic. The important thing is that `T` is a *placeholder*: when someone calls `first(&[1, 2, 3])`, the compiler replaces every `T` with `i32`; when they call `first(&["a", "b"])`, it replaces `T` with `&str`. Each substitution produces a *separate, fully-typed* function in the final binary.
-
-### How to use it — the basic pattern
-
-::code-wrapper{language="rust"}
-```rust
-// T is a placeholder. The caller decides what T is at each call site.
-fn first<T>(v: &[T]) -> Option<&T> {
-    v.first()   // returns None if empty, Some(&element) otherwise
-}
-
-// Two calls → two monomorphized copies in the binary:
-let n = first(&[1, 2, 3]);        // here T = i32
-let s = first(&["a", "b"]);        // here T = &str
-```
-::
-
-### Why this alone isn't enough — trait bounds
-
-A bare `<T>` says "any type at all." But if you want to *do* something with `T` — compare it, print it, copy it — the compiler needs proof that `T` supports that operation. That's what **trait bounds** are for: they constrain `T` to types that implement a given trait.
-
-Without a bound, you can barely do anything with `T` — you can move it, return it, put it in a container, but you **cannot** compare it, add it, print it, or clone it, because the compiler doesn't know `T` has those capabilities.
-
-::code-wrapper{language="rust"}
-```rust
-fn max<T: PartialOrd + Copy>(a: T, b: T) -> T {
-    // PartialOrd  → allows `a > b`   (comparison)
-    // Copy        → allows returning by value without moving
-    if a > b { a } else { b }
-}
-
-max(3, 7);            // T = i32  — i32: PartialOrd + Copy ✓
-max(3.0, 7.0);        // T = f64  — f64: PartialOrd + Copy ✓
-// max(vec![1], vec![2]); // ERROR: Vec is not Copy — bound not satisfied
-```
-::
-
-### Where vs how to specify bounds
-
-Bounds can go inline (`<T: Trait>`) or in a `where` clause. The `where` form is cleaner when you have many bounds or complex types:
-
-::code-wrapper{language="rust"}
-```rust
-// inline — fine for 1-2 bounds
-fn max<T: PartialOrd + Copy>(a: T, b: T) -> T { if a > b { a } else { b } }
-
-// where clause — clearer when things get hairy
-fn merge<T, U>(a: T, b: U) -> Vec<U>
-where
-    T: IntoIterator<Item = U>,
-    U: Clone,
-{
-    a.into_iter().chain(std::iter::once(b)).collect()
-}
-```
-::
-
-### When to use generics vs alternatives
-
-- **Generics (static dispatch)**: best when you want zero-cost abstractions and the set of types is known/finite. The compiler inlines aggressively. Cost: binary size grows per type (monomorphization).
-- **Trait objects `dyn Trait` (dynamic dispatch)**: best when you need a heterogeneous collection (`Vec<Box<dyn Display>>`) or want to reduce binary size. Cost: one vtable lookup per call, no inlining.
-- **Just write concrete types**: if a function is only ever called with one type, generics add complexity for no benefit.
-
-Generics are covered in full depth (associated types, higher-ranked lifetimes, `impl Trait` in returns, etc.) in the [Traits and Generics](16-traits-and-generics) chapter. This preview exists because functions are where you'll first encounter `<T>`.
-
-## `impl` Blocks (Methods)
-
-::code-wrapper{language="rust"}
-```rust
-struct Rect { w: u32, h: u32 }
-
-impl Rect {
-    fn area(&self) -> u32 { self.w * self.h }          // method
-    fn new(w: u32, h: u32) -> Self { Rect { w, h } }    // associated fn
-    fn set(&mut self, w: u32) { self.w = w; }           // mut borrow
-}
-```
-::
-
-- `&self` = `self: &Self` (immutable borrow).
-- `&mut self` = mutable borrow.
-- `self` (by value) = consumes `self`.
-- Associated functions (no `self`) called as `Rect::new(...)` (like static methods).
-
-## `Self` and `self` Keywords
-
-`Self` is the type the `impl` is for. `self` is the receiver shorthand. `Self` in a `trait` body refers to the implementing type.
-
-## Variadic Functions
-
-Only `extern "C"` FFI functions can be C-style variadic:
-
-::code-wrapper{language="rust"}
-```rust
-extern "C" {
-    fn printf(fmt: *const u8, ...) -> i32;
-}
-```
-::
-
-Idiomatic variadic-ness comes from macros (`println!`, `vec!`) or slices (`fn sum(nums: &[i32])`).
-
-## Function Pointers vs Closures
-
-### Why two kinds?
-
-A **function pointer** (`fn(T) -> U`) is a bare pointer to compiled code — it captures *nothing*, is `Copy`, has a fixed size known at compile time, and is as cheap to pass around as an integer. A **closure** (`|a, b| a + b`) is an anonymous function that *can capture variables from its surrounding scope*; because the set of captured values varies, a closure's size is not known statically (it's stored as a fat pointer + captured env, hence `!Sized` in general).
-
-You reach for a **function pointer** when you have a top-level `fn` and want to store/pass it without any captured state (e.g., a callback slot in a C FFI struct, a dispatch table `&[fn(&str) -> i32]`). You reach for a **closure** when you need to capture local variables (e.g., `let threshold = 5; nums.iter().filter(|&&x| x > threshold)`).
+### Function pointers vs closures
 
 ::code-wrapper{language="rust"}
 ```rust
 fn add(a: i32, b: i32) -> i32 { a + b }
-let fp: fn(i32, i32) -> i32 = add;       // function pointer, Copy, Sized
-let cl = |a, b| a + b;                    // closure, captures env, !Sized
-```
-::
 
-See the [Closures](17-closures) chapter for `Fn`/`FnMut`/`FnOnce` distinctions — they control *how* a closure may be called based on whether it borrows, mutably borrows, or consumes its captured environment.
-
-## Recursion
-
-Rust doesn't guarantee tail-call optimization. Deep recursion can overflow the stack. For deep/iterative algorithms, convert to an explicit loop with a stack.
-
-::code-wrapper{language="rust"}
-```rust
-fn fact(n: u64) -> u64 {
-    if n == 0 { 1 } else { n * fact(n - 1) }
+fn main() {
+    let fp: fn(i32, i32) -> i32 = add;   // bare pointer to compiled code: Copy, Sized, no captures
+    let x = 10;
+    let cl = |a, b| a + b + x;            // anonymous type, captures `x` — larger, not Copy unless x is
+    println!("{} {}", fp(1, 2), cl(1, 2));
 }
 ```
 ::
 
-## `const fn`
-
-Compile-time-callable functions with a restricted feature set:
+## Cost, Performance, and Trade-Offs
 
 ::code-wrapper{language="rust"}
 ```rust
-const fn square(x: i32) -> i32 { x * x }
-const N: i32 = square(5);   // evaluated at compile time
+// A generic function called with 30 distinct types produces up to 30 near-duplicate machine-code bodies.
+fn identity<T>(x: T) -> T { x }
+// mergefunc CAN sometimes dedupe byte-identical instantiations post-optimization — not guaranteed.
 ```
 ::
-
-Each release expands what's allowed in `const fn` (loops, mutable locals, etc.).
-
-## Calling Conventions & ABI
 
 ::code-wrapper{language="rust"}
 ```rust
-extern "C" fn c_fn(x: i32) -> i32 { x + 1 }
-extern "Rust" fn rust_fn(x: i32) -> i32 { x + 1 }   // default
-extern "C" { fn imported(x: i32) -> i32; }
+#[inline]                 // small, hot, cross-crate helper: real win — may be invisible to caller's
+fn square(x: i32) -> i32 { x * x }   // optimizer otherwise, pre-LTO.
+
+#[inline(always)]          // large function: routinely BACKFIRES — bloats binary, hurts icache locality
+fn large_body(x: i32) -> i32 {
+    // ... 200 lines ...
+    x
+}
 ```
 ::
 
-Useful for FFI and callbacks passed to C libraries.
+::code-wrapper{language="rust"}
+```rust
+const fn square_const(x: i32) -> i32 { x * x }
 
-## 💡 Tips & Tricks
+const NINE: i32 = square_const(3);   // evaluated AT COMPILE TIME — zero runtime cost, zero code
 
-- **Debug**: `#[track_caller]` on a helper function that panics (e.g., a custom `assert`-like wrapper) makes the reported panic location point at the *caller* instead of inside the helper — invaluable for library-style assertion functions.
-- **Idiom**: express "no return value on this path" with `-> !` (diverging functions) for helpers like `fn fatal(msg: &str) -> !`, so the compiler lets you use them anywhere a value is expected (`let x = check(y).unwrap_or_else(|| fatal("bad"));`) without a type mismatch.
-- **Performance**: `#[inline]` on small, frequently-called cross-crate functions can matter a lot (without it, the callee's body may not even be visible to the caller crate's optimizer), while `#[inline(always)]` on large functions often backfires by bloating the binary — reserve `always` for genuinely tiny hot-path helpers.
-- **Idiom**: use pattern-matching function parameters (`fn f((a, b): (i32, i32))`) to destructure tuples/structs right at the call boundary instead of an extra line inside the body — keeps small helper functions (especially ones passed to `.map()`) terse.
-- **Debug**: `cargo expand` on a `const fn` shows you whether it actually got evaluated at compile time or deferred to runtime — useful when you're relying on `const fn` purely for the performance benefit, not just the ability to use it in a `const` context.
-- **Clippy**: `clippy::too_many_arguments` (default threshold: 7) is a nudge, not a hard rule, to bundle related parameters into a struct — genuinely useful for functions that keep growing an argument list over a project's lifetime.
+fn main() {
+    let runtime_val = 3;
+    let result = square_const(runtime_val); // runtime-only input: falls back to ordinary codegen
+    println!("{NINE} {result}");
+    // cargo expand is the only reliable way to confirm which case actually happened.
+}
+```
+::
 
-## ⚠️ Edge Cases & Gotchas
+## Production Failure Modes & Anti-Patterns
 
-- **`return` in a closure**: `return` inside a closure returns from the *closure*, not the enclosing function (unlike some languages). Use labeled loops/breaks or `?` carefully.
-- **Block-as-expression footgun**: forgetting the trailing `;` returns the value; adding it silently changes the return type to `()`. The compiler catches this.
-- **`fn` types are `Copy`**: you can copy function pointers freely; closures are not necessarily `Copy`.
-- **Lifetime elision in fn signatures**: `fn first(s: &str) -> &str` has elided lifetimes; the compiler infers one input lifetime → output lifetime.
-- **Recursion + generics**: monomorphized per type — code bloat risk.
-- **`#[inline]`**: a hint; `#[inline(always)]` can bloat code; usually trust the compiler.
-- **Implicit `&T` in parameter patterns**: `fn print_pair((a, b): (i32, i32))` moves the tuple, but `fn print_pair((a, b): &(i32, i32))` borrows. If the parameter is a reference, the pattern items become references too.
-- **Early returns and cleanup**: if you return before a value is bound, that value is never allocated. Use this to avoid setup costs for early exits.
-- **Function pointers vs closures in traits**: `fn(T) -> U` doesn't implement `Fn`, `FnMut`, `FnOnce` (different trait hierarchy); use `impl Fn` to accept both.
-- **Generic monomorphization explosion**: `fn sort<T: Ord>(v: &mut [T])` instantiated for 50 different types = 50 code copies. Sometimes use trait objects to reduce binary size.
-- **Self-consuming functions**: `fn consume(self) -> T` is often misunderstood — this consumes the receiver and is idiomatic for builder chains (e.g., `Builder::new().with_x(5).build()`).
-- **Attribute positions in fn**: `#[must_use]` on a function warns if the return is ignored; useful for error-prone computations.
-- **Default parameters via function overloading**: Rust has no function overloading; use builder pattern or separate functions: `new()`, `with_capacity()`, `from()`, etc.
-- **Const vs const fn**: `const X: i32 = 5;` is a value; `const fn f() -> i32 { 5 }` is a function. Both are evaluated at compile time but have different purposes.
-
-## 🧠 Spot the Bug
-
-What does this function return, and why is it probably not what the author intended?
+**Anti-pattern: an accidental type mismatch from a stray semicolon in a multi-branch function.**
 
 ::code-wrapper{language="rust"}
 ```rust
 fn classify(n: i32) -> &'static str {
     if n < 0 {
-        "negative";
+        "negative";       // <-- stray semicolon: this branch now evaluates to ()
     } else if n == 0 {
         "zero"
     } else {
         "positive"
     }
+    // COMPILE ERROR: () vs &'static str mismatch — caught here because the types genuinely conflict
 }
 ```
 ::
 
+::code-wrapper{language="rust"}
+```rust
+// Structural defense: prefer early return for divergent branches over trailing-expression matching.
+fn classify_safe(n: i32) -> &'static str {
+    if n < 0 { return "negative"; }
+    if n == 0 { return "zero"; }
+    "positive"
+}
+```
+::
+
+**Anti-pattern: reaching for `dyn Trait` reflexively in a hot path, without measuring.**
+
+::code-wrapper{language="rust"}
+```rust
+fn process_all(handlers: &[Box<dyn Fn(&str) -> bool>], event: &str) {
+    for h in handlers {
+        h(event);   // indirect call through vtable, every iteration, hot path
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+enum Handler { Log, Metric, Alert }
+
+impl Handler {
+    fn call(&self, event: &str) -> bool {
+        match self {
+            Handler::Log => { println!("log: {event}"); true }
+            Handler::Metric => { println!("metric: {event}"); true }
+            Handler::Alert => { println!("alert: {event}"); true }
+        }
+        // Closed set, but compiles to a jump table the optimizer can inline — faster in a hot loop
+        // than boxed trait objects. Use dyn Trait only when the type set is genuinely open (plugins).
+    }
+}
+```
+::
+
+## Architectural Application
+
+::code-wrapper{language="rust"}
+```rust
+use std::io::Read;
+
+fn read_generic(mut r: impl Read) -> Vec<u8> {   // zero-cost, fully inlined dispatch per caller's type
+    let mut buf = Vec::new();
+    r.read_to_end(&mut buf).unwrap();
+    buf
+}
+
+fn read_dyn(mut r: Box<dyn Read>) -> Vec<u8> {   // one compiled body, vtable indirection for EVERY caller
+    let mut buf = Vec::new();
+    r.read_to_end(&mut buf).unwrap();
+    buf
+}
+// Default to generics at public boundaries; widen to dyn Trait only for genuine heterogeneity/open sets.
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn fatal(msg: &str) -> ! {
+    eprintln!("fatal: {msg}");
+    std::process::exit(1);
+    // Centralizes exit-code/logging behavior in one auditable place across the whole codebase.
+}
+
+fn main() {
+    let config: String = std::fs::read_to_string("app.toml")
+        .unwrap_or_else(|_| fatal("missing app.toml"));
+    println!("{config}");
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+struct RequestBuilder { timeout_ms: u64, header_count: u32 }
+
+impl RequestBuilder {
+    fn new() -> Self { Self { timeout_ms: 30_000, header_count: 0 } }
+    fn with_timeout(mut self, ms: u64) -> Self { self.timeout_ms = ms; self }
+    fn build(self) -> Self { self }
+}
+// No overloading in Rust — this is the intentional forcing function toward named constructors/builders,
+// not a missing-feature workaround.
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// No guaranteed tail-call optimization — deep recursion on untrusted input is a stack-overflow DoS vector.
+fn depth_iterative(mut n: u64) -> u64 {
+    let mut stack = vec![n];
+    let mut total = 0;
+    while let Some(v) = stack.pop() {
+        total += v;
+        if v > 0 { stack.push(v - 1); }
+    }
+    total
+    // Convert to an explicit Vec-backed work stack for any recursion whose depth isn't provably bounded.
+}
+```
+::
+
+## 💡 Tips & Tricks
+
+::code-wrapper{language="rust"}
+```rust
+#[track_caller]
+fn my_assert(cond: bool) {
+    if !cond {
+        panic!("assertion failed");   // panic location points at the CALLER, not this helper's internals
+    }
+}
+```
+::
+
+- **Idiom**: express "never returns a value" with `-> !` so fatal helpers compose with `.unwrap_or_else()`.
+- **Performance**: `#[inline]` for small cross-crate hot functions; `#[inline(always)]` only for genuinely tiny hot-path helpers.
+- **Debug**: `cargo expand` shows whether a `const fn` call actually got evaluated at compile time.
+- **Clippy**: `clippy::too_many_arguments` (default threshold 7) nudges toward bundling params into a struct.
+- **Idiom**: destructure function parameters directly (`fn f((a, b): (i32, i32))`) for terse `.map()`/`.and_then()` closures.
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="rust"}
+```rust
+fn run() {
+    let v = vec![1, 2, 3];
+    v.iter().for_each(|x| {
+        if *x == 2 {
+            return;   // returns from the CLOSURE, not `run` — common surprise after refactoring a loop
+        }
+        println!("{x}");
+    });
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn add(a: i32, b: i32) -> i32 { a + b }
+let fp: fn(i32, i32) -> i32 = add;      // Copy — fn pointers always are
+let cl = move |a, b| a + b;              // Copy ONLY if every capture is Copy and captured by value
+
+fn takes_fn_ptr(f: fn(i32) -> i32) {}
+fn takes_impl_fn(f: impl Fn(i32) -> i32) {}
+// fn pointers do NOT implement Fn/FnMut/FnOnce directly by inference — accept `impl Fn` to take both.
+```
+::
+
+- **Performance**: recursive generic functions monomorphize per type — 50 types means 50 separate compiled recursive call chains.
+- **Safety**: an early `return`/`?` skips everything after it in scope, including side-effecting setup code placed too late — order matters.
+
+## 🧠 Spot the Bug
+
+::code-wrapper{language="rust"}
+```rust
+fn validate(input: &str) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    if input.len() > 256 {
+        return false;
+    }
+    input.chars().all(|c| c.is_ascii_alphanumeric());
+}
+```
+::
+
+Tests pass. In production, malformed inputs that should be rejected are silently accepted. What changed?
+
 <details>
 <summary>Answer</summary>
 
-This fails to compile: `error[E0308]: if and else have incompatible types`, with the compiler pointing out that the first branch evaluates to `()`.
+::code-wrapper{language="rust"}
+```rust
+input.chars().all(|c| c.is_ascii_alphanumeric());
+//                                                ^ trailing semicolon — turns the return expression
+//                                                  into a discarded statement, body now yields ()
+```
+::
 
-`"negative";` — with the trailing semicolon — is a **statement**, not an expression that produces a value; a semicolon after any expression turns it into a statement whose value is discarded, and the block it's the last line of evaluates to `()` as a result. The other two branches, `"zero"` and `"positive"`, have no trailing semicolon and correctly evaluate to `&'static str`. Because `if`/`else if`/`else` is a single expression whose overall type must be consistent across every branch, mismatched branch types (`()` vs `&'static str`) is a hard compile error — not a silent runtime bug, in this particular case, because the mismatch happens to be caught by the type checker. The insidious version of this same mistake is when the "empty" branch's type coincidentally matches (e.g., all branches secretly compute `()`, or the stray semicolon is on the *last* branch of a function whose return type is also `()`) — then the bug compiles clean and just silently returns nothing where a value was expected.
+With `bool` as the declared return type this is actually a **hard compile error** — the real danger is when a refactor loosens the return type enough that `()` unifies anyway, turning "it compiled" into false confidence.
 
-**The lesson**: a trailing semicolon converts an expression into a `()`-valued statement — in a multi-branch `if`/`else` used as an expression, one stray semicolon breaks the whole chain, and the compiler only catches it when the resulting type mismatch is visible.
+**The lesson**: "it compiled" only proves internal type consistency, not that a trailing expression wasn't accidentally discarded — add explicit boolean-outcome tests, don't rely on the type checker catching every stray semicolon.
 
 </details>
 
 ## Summary
 
-Functions are expressions, support patterns in parameters, can diverge, have no overloading, and methods live in `impl` blocks. Next: control flow.
+Functions are expressions with monomorphization-driven zero-cost generics as the default and `dyn Trait` as the deliberate opt-in for dynamic dispatch; `-> !` is a real type-system feature enabling divergence to coerce cleanly; the absence of overloading pushes API design toward builders and named constructors rather than ambiguous call-site resolution.
+
+Next: Control Flow — how `if`/`match`/`loop` as expressions interact with divergence, exhaustiveness, and the `?` operator's error-propagation machinery.

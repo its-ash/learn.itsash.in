@@ -1,298 +1,345 @@
-# 06 — Strings & Template Literals
+---
+title: "JavaScript 06 — String Internals: UTF-16 Encoding, Surrogate Pairs & Tagged Templates"
+description: "Deep-dive into JavaScript string mechanics: UTF-16 code units vs code points, surrogate pair handling, Unicode normalization, tagged template literals, and the string iterator vs index access. Code-first reference for senior engineers."
+---
 
-## String Creation
+# 06 — String Internals: UTF-16 Encoding, Surrogate Pairs & Tagged Templates
+
+## UTF-16 Encoding: Code Units vs Code Points
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// Single quotes
-const s1 = 'Hello'
+// ── JS strings are UTF-16: each "char" is a 16-bit code unit ──
+// Most ASCII/Latin characters: 1 code unit (16 bits)
+// Characters beyond U+FFFF (emoji, CJK, rare scripts): 2 code units (surrogate pair)
 
-// Double quotes
-const s2 = "World"
+// ── .length counts CODE UNITS, not characters (visual chars) ──
+"a".length;       // 1 (1 code unit)
+"\n".length;      // 1
+"é".length;       // 2 (é = U+00E9, but can also be e + combining accent → 2 units)
+"𝕏".length;       // 2! (𝕏 = U+1D54F, requires a surrogate pair: 2 code units)
+"😀".length;      // 2! (emoji = U+1F600, surrogate pair: 2 code units)
 
-// Template literals (backticks) — multi-line + interpolation
-const s3 = `Hello,
-World`
+// ── Surrogate pairs: characters outside the BMP (Basic Multilingual Plane, U+0000–U+FFFF) ──
+// Encoded as two 16-bit code units: high surrogate (U+D800–U+DBFF) + low surrogate (U+DC00–U+DFFF)
+const emoji = "😀";  // U+1F600
+console.log(emoji.charCodeAt(0));  // 55357 (0xD83D — high surrogate)
+console.log(emoji.charCodeAt(1));  // 56800 (0xDE00 — low surrogate)
+console.log(emoji.codePointAt(0));  // 128512 (0x1F600 — the actual code point!)
 
-const name = 'Alice'
-const s4 = `Hello ${name}, you are ${30 + 1}`  // "Hello Alice, you are 31"
+// ── .charAt() and index access break on surrogate pairs ──
+console.log(emoji.charAt(0));  // '\uD83D' (high surrogate only — invalid/garbage)
+console.log(emoji[0]);         // '\uD83D' (same — index gives a code unit, not a character)
 
-// String from char codes
-String.fromCharCode(72, 105)       // "Hi"
-String.fromCodePoint(128512)       // "😀" (handles surrogate pairs)
+// ── .codePointAt() and String.fromCodePoint() handle full code points ──
+console.log("😀".codePointAt(0));  // 128512 (the actual code point)
+console.log(String.fromCodePoint(128512));  // "😀" (from code point to string)
+console.log(String.fromCharCode(128512));  // "\uD800\uDE00"? No — fromCharCode only does code units
+// String.fromCharCode(0xD83D, 0xDE00) → "😀" (manual surrogate pair construction)
 
-// Edge case: tagged template literals
-function highlight(strings, ...values) {
-  return strings.reduce((result, str, i) => {
-    return result + str + (values[i] ? `[${values[i]}]` : '')
-  }, '')
+// ── Iterating with for...of iterates by CODE POINT (not code unit) ──
+for (const ch of "😀abc") { console.log(ch); }
+// "😀" (1 iteration — full code point), "a", "b", "c" (4 total iterations)
+// But: "😀abc".length is 5 (2 code units for emoji + 3 for abc)
+```
+::
+
+## Anti-Pattern: String Reversal with Surrogate Pairs
+
+::code-wrapper{language="javascript"}
+```javascript
+// ❌ NAIVE — .split("").reverse().join("") breaks on surrogate pairs and combining marks
+const str = "Hello 🌍";  // 🌍 = U+1F30D (surrogate pair)
+const broken = str.split("").reverse().join("");
+console.log(broken);  // "�� olleH" — the emoji is corrupted (surrogates reversed individually)
+// split("") splits by code unit — the surrogate pair is split into two separate units
+// and reversed independently, creating an invalid character sequence.
+
+// ✅ CORRECT — use the string iterator (which iterates by code point)
+const reversed = [...str].reverse().join("");
+console.log(reversed);  // "🌍 olleH" — emoji preserved (spread iterates by code point)
+
+// ✅ ALSO CORRECT — Array.from (also iterates by code point)
+const reversed2 = Array.from(str).reverse().join("");
+
+// ── Combining marks are still a problem (e.g., é = e + ̀) ──
+const accented = "café";  // é might be U+00E9 (1 unit) or e + U+0301 (2 units)
+// Reversing "café" (decomposed: c a e ́) → "éfac" (accent moved to the wrong letter)
+// For full Unicode-aware reversal, use Intl.Segmenter (ES2022):
+const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+const graphemes = [...segmenter.segment("café🇫🇷")].map(s => s.segment);
+const reversed3 = graphemes.reverse().join("");
+// Intl.Segmenter splits into grapheme clusters (visual characters), handling
+// combining marks, emoji sequences, and flag emoji (regional indicator pairs).
+```
+::
+
+## Template Literals and Tagged Templates
+
+::code-wrapper{language="javascript"}
+```javascript
+// ── Template literal: string interpolation with backticks ──
+const name = "Alice";
+const age = 30;
+console.log(`Hello, ${name}! You are ${age} years old.`);
+// Expressions inside ${}:
+console.log(`2 + 2 = ${2 + 2}`);   // "2 + 2 = 4"
+console.log(`Upper: ${name.toUpperCase()}`);  // "Upper: ALICE"
+console.log(`Nested: ${`inner ${name}`}`);     // "Nested: inner Alice"
+
+// ── Multiline strings (no \n needed) ──
+const html = `
+<div>
+    <h1>${name}</h1>
+    <p>Age: ${age}</p>
+</div>
+`;
+// The newline after the opening backtick and before the closing backtick are part of the string.
+
+// ── Tagged templates: process template literal with a function ──
+// The tag function receives: (strings[], ...values)
+// strings: array of literal string parts (between ${} interpolations)
+// values: array of interpolated expressions
+function tag(strings, ...values) {
+    console.log(strings);  // ["Hello, ", "! You are ", " years old.", raw: [...]]
+    console.log(values);   // ["Alice", 30]
+    return strings.reduce((result, str, i) =>
+        result + str + (values[i] !== undefined ? `[${values[i]}]` : ""), "");
 }
-highlight`Hello ${name}!`  // "Hello [Alice]!"
+const tagged = tag`Hello, ${name}! You are ${age} years old.`;
+// "Hello, [Alice]! You are [30] years old."
 ```
 ::
 
-## String Properties
+## Production Pattern: HTML Escaping with Tagged Templates
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const s = 'Hello World'
+// ── Safe HTML template tag (prevents XSS) ──
+function html(strings, ...values) {
+    // strings.raw contains the raw (unescaped) template parts
+    // values contains the interpolated expressions
+    return strings.reduce((result, str, i) => {
+        const value = values[i];
+        if (value === undefined) return result + str;
 
-s.length          // 11 (UTF-16 code units)
-s[0]              // "H"
-s[s.length - 1]  // "d"
-s.at(-1)          // "d" (supports negative — ES2022)
-s.charAt(0)       // "H"
+        // Escape HTML special characters in interpolated values
+        const escaped = String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
 
-// ⚠️ Length is in UTF-16 code units, not characters
-'😀'.length           // 2 (surrogate pair)
-[...'😀'].length      // 1 (spread iterates code points)
-Array.from('😀').length // 1
-```
-::
-
-## String Methods
-
-### Finding
-
-::code-wrapper{language="javascript"}
-```javascript
-const s = 'Hello World'
-
-s.indexOf('o')      // 4 (first occurrence)
-s.indexOf('o', 5)   // 7 (search starting at index 5)
-s.lastIndexOf('o')  // 7
-s.includes('World') // true
-s.startsWith('Hello') // true
-s.endsWith('World')   // true
-s.search(/o/)       // 4 (regex — returns index, -1 if not found)
-s.at(-1)            // "d"
-```
-::
-
-### Extracting
-
-::code-wrapper{language="javascript"}
-```javascript
-const s = 'Hello World'
-
-s.slice(0, 5)       // "Hello" (start, end)
-s.slice(6)          // "World" (from index to end)
-s.slice(-5)         // "World" (from end)
-s.substring(0, 5)   // "Hello" (like slice but swaps args if start > end)
-s.substr(0, 5)      // "Hello" (deprecated — start, length)
-s.split(' ')        // ["Hello", "World"]
-s.split('')         // ["H","e","l","l","o"," ","W","o","r","l","d"]
-
-// Edge case: substring vs slice with negative args
-s.substring(-5)     // "Hello World" (treats -5 as 0)
-s.slice(-5)         // "World" (from end)
-```
-::
-
-### Transforming
-
-::code-wrapper{language="javascript"}
-```javascript
-const s = '  Hello World  '
-
-s.toUpperCase()       // "  HELLO WORLD  "
-s.toLowerCase()       // "  hello world  "
-s.trim()              // "Hello World"
-s.trimStart()         // "Hello World  "
-s.trimEnd()           // "  Hello World"
-s.repeat(3)           // "Hello WorldHello WorldHello World"
-s.padStart(20, '*')   // "*********Hello World"
-s.padEnd(20, '-')     // "Hello World---------"
-s.replace('o', '0')   // "Hell0 World" (only first match)
-s.replaceAll('o', '0')// "Hell0 W0rld" (all matches — ES2021)
-```
-::
-
-### Best practice: chaining string methods
-
-::code-wrapper{language="javascript"}
-```javascript
-const slug = '  Hello World!  '
-  .trim()
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, '-')
-  .replace(/^-|-$/g, '')
-// "hello-world"
-```
-::
-
-## Regex and Strings
-
-::code-wrapper{language="javascript"}
-```javascript
-const text = 'The year is 2024 and the month is 08'
-
-// match — returns array of matches or null
-text.match(/\d+/g)          // ["2024", "08"]
-text.match(/(\d+)\/(\d+)/)  // with capture groups
-
-// matchAll — iterator of all matches (ES2020)
-const matches = [...text.matchAll(/(\d+)/g)]
-matches[0]  // { 0: "2024", 1: "2024", index: 12, input: "..." }
-
-// replace with regex
-'2024-08-05'.replace(/-/g, '/')  // "2024/08/05"
-'Hello'.replace(/(?<word>\w+)/g, '$<word>!')  // "Hello!"
-
-// test
-/^\d{4}-\d{2}-\d{2}$/.test('2024-08-05')  // true
-```
-::
-
-### Edge case: regex with global flag and `exec`
-
-::code-wrapper{language="javascript"}
-```javascript
-const re = /(\w+)/g
-let match
-while ((match = re.exec('hello world')) !== null) {
-  console.log(match[0], match.index)
-}
-// "hello" 0
-// "world" 6
-
-// ⚠️ Stateful — re.lastIndex persists between exec calls with /g flag
-// Reset with re.lastIndex = 0
-```
-::
-
-## Unicode and Internationalization
-
-::code-wrapper{language="javascript"}
-```javascript
-// Code point vs code unit
-'A'.codePointAt(0)    // 65
-'😀'.codePointAt(0)   // 128512
-
-// Iterating code points
-const s = 'a😀b'
-for (const char of s) {
-  console.log(char)  // 'a', '😀', 'b'
+        return result + str + escaped;
+    }, "");
 }
 
-// Normalize Unicode (NFC, NFD, NFKC, NFKD)
-const cafe = 'café'           // NFC (one code point for é)
-const cafe2 = 'cafe\u0301'    // NFD (e + combining accent)
-cafe === cafe2                // false (different code units)
-cafe.normalize() === cafe2.normalize()  // true
+const userInput = '<script>alert("xss")</script>';
+const safe = html`<div>${userInput}</div>`;
+// <div>&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;</div>
+// The script tag is escaped — displayed as text, not executed.
 
-// Collation
-new Intl.Collator('en').compare('a', 'b')  // -1
-new Intl.Collator('de').compare('ä', 'a')  // depends on locale
+// ── Conditional values and arrays ──
+function html2(strings, ...values) {
+    return strings.reduce((result, str, i) => {
+        const value = values[i];
+        if (value === undefined || value === null || value === false) return result + str;
+        if (Array.isArray(value)) return result + str + value.join("");
+        return result + str + String(value);
+    }, "");
+}
+const items = ["apple", "banana"];
+const list = html2`<ul>${items.map(i => html2`<li>${i}</li>`)}</ul>`;
+// <ul><li>apple</li><li>banana</li></ul>
 ```
 ::
 
-## Practical Patterns
-
-### Slugify
+## String Methods: Finding and Extracting
 
 ::code-wrapper{language="javascript"}
 ```javascript
-function slugify(str) {
-  return str
-    .normalize('NFKD')                    // decompose accents
-    .replace(/[\u0300-\u036f]/g, '')      // remove combining marks
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+// ── Finding ──
+"hello world".indexOf("world");  // 6 (index, or -1 if not found)
+"hello world".includes("world"); // true (ES2015 — boolean, no index needed)
+"hello".startsWith("he");        // true
+"hello".endsWith("lo");          // true
+"hello world".search(/world/);  // 6 (regex — returns index, not match)
+"hello world".match(/o/g);      // ["o", "o"] (regex match — array of matches)
+"hello".matchAll(/l/g);          // iterator of match objects (ES2020)
+[..."hello".matchAll(/l/g)];    // [Match, Match] (each with index, groups, etc.)
 
-slugify('Café au Lait!')  // "cafe-au-lait"
-slugify('  Hello   World  ')  // "hello-world"
+// ── Extracting ──
+"hello world".slice(0, 5);       // "hello" (start, end — negative allowed)
+"hello world".slice(6);         // "world" (start to end)
+"hello world".slice(-5);        // "world" (negative = from end)
+"hello world".substring(0, 5);  // "hello" (like slice, but NO negative args)
+"hello world".substr(0, 5);     // "hello" (start, length — DEPRECATED, avoid)
+"hello".at(0);                  // "h" (ES2022 — supports negative: .at(-1) = "o")
+"hello".at(-1);                 // "o" (negative index — from end)
+
+// ── ⚠️ .substring() vs .slice() — negative behavior differs ──
+"hello".slice(-3);       // "llo" (negative = from end)
+"hello".substring(-3);   // "hello" (negative treated as 0)
+"hello".substring(4, 1); // "ell" (SWAPS args if start > end!)
+"hello".slice(4, 1);     // "" (no swap — empty if start > end)
+// Always use .slice() — it has consistent negative-index behavior.
+
+// ── .replace() vs .replaceAll() ──
+"aaa".replace("a", "b");    // "baa" (replaces FIRST match only)
+"aaa".replace(/a/g, "b");   // "bbb" (regex /g replaces ALL)
+"aaa".replaceAll("a", "b"); // "bbb" (ES2021 — replaces ALL, no regex needed)
+// ⚠️ .replace with a string pattern only replaces the FIRST occurrence.
+
+// ── ⚠️ .replace() with regex /g has STATE (lastIndex persists on the regex object) ──
+const re = /a/g;
+"aaa".replace(re, "b");  // "bbb"
+"aaa".replace(re, "b");  // "bbb" — wait, this might be wrong with stateful regex
+// Actually: .replace() with /g is fine — it resets internally. But .test() and .exec() persist:
+re.lastIndex = 0;  // must reset lastIndex for stateful regex with .test()/.exec()
 ```
 ::
 
-### Camel Case / Kebab Case
+## Unicode Normalization
 
 ::code-wrapper{language="javascript"}
 ```javascript
-function toCamelCase(str) {
-  return str.replace(/[-_](.)/g, (_, c) => c.toUpperCase())
-}
-toCamelCase('hello-world')  // "helloWorld"
-toCamelCase('foo_bar_baz')  // "fooBarBaz"
+// ── The same character can have multiple representations ──
+// "é" can be:
+//   1. Precomposed: U+00E9 (é) — 1 code unit
+//   2. Decomposed: U+0065 (e) + U+0301 (combining acute accent) — 2 code units
 
-function toKebabCase(str) {
-  return str.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()
-}
-toKebabCase('helloWorld')  // "hello-world"
-```
-::
+const precomposed = "é";        // U+00E9
+const decomposed = "e\u0301";   // e + combining accent
+console.log(precomposed === decomposed);  // false! (different code units)
+console.log(precomposed.length);           // 1
+console.log(decomposed.length);            // 2
 
-### Truncate
+// ── .normalize() converts to a canonical form ──
+const norm1 = precomposed.normalize("NFC");  // composed form (U+00E9)
+const norm2 = decomposed.normalize("NFC");  // composed form (U+00E9)
+console.log(norm1 === norm2);  // true (both are the same composed form)
 
-::code-wrapper{language="javascript"}
-```javascript
-function truncate(str, maxLen, suffix = '...') {
-  if (str.length <= maxLen) return str
-  return str.slice(0, maxLen - suffix.length) + suffix
-}
+// ── Normalization forms ──
+// NFC  (Canonical Composition): precomposed chars (default, best for storage/display)
+// NFD  (Canonical Decomposition): decomposed chars (base + combining marks)
+// NFKC (Compatibility Composition): like NFC + compatibility decomposition (e.g., ﬁ → fi)
+// NFKD (Compatibility Decomposition): like NFD + compatibility decomposition
 
-truncate('Hello World', 8)        // "Hello..."
-truncate('Short', 10)             // "Short"
-truncate('Hello World', 8, '…')   // "Hello…"
+// ── When normalization matters ──
+const names = ["café", "cafe\u0301"];  // both "café" but different code units
+const unique = new Set(names);  // Set has 2 entries (they're not equal!)
+const unique2 = new Set(names.map(n => n.normalize("NFC")));  // Set has 1 entry (normalized)
+// Always normalize before comparison, hashing, or deduplication of Unicode strings.
+
+// ── Collation with Intl.Collator (locale-aware sorting) ──
+const words = ["café", "cafe", " Café", "café"];
+words.sort();  // default sort: code unit order (not locale-aware)
+words.sort(new Intl.Collator("en").compare);  // locale-aware sort
+// Intl.Collator handles accents, case, and locale-specific ordering rules.
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Backticks for all strings** — Modern style is to use backticks for all strings (even without interpolation). It's consistent and avoids escaping quotes. Linters like Prettier enforce this.
+::code-wrapper{language="javascript"}
+```javascript
+// ── .at(-1) for the last character (ES2022 — no .slice(-1) needed) ──
+"hello".at(-1);   // "o" — negative index from end
+"hello".at(-2);   // "l"
+// Before .at(): "hello".slice(-1) or "hello"["hello".length - 1]
 
-**Regex `.replace()` with `$1`, `$2`** — `"hello world".replace(/(\w+)\s(\w+)/, '$2 $1')` swaps words using capture groups. `$1` is group 1, `$2` is group 2, etc. Powerful for reformatting.
+// ── Repeat and padStart/padEnd ──
+"ab".repeat(3);        // "ababab"
+"5".padStart(3, "0");  // "005" (pad with 0 to length 3)
+"5".padEnd(3, "-");   // "5--" (pad on the right)
+"255".padStart(6, "0"); // "000255" (useful for fixed-width formatting)
 
-**String padding for alignment** — `'42'.padStart(5, ' ')` creates `'   42'`. Useful for columnar output: `nums.map(n => String(n).padStart(3, '0')).join('\n')`.
+// ── Trim and variants ──
+"  hello  ".trim();       // "hello" (both sides)
+"  hello  ".trimStart();  // "hello  " (left only, formerly trimLeft)
+"  hello  ".trimEnd();    // "  hello" (right only, formerly trimRight)
 
-**Template literals in objects** — Computed keys work: `{ [`${key}_id`]: value }`. Useful for dynamic object construction.
+// ── String to array and back ──
+[..."hello"];  // ["h", "e", "l", "l", "o"] (iterates by code point)
+"hello".split("");  // ["h", "e", "l", "l", "o"] (splits by code unit)
+// Use [...] for Unicode safety (surrogate pairs stay together)
+
+// ── Multiline string from array ──
+const lines = ["line 1", "line 2", "line 3"];
+lines.join("\n");  // "line 1\nline 2\nline 3"
+
+// ── Safe HTML attribute escaping ──
+const escapeAttr = (str) => str.replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-**`.length` is UTF-16 code units, not characters** — Emoji are 2+ units each. `'😀'.length` is 2, not 1. Use `[...'😀'].length` or `Array.from()` to count actual characters. This breaks in databases too.
+::code-wrapper{language="javascript"}
+```javascript
+// ── .length counts code units, not characters ──
+"😀".length;  // 2 (surrogate pair = 2 code units)
+// Use [...str].length for grapheme count (code points)
 
-**`.substring()` swaps arguments if start > end** — `"hello".substring(3, 1)` is `"el"` (swaps to 1,3). `.slice()` doesn't; it returns `""`. Always use `.slice()` for predictable behavior.
+// ── .charAt() and index access break on surrogate pairs ──
+"😀".charAt(0);  // "\uD83D" (high surrogate only — garbage character)
+"😀"[0];         // "\uD83D" (same — code unit, not code point)
+// Use for...of or [...str] to iterate by code point.
 
-**`.replace()` only replaces first match** — `"aaa".replace('a', 'b')` is `"baa"`, not `"bbb"`. Use `.replaceAll()` (ES2021) or `/g` regex. This trips up beginners constantly.
+// ── .substring() swaps args if start > end ──
+"hello".substring(4, 1);  // "ell" (swaps to 1,4)
+"hello".slice(4, 1);      // "" (no swap — empty)
+// Use .slice() for consistent behavior.
 
-**Regex state persists with `/g` flag** — `const re = /a/g; re.test('a'); re.test('a')` — the second test is `false` because `.lastIndex` moves. Reset with `re.lastIndex = 0` or create a new regex each time.
+// ── .replace() with a string replaces only the FIRST match ──
+"aaa".replace("a", "b");  // "baa" (first only)
+"aaa".replaceAll("a", "b");  // "bbb" (ES2021 — all)
 
-**Unicode normalization matters for comparison** — `'é' === 'é'` might be false if one is NFC and one is NFD. Always normalize: `str1.normalize() === str2.normalize()`. Critical for database comparisons.
+// ── Regex with /g has stateful lastIndex (for .test() and .exec()) ──
+const re = /a/g;
+re.test("aaa");  // true (lastIndex = 1)
+re.test("aaa");  // true (lastIndex = 2)
+re.test("aaa");  // true (lastIndex = 3)
+re.test("aaa");  // false (lastIndex = 0, reset — no more matches)
+// .replace() and .matchAll() reset internally, but .test()/.exec() persist lastIndex.
 
-## 🧠 Spot the Bug
+// ── Template literals can contain newlines, but watch indentation ──
+const html = `
+    <div>
+        content
+    </div>
+`;
+// The leading whitespace is part of the string — use .trim() or a tag function.
+```
+::
 
-What's the output?
+## 🧠 Quick Quiz
+
+What does this output?
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const text = 'hello world'
-const result1 = text.replace(/l/g, 'L')
-const result2 = text.replace(/l/, 'L')
-const result3 = '  trim me  '.trim().split(' ')
-
-console.log(result1, result2, result3.length)
+const str = "𝕏";  // U+1D54F (mathematical double-struck capital X)
+console.log(str.length);
+console.log([...str].length);
+console.log(str.charAt(0) === str[0]);
+console.log(str.codePointAt(0));
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Logs `heLLo worLd heLo world 2`. Here's why:
-- `.replace(/l/g, 'L')` — `/g` flag replaces ALL → `"heLLo worLd"`
-- `.replace(/l/, 'L')` — no `/g` flag, only first match → `"heLo world"`
-- `'  trim me  '.trim().split(' ')` → `["trim", "me"]` (length 2)
+```javascript
+2          // str.length — 2 code units (surrogate pair: U+D835, U+DD4F)
+1          // [...str].length — 1 code point (spread iterates by code point)
+true       // str.charAt(0) === str[0] — both return the high surrogate "\uD835"
+120143     // str.codePointAt(0) — 0x1D54F = 120143 (the actual code point)
+```
 
-**The lesson**: The `/g` flag is required for `.replace()` to replace all. Easy to forget, common bug.
+**The lesson**: JavaScript strings are UTF-16 — `.length`, `.charAt()`, and index access operate on **code units** (16-bit), not code points. Characters outside the BMP (U+0000–U+FFFF) are encoded as surrogate pairs (2 code units), so `.length` returns 2 for a single emoji. Use `[...str]` or `for...of` to iterate by code point, and `.codePointAt()` for the actual Unicode code point.
 
 </details>
-
-## Key Takeaways
-
-- Use template literals for interpolation and multi-line strings.
-- `.length` counts UTF-16 code units, not characters — use spread `[...str]` for code points.
-- `.slice()` supports negative indices; `.substring()` does not.
-- Use `.replaceAll()` instead of `.replace()` for replacing all occurrences (or `/g` regex).
-- `String.raw` and tagged templates enable custom string processing.
-- Always normalize Unicode when comparing strings from different sources.

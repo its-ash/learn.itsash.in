@@ -1,213 +1,108 @@
 ---
-title: Learn Scala — From Scratch to Advanced
-description: A comprehensive Scala curriculum covering fundamentals, object-oriented and functional programming, type system, collections, concurrency, and testing. Master Scala from beginner to advanced developer. Includes edge cases, best practices, and practical patterns.
+title: Learn Scala — From Toolchain to Production
+description: A rigorous, code-first Scala 3 engineering reference covering the JVM execution model, persistent data structures, type-level programming, concurrency, and production interop. Built for mid-to-senior developers.
 ---
 
-# 📖 Learn Scala — From Scratch to Advanced
+# 📖 Learn Scala — From Toolchain to Production
 
-A comprehensive, edge-case-covering Scala curriculum. Each document is self-contained and covers its concept deeply enough that a careful reader can go from beginner to advanced Scala developer.
+A code-first engineering reference for Scala 3. Every chapter is structured around annotated production code — anti-patterns, edge cases, compiler internals, and JVM-level reality. No tutorial fluff.
 
-Scala is a statically-typed, compiled language that runs on the JVM and combines object-oriented and functional programming paradigms. It's used in data engineering (Apache Spark, Kafka), backend services (Twitter, LinkedIn), distributed systems (Akka), and anywhere Java runs but you want better expressiveness.
+Scala is a statically-typed, JVM-compiled language blending object-oriented and functional programming. Used in data engineering (Spark, Kafka), distributed systems (Akka, ZIO), and backend services (Twitter, LinkedIn, Databricks). This curriculum targets Scala 3.x with notes on Scala 2 interop.
 
-## How to Use This Course
+## How to Use This Reference
 
-1. **Read sequentially** for a structured path (01 → 11).
-2. **Jump to a chapter** as a reference when you hit a concept in the wild.
-3. **Run the examples** using `scala-cli` for quick experimentation or `sbt` for projects.
-4. **Use the REPL**: Type `scala` to start an interactive prompt.
-5. **Compare to Java**: If you know Java, note how Scala simplifies or extends it.
+1. **Read sequentially** (01 → 11) for a structured progression from toolchain to production interop.
+2. **Jump to a chapter** when you hit a concept in the wild — each is self-contained.
+3. **Run examples** with `scala-cli` (single files) or `sbt` (multi-module projects).
+4. **Debug type errors** with `-Xprint:typer` and `-explain` — see 01 for compiler introspection.
+5. **Every code block is annotated** — inline comments explain under-the-hood behavior, allocation, and bytecode mapping.
 
 ## Prerequisites
 
-- **Java 11+** installed (`java -version` to verify).
-- Scala installed (`brew install scala` on macOS, or download from scala-lang.org).
-- A text editor (VS Code, IntelliJ IDEA, Vim).
-- Basic programming experience (familiarity with Java, Python, or similar).
+- **Java 17+** installed (`java -version`).
+- Scala 3 via Coursier: `cs install scala3` (preferred) or `brew install scala3`.
+- sbt: `brew install sbt` or `cs install sbt`.
+- IntelliJ IDEA with Scala plugin or VS Code with Metals.
+- Comfort with JVM concepts (classloaders, bytecode, garbage collection) and functional programming basics.
 
 ## Curriculum
 
-### Part I — Foundations
+### Part I — Foundations & Execution Model
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 01 | [Getting Started](/scala/01-getting-started) | Installation, REPL, scala-cli, sbt setup, from-Java perspective. |
-| 02 | [Variables & Data Types](/scala/02-variables-and-data-types) | `val`/`var`/`lazy val`, type inference, primitives, tuples, type hierarchy. |
-| 03 | [Functions](/scala/03-functions) | Declarations, lambdas, higher-order functions, closures, currying. |
-| 04 | [Control Flow](/scala/04-control-flow) | If/else (expressions!), pattern matching, loops, try/catch, Option/Either. |
+| 01 | [Toolchain & JVM Execution Model](/scala/01-getting-started) | Compiler phases, bytecode mapping, sbt/scala-cli, project layout. Without this, you can't debug type errors or perf. |
+| 02 | [Value Semantics & Type Hierarchy](/scala/02-variables-and-data-types) | `val`/`var`/`lazy val` init semantics, primitive boxing, opaque types, `AnyVal`/`AnyRef`, IEEE 754 gotchas. |
+| 03 | [Functions & Closures](/scala/03-functions) | `Function1` JVM representation, closure capture, `@tailrec`, by-name vs by-need, currying, `inline def`. |
+| 04 | [Pattern Matching & Exhaustiveness](/scala/04-control-flow) | Sealed exhaustiveness, type erasure traps, custom extractors, match types, `Either`/`Try`/`Option` as error values. |
 
-### Part II — Collections & OOP
-
-| # | Topic | Why It Matters |
-|---|---|---|
-| 05 | [Collections](/scala/05-collections) | List, Set, Map, Vector, operations (map/filter/fold), mutability trade-offs. |
-| 06 | [Classes & Objects](/scala/06-classes-and-objects) | Class definitions, inheritance, traits, singleton objects, case classes. |
-| 07 | [Case Classes & Pattern Matching](/scala/07-case-classes-and-pattern-matching) | Sealed hierarchies, exhaustiveness checking, destructuring, extractors. |
-
-### Part III — Type System & Advanced Features
+### Part II — Collections & Object Model
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 08 | [Type System](/scala/08-type-system) | Generics, bounds, variance, type aliases, implicit parameters, phantom types. |
-| 09 | [Concurrent Programming](/scala/09-concurrent-programming) | Futures, async operations, Promise, Try, thread safety, ExecutionContext. |
+| 05 | [Collections: Persistent Data Structures](/scala/05-collections) | Vector RRB-trees, structural sharing, lazy views, fusion, performance characteristics, streaming patterns. |
+| 06 | [Classes, Traits & Object Model](/scala/06-classes-and-objects) | Trait linearization, self types, `open`/`sealed`, universal equality, companion objects, path-dependent types. |
+| 07 | [Case Classes & ADTs](/scala/07-case-classes-and-pattern-matching) | Generated code, ADT design, recursive types, regex patterns, custom extractors, `copy` and lens patterns. |
+
+### Part III — Type System & Concurrency
+
+| # | Topic | Why It Matters |
+|---|---|---|
+| 08 | [Type System: Variance & Phantom Types](/scala/08-type-system) | Variance constraints, type classes (given/using), higher-kinded types, phantom types for state machines, match types. |
+| 09 | [Concurrency: Futures & Backpressure](/scala/09-concurrent-programming) | ExecutionContext tuning, parallel vs sequential, retry with backoff, race conditions, `Promise`, `Try`, atomic operations. |
 
 ### Part IV — Production
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 10 | [Testing](/scala/10-testing) | ScalaTest, matchers, fixtures, property-based testing, mocking. |
-| 11 | [Java Interoperability](/scala/11-java-interoperability) | Using Java from Scala, collection conversion, calling Scala from Java. |
+| 10 | [Testing: ScalaTest & ScalaCheck](/scala/10-testing) | Fixtures, property-based testing with shrinking, mock-free design with fakes, tagged integration tests, async testing. |
+| 11 | [Java Interoperability](/scala/11-java-interoperability) | Collection views vs copies, null safety bridges, SAM conversion, `@targetName`, Java-friendly API design, boxing overhead. |
 
 ## Learning Path Suggestions
 
-### If you're new to programming
-
-1. Read 01–04 in order (covers fundamentals with Scala perspective).
-2. Read 05 (Collections) — you'll use these constantly.
-3. Read 06–07 (OOP and pattern matching — core Scala skills).
-4. Do small projects before moving to advanced topics.
-
 ### If you're coming from Java
 
-1. Skim 01–03 (Java basics translate easily; note `val` vs `var` and lambdas).
-2. Read 06 carefully (classes are simpler, traits are powerful).
-3. Read 07 (case classes and pattern matching are major improvements over Java).
-4. Read 08 for Scala's type system features (generics, implicits).
-5. Skip 11 (you know Java interop already).
+1. Read 01 closely — the compiler pipeline and bytecode mapping differ from `javac`.
+2. Skim 02–03 — `val`/`var` and lambdas map to Java concepts but with different init semantics.
+3. Read 04 & 07 — sealed exhaustiveness and pattern matching are Scala's biggest wins over Java.
+4. Read 08 — variance, type classes, and phantom types are concepts Java doesn't have.
+5. Read 11 — interop has subtle traps (views vs copies, boxing, checked exceptions).
 
 ### If you're coming from Python/Ruby
 
-1. Read 02 (type system, type inference).
-2. Read 03–04 (functions and control flow are different; expressions vs statements).
-3. Read 05 (collections have different methods; more functional).
-4. Read 06–07 (OOP and pattern matching replace Python's duck typing).
-5. Read 09 (async model different from Python; Scala is more JVM-centric).
+1. Read 02 — static types, type inference, and the `Any` hierarchy are fundamentally different.
+2. Read 03–04 — closures, tail recursion, and pattern matching replace dynamic dispatch.
+3. Read 05 — persistent data structures and structural sharing replace mutable defaults.
+4. Read 08 — the type system (variance, type classes) is the biggest paradigm shift.
+5. Read 09 — `Future` and `ExecutionContext` replace `asyncio` with a thread-pool model.
 
-### If you're coming from Haskell/functional languages
+### If you're coming from Haskell/OCaml
 
-1. Skim 01–06 (you'll find most concepts familiar).
-2. Read 08 (generics and variance — different from Haskell's approach).
-3. Read 07 (pattern matching is similar but with different syntax).
-4. Read 11 (Java interop is unique to Scala).
+1. Skim 01–05 — most concepts are familiar; focus on JVM-specific details (boxing, erasure).
+2. Read 07 — ADTs and pattern matching are similar but with different ergonomics.
+3. Read 08 closely — variance annotations and type classes (given/using) differ from typeclass instances.
+4. Read 09 — `Future` is eager (not lazy like `IO`); consider ZIO or Cats Effect for laziness.
+5. Read 11 — Java interop is unique to Scala and has real production consequences.
 
-### If you're a senior engineer
+### If you're a senior engineer using Scala in production
 
-1. Skim 01–05 (fundamentals review).
-2. Read 06–07 closely (OOP + pattern matching is Scala's sweet spot).
-3. Read 08 (type system — implicit parameters are powerful and subtle).
-4. Read 09 (concurrency and Futures).
-5. Use 10–11 as references for teams/projects.
+1. Read 01 — compiler phases and bytecode mapping for debugging production issues.
+2. Read 05 & 08 — collection performance and type system design for API/library design.
+3. Read 09 — `ExecutionContext` tuning and backpressure for high-throughput services.
+4. Read 10 — property-based testing and mock-free design for maintainable test suites.
+5. Use 11 as a reference for cross-language team boundaries.
 
-## Key Differences from Java
+## Key Differences from Java (Quick Reference)
 
-| Concept | Scala | Java |
-|---|---|---|
-| Variables | `val` (immutable, default) | `final` type (verbose) |
-| Type inference | Automatic in many cases | Rarely inferred |
-| Null | Avoided with `Option[T]` | Everywhere (nullable) |
-| Functions | First-class, lambdas | Objects, verbose anonymous classes |
-| Pattern matching | Built-in, exhaustive | No language support |
-| Traits | Multiple inheritance via mixins | Interfaces only |
-| Collections | Functional methods built-in | Streams API (verbose) |
-| Concurrency | `Future`/async-await style | Threads, callbacks, CompletableFuture |
-
-## Key Differences from Python
-
-| Concept | Scala | Python |
-|---|---|---|
-| Type system | Static, checked at compile-time | Dynamic, checked at runtime |
-| Type inference | Yes, powerful | No |
-| Performance | Compiled to JVM bytecode | Interpreted, slow |
-| Immutability | Default (`val`) | Not default (mutable everything) |
-| Null | `Option[T]` (not `None`) | `None` (not optional) |
-| Async | Futures, non-blocking | async/await (simpler) |
-| Syntax | More verbose | Minimal |
-
-## Companion Resources
-
-- [Scala 3 Docs](https://docs.scala-lang.org) — official documentation (modern, comprehensive).
-- [Scala 2 Book](https://docs.scala-lang.org/scala3/book/introduction.html) — foundational concepts.
-- [Scala API](https://www.scala-lang.org/api/) — standard library documentation.
-- [Akka Documentation](https://akka.io) — actor model for distributed systems.
-- [Scala Collections](https://docs.scala-lang.org/overviews/collections-2.13/overview.html) — deep dive on collections.
-- [Scala School](https://twitter.github.io/scala_school/) — Twitter's introduction (older but good).
-- [Functional Programming in Scala](https://www.manning.com/books/functional-programming-in-scala) — the book (exercises online).
-- [Stack Overflow](https://stackoverflow.com/questions/tagged/scala) — Scala tag (active community).
-
-## Tooling to Install
-
-::code-wrapper{language="bash"}
-```bash
-# Java (required)
-java -version  # verify you have Java 11+
-
-# Scala via Homebrew (macOS)
-brew install scala
-
-# Or via SDKMAN (all platforms)
-curl -s "https://get.sdkman.io" | bash
-sdk install scala
-
-# Scala CLI (quick experimentation)
-sdk install scala-cli
-# Or: brew install scala-cli
-
-# SBT (project build tool)
-sdk install sbt
-# Or: brew install sbt
-
-# IDE (recommended)
-# - IntelliJ IDEA (best for Scala, free Community Edition)
-# - VS Code with Metals extension (lightweight)
-
-# Linting and formatting
-sbt scalafixAll
-```
-::
-
-## Testing in Scala
-
-Scala has excellent testing frameworks. Here's a quick start:
-
-::code-wrapper{language="bash"}
-```bash
-# Add to build.sbt
-libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.17" % Test
-
-# Run tests
-sbt test
-sbt "testOnly com.example.CalculatorTest"
-```
-::
-
-## Common Use Cases
-
-1. **Data engineering** (Spark, Kafka) → Focus on collections, functional programming.
-2. **Backend APIs** (Play Framework, http4s) → Learn all chapters, emphasize concurrency.
-3. **Distributed systems** (Akka) → Learn all chapters, especially 09 (concurrency).
-4. **CLI tools** → Learn all chapters, use scala-cli for quick scripts.
-5. **Interop with Java** → Read 11 (Java interoperability).
-
-## Next Steps After This Course
-
-- **Apache Spark**: Build data pipelines and machine learning models.
-- **Play Framework or http4s**: Build web applications.
-- **Akka**: Learn actor model for distributed systems.
-- **ZIO or Cats**: Advanced functional programming libraries.
-- **Scala CLI**: Write standalone scripts without sbt.
-- **Contribute to open source**: Scala has vibrant projects (Typelevel, Lightbend).
-
-## Scala 2 vs Scala 3
-
-This course is written for **Scala 3** (released 2021). Key improvements over Scala 2:
-- Better type inference
-- Simplified syntax (optional braces, simplified imports)
-- Union and intersection types
-- Extension methods without implicits
-
-If you're working on a Scala 2 project, most concepts still apply; syntax differs slightly. Check [migration guide](https://docs.scala-lang.org/scala3/guides/migration/compatibility-intro.html).
-
-## License
-
-These notes are yours to use, share, and modify.
-
-📖
+| Java | Scala 3 |
+|---|---|
+| `public static void main(String[] args)` | `@main def run(): Unit = ...` |
+| `int x = 5;` | `val x = 5` (immutable) or `var x = 5` (mutable) |
+| `Optional<T>` | `Option[T]` — `Some(v)` / `None` |
+| `switch` (fallthrough, no exhaustiveness) | `match` — expression, exhaustiveness-checked on sealed |
+| Checked exceptions | No checked exceptions — use `Try`/`Either` |
+| `instanceof` + cast | Pattern match: `case s: String => ...` |
+| `ArrayList<T>` (mutable, covariant arrays) | `Vector[T]` (immutable, persistent) or `ArrayBuffer[T]` |
+| `Function<T,R>` (single interface) | `T => R` (Function1, with 22 arities + specialized variants) |
+| `synchronized` blocks | `synchronized` + `AtomicLong` + `Future` + `Promise` |
+| Getter/setter conventions | Properties (direct field access, no `getX()`/`setX()`) |

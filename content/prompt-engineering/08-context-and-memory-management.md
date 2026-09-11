@@ -1,20 +1,22 @@
+---
+title: "08 — Context & Memory Management"
+description: "Context as a finite budget — sliding window, summarization, structured memory, prompt caching, and the layered production architecture. Anti-patterns for silent truncation and stale memory. Code-first reference for mid-to-senior engineers."
+---
+
 # 08 — Context & Memory Management
 
 ## The Problem: Context Is Finite, Conversations Aren't
 
-Chapter 1 introduced the context window as a hard ceiling on how many tokens a model can process in one request. Chapter 7 mentioned schema drift over long conversations in passing. This chapter is about the discipline that sits underneath both: **any application that supports an ongoing conversation, a long document, or a persistent "session" is, whether its builders realize it or not, doing context management** — deciding what stays in the window, what gets dropped, what gets compressed, and what gets fetched back in on demand.
+The model has no memory across API calls. "Memory" in a chat product = resending the transcript every time. Any application supporting ongoing conversation is doing context management whether it realizes it or not.
 
-The model itself has no memory across API calls. Every request is stateless — what looks like "the assistant remembering what you said five messages ago" in a chat product is the product resending the entire transcript (or some curated subset of it) as part of the prompt, every single time. Once you internalize that, "memory" stops being a mysterious model capability and becomes an engineering problem you're directly responsible for solving.
+## Anti-Pattern: Naive Full-History Resend
 
-## The Naive Approach and Why It Breaks
-
-The simplest possible strategy is: keep appending every user and assistant turn to a list, and resend the whole list on every request.
-
-::code-wrapper{language="python"}
+::code-wrapper{language="python" filename="naive_history.py"}
 ```python
+# ANTI-PATTERN: append every turn, resend everything, hope the window never fills.
 messages = []
 
-def chat(user_input):
+def chat(user_input: str) -> str:
     messages.append({"role": "user", "content": user_input})
     response = client.messages.create(
         model="claude-opus-5",
@@ -24,39 +26,44 @@ def chat(user_input):
     reply = response.content[0].text
     messages.append({"role": "assistant", "content": reply})
     return reply
+
+# FAILS in three predictable ways as conversation grows:
+# 1. Context limit exceeded → request errors out (no graceful degradation)
+# 2. Paying for tokens you don't need → cost/latency scale unboundedly
+# 3. Quality degrades BEFORE the hard limit → "lost in the middle" effect:
+#    a technically-valid 150K-token request produces worse answers than a
+#    well-curated 20K-token one because effective attention to any given fact
+#    drops as context grows and the fact's position drifts toward the middle.
 ```
 ::
-
-This works fine for short conversations and fails in three predictable ways as the conversation grows:
-
-1. **You hit the context limit.** Eventually `messages` plus your system prompt plus the model's reserved output space exceeds the window, and the request errors out entirely rather than degrading gracefully.
-2. **You pay for tokens you don't need.** Every turn resends the entire history, even turns that are no longer relevant to the current question — cost and latency both scale with conversation length, unboundedly, for no benefit past a certain point.
-3. **Quality degrades before you hit the hard limit.** As covered in Chapter 1, models exhibit position effects — information in the middle of a long context is recalled less reliably than information near the start or end (the "lost in the middle" effect). A technically-valid 150K-token request can still produce worse answers than a well-curated 20K-token one, because the model's *effective* attention to any given fact drops as the context grows and that fact's relative position drifts toward the middle.
 
 ## Strategy 1: Sliding Window Truncation
 
-The simplest real mitigation: keep the system prompt (which usually carries durable, high-value instructions) and the most recent *N* turns, dropping older turns entirely.
-
-::code-wrapper{language="python"}
+::code-wrapper{language="python" filename="sliding_window.py"}
 ```python
 MAX_TURNS = 20
 
-def trim(messages):
+def trim(messages: list[dict]) -> list[dict]:
+    """Keep only the most recent N turns, drop older ones entirely."""
     if len(messages) <= MAX_TURNS:
         return messages
     return messages[-MAX_TURNS:]
+
+# Works when older turns genuinely stop mattering (casual chat, independent Qs).
+# FAILS BADLY when conversation has long-range dependency:
+#   - User established "I'm allergic to shellfish" in turn 2
+#   - On turn 40, that fact silently falls out of the window
+#   - The model has no way to know it ever existed
+# Naive truncation trades context safety for SILENT correctness risk —
+# it doesn't fail loudly, it just quietly forgets.
 ```
 ::
 
-This is cheap to implement and works well when older turns genuinely stop mattering — a casual support chat where each question is largely independent of the last. It fails badly when the conversation has a long-range dependency: a user who established an important constraint in turn 2 ("I'm allergic to shellfish") and is now on turn 40 will have that fact silently fall out of the window, and the model has no way to know it ever existed. Naive truncation trades context-window safety for a real, silent correctness risk — it doesn't fail loudly, it just quietly forgets.
+## Strategy 2: Summarization Compaction
 
-## Strategy 2: Summarization
-
-A more robust approach is to periodically compress older turns into a summary that preserves the load-bearing facts while shedding the verbatim text:
-
-::code-wrapper{language="markdown"}
-```markdown
-Summarize the conversation so far in no more than 200 words. Preserve:
+::code-wrapper{language="python" filename="summarization.py"}
+```python
+SUMMARIZE_PROMPT = """Summarize the conversation so far in no more than 200 words. Preserve:
 - Any stated constraints, preferences, or facts about the user (allergies,
   budget limits, prior decisions, names/dates they've given).
 - The current unresolved question or task, if any.
@@ -64,74 +71,111 @@ Summarize the conversation so far in no more than 200 words. Preserve:
 
 Do not preserve pleasantries, small talk, or resolved side-tangents. Write
 the summary as neutral third-person notes, not as a transcript.
-```
-::
+"""
 
-The resulting summary replaces the raw older turns in the message list, and the most recent handful of turns are kept verbatim:
-
-::code-wrapper{language="python"}
-```python
-def compact(messages, keep_recent=6):
+def compact(messages: list[dict], keep_recent: int = 6) -> list[dict]:
+    """Compress older turns into a summary, keep recent turns verbatim."""
     if len(messages) <= keep_recent + 1:
         return messages
+
     to_summarize = messages[:-keep_recent]
     recent = messages[-keep_recent:]
-    summary = summarize(to_summarize)
+
+    summary_response = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=300,
+        messages=[{"role": "user", "content": f"{SUMMARIZE_PROMPT}\n\nConversation:\n{format_messages(to_summarize)}"}],
+    )
+    summary = summary_response.content[0].text
+
     return [{"role": "user", "content": f"[Conversation summary so far: {summary}]"}] + recent
+
+# TRIGGER: compact at 60-70% of working budget, NOT at the last possible moment.
+# Waiting until you're one turn from the limit means the summarization call
+# itself processes near-maximal context — slow and expensive.
+# Compacting earlier is cheaper and produces better summaries.
+
+# TRADEOFF: summarization is lossy and one-directional. A detail dropped from
+# the summary is GONE. If it matters three turns later, there's no recovery
+# without asking the user to repeat themselves. See Strategy 3 for a better fix.
 ```
 ::
 
-This costs an extra model call each time you compact (the summarization itself is a generation), but it preserves far more of the conversation's actual substance per token than either raw truncation or hoping the window never fills. The tradeoff to be honest about: summarization is lossy and one-directional — a detail dropped from the summary is gone, and if that detail turns out to matter three turns later, there's no way to recover it without asking the user to repeat themselves.
+## Strategy 3: Structured Memory (Non-Lossy)
 
-### Recursive summarization
+::code-wrapper{language="python" filename="structured_memory.py"}
+```python
+import json
+from dataclasses import dataclass, field, asdict
 
-For genuinely long-running sessions (a multi-day support case, a long-form writing collaboration), a single summarization pass isn't enough — you'll eventually need to summarize a summary. Each additional layer of compression loses more fidelity, so recursive summarization should be treated as a last resort, not a default: prefer keeping the *most recent* raw summary plus new recent turns, and only re-summarize the summary itself when it, too, grows too large to keep resending in full.
+@dataclass
+class StructuredMemory:
+    """Application-maintained state, injected into every prompt at fixed token cost.
+    Unlike transcript memory, this is EXACT and NON-LOSSY — the fact doesn't
+    degrade or disappear regardless of conversation length."""
 
-## Strategy 3: Structured Memory Instead of Transcript Memory
+    user_facts: dict[str, any] = field(default_factory=dict)
+    task_state: dict[str, any] = field(default_factory=dict)
 
-A different, often better, strategy for anything with a well-defined shape (user preferences, known facts, task state) is to stop treating "memory" as a compressed transcript at all, and instead maintain it as **structured state your application updates**, separate from the raw conversation:
+    def update_fact(self, key: str, value: any) -> None:
+        """Update (not just add) — critical for preventing stale facts."""
+        self.user_facts[key] = value
 
-::code-wrapper{language="json"}
-```json
-{
-  "user_facts": {
+    def render(self) -> str:
+        """Render into system prompt at small, fixed token cost."""
+        lines = ["Known facts about this user (treat as ground truth, do not "
+                 "ask again unless they explicitly update one):"]
+        for key, value in self.user_facts.items():
+            lines.append(f"- {key.replace('_', ' ').title()}: {value}")
+        if self.task_state:
+            lines.append(f"\nCurrent task state: {self.task_state.get('current_goal', 'none')}")
+            if self.task_state.get("confirmed"):
+                lines.append(f"Confirmed: {', '.join(self.task_state['confirmed'])}")
+            if self.task_state.get("still_needed"):
+                lines.append(f"Still need: {', '.join(self.task_state['still_needed'])}")
+        return "\n".join(lines)
+
+# Example state:
+memory = StructuredMemory()
+memory.user_facts = {
     "dietary_restrictions": ["shellfish allergy"],
     "preferred_name": "Priya",
-    "timezone": "Asia/Kolkata"
-  },
-  "task_state": {
+    "timezone": "Asia/Kolkata",
+}
+memory.task_state = {
     "current_goal": "planning a 5-day Kerala itinerary",
     "confirmed": ["dates: Nov 12-17", "budget: moderate"],
-    "still_needed": ["hotel preference", "interest in backwater tours"]
-  }
+    "still_needed": ["hotel preference", "interest in backwater tours"],
 }
+
+# Injected into EVERY system prompt, regardless of conversation length:
+print(memory.render())
+# Known facts about this user (treat as ground truth, do not ask again...):
+# - Dietary Restrictions: ['shellfish allergy']
+# - Preferred Name: Priya
+# - Timezone: Asia/Kolkata
+#
+# Current task state: planning a 5-day Kerala itinerary
+# Confirmed: dates: Nov 12-17, budget: moderate
+# Still need: hotel preference, interest in backwater tours
+
+# This is how most production "the assistant remembers me across sessions" features
+# actually work: not by resending an ever-growing transcript, but by maintaining a
+# small structured profile that's cheaply re-injected every time.
 ```
 ::
-
-This structured object gets rendered into the system prompt (or a dedicated context block) on every turn, in a fixed, compact form — no matter how long the underlying conversation has run:
-
-::code-wrapper{language="markdown"}
-```markdown
-Known facts about this user (treat as ground truth, do not ask again unless
-they explicitly update one):
-- Dietary restriction: shellfish allergy
-- Preferred name: Priya
-- Timezone: Asia/Kolkata
-
-Current task state: planning a 5-day Kerala itinerary. Confirmed: dates
-Nov 12-17, moderate budget. Still need: hotel preference, interest in
-backwater tours.
-```
-::
-
-This is more engineering work than either truncation or summarization — you need logic somewhere (either your application code, or the model itself via a tool call, see Chapter 13) that decides when to write a new fact into this structure — but it gives you exact, non-lossy recall of the things that actually matter, at a small, fixed token cost, regardless of how long the surrounding conversation has run. This is essentially how most production "the assistant remembers me across sessions" features actually work: not by resending an ever-growing transcript, but by maintaining a small structured profile that's cheaply re-injected every time.
 
 ## Prompt Caching
 
-A distinct but related concept — **not** memory across turns, but efficiency within and across requests that share a long, unchanging prefix. Several providers (Claude, GPT, and others, as of this writing — check current docs for exact mechanics and pricing on your target model) let you mark a portion of your prompt as cacheable, so that if a subsequent request reuses the exact same prefix, the provider can skip reprocessing it, at reduced latency and reduced cost for the cached portion.
-
-::code-wrapper{language="python"}
+::code-wrapper{language="python" filename="prompt_caching.py"}
 ```python
+# Prompt caching is NOT memory across turns — it's efficiency within/across
+# requests that share a long, unchanging PREFIX. If a subsequent request
+# reuses the exact same prefix, the provider skips reprocessing it → reduced
+# latency + reduced cost for the cached portion.
+
+LONG_STATIC_SYSTEM_PROMPT = "..."  # your durable system prompt, reference docs, etc.
+
 response = client.messages.create(
     model="claude-opus-5",
     max_tokens=1024,
@@ -139,86 +183,192 @@ response = client.messages.create(
         {
             "type": "text",
             "text": LONG_STATIC_SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": {"type": "ephemeral"},  # ← mark as cacheable
         }
     ],
-    messages=[{"role": "user", "content": user_question}],
+    messages=[{"role": "user", "content": user_question}],  # ← variable part goes LAST
 )
+
+# CRITICAL DESIGN IMPLICATION:
+# Structure prompts so STABLE, REUSABLE parts (system instructions, reference
+# docs, large few-shot sets) come FIRST and stay byte-for-byte identical across
+# calls. VARIABLE parts (user question, latest turn) come LAST.
+#
+# A prompt that interleaves static and dynamic content throughout DEFEATS caching
+# — any change earlier in the prompt invalidates the cache for everything after it.
+#
+# cache_valid = prefix_identical(request, previous_request)
+# if any token in [0..n] differs → cache invalidated for [n..end]
+# → order matters: static first, dynamic last
 ```
 ::
 
-The practical implication for context management: **structure your prompts so that the stable, reusable parts (system instructions, a large reference document, a big few-shot example set) come first and stay byte-for-byte identical across calls, and the variable parts (the actual user question, the latest turn) come last.** A prompt that interleaves static and dynamic content throughout defeats caching, because any change earlier in the prompt invalidates the cache for everything after it. This is a case where the format of your prompt (ordering, stability of the prefix) has direct cost and latency consequences, not just quality ones — it's worth designing your context-assembly logic around cache-friendliness from the start, rather than retrofitting it later.
+## Production Layered Architecture
 
-## Combining Strategies in Practice
+::code-wrapper{language="python" filename="layered_architecture.py"}
+```python
+"""
+A realistic production system layers all strategies:
+  1. Structured memory → durable facts (small, exact, cheap)
+  2. Rolling summary → gist of older conversation (lossy, compact)
+  3. Recent turns verbatim → short-range coherence (exact wording)
+  4. Stable cacheable system prefix → cost/latency optimization
+"""
 
-A realistic production system rarely picks just one of the above — it layers them:
+def assemble_context(
+    system_prompt: str,        # STABLE: persona, rules, format constraints
+    memory: StructuredMemory,   # STRUCTURED: user facts, task state
+    summary: str,               # ROLLING: compressed older conversation
+    recent_turns: list[dict],   # RECENT: last N messages, verbatim
+    current_message: str,       # CURRENT: the user's latest input
+) -> dict:
+    """Assemble the full context with cache-friendly ordering."""
+    # Layer 1: system prompt (cached, byte-identical across calls)
+    # Layer 2: structured memory (regenerated from app state, small)
+    # Layer 3: rolling summary (compressed older turns)
+    # Layer 4: recent turns (verbatim, last 6)
+    # Layer 5: current user message
 
-1. **Structured memory** for durable facts about the user/task (small, exact, cheap).
-2. **A rolling summary** for the "gist" of the conversation beyond what's kept verbatim.
-3. **The most recent N turns verbatim**, for short-range coherence and exact wording of the immediate exchange.
-4. **A stable, cacheable system prompt prefix**, ordered so caching actually applies.
+    full_system = f"{system_prompt}\n\n{memory.render()}"
 
-::code-wrapper{language="markdown"}
-```markdown
-[STABLE, CACHED: system instructions, persona, output format rules]
+    messages = []
+    if summary:
+        messages.append({"role": "user", "content": f"[Conversation summary: {summary}]"})
+    messages.extend(recent_turns)
+    messages.append({"role": "user", "content": current_message})
 
-[STRUCTURED MEMORY: known user facts, current task state — regenerated
-fresh each turn from application state, not from raw transcript]
+    return {
+        "system": [{
+            "type": "text",
+            "text": full_system,
+            "cache_control": {"type": "ephemeral"},
+        }],
+        "messages": messages,
+    }
 
-[ROLLING SUMMARY: compressed notes on the conversation prior to the
-last 6 turns]
-
-[RECENT TURNS: last 6 user/assistant messages, verbatim]
-
-[CURRENT USER MESSAGE]
+# Each layer answers a different question:
+# - System prompt: what never changes? (persona/rules)
+# - Structured memory: what's true regardless of conversation length? (facts/state)
+# - Rolling summary: what happened a while ago that still matters in gist?
+# - Recent turns: what happened just now that matters in exact wording?
+# - Current message: what is the user asking right now?
 ```
 ::
-
-Each layer answers a different question: what never changes (persona/rules), what's true regardless of conversation length (facts/state), what happened a while ago but still matters in gist (summary), and what happened just now and matters in exact wording (recent turns).
 
 ## 💡 Tips & Tricks
 
-- **Budget context like money, not like an afterthought** — Before writing summarization or truncation logic, decide explicitly what fraction of your context window is reserved for system instructions, structured memory, conversation history, and the model's own output, and treat exceeding any one of those budgets as a bug to fix, not something to patch reactively when a request finally errors.
-- **Summarize before you're forced to, not after** — Waiting until you're one turn away from the context limit to trigger summarization means your summarization call itself has to process a near-maximal context, which is slow and expensive. Trigger compaction at a comfortable threshold (e.g., 60–70% of your working budget), not at the last possible moment.
-- **Let the model flag what's worth remembering** — Rather than only ever summarizing algorithmically after the fact, some production systems ask the model, at the end of a turn, "was there anything in this exchange worth persisting to long-term memory? If so, state it as a short fact." This shifts some of the judgment about *what matters* onto the model itself, which can be more accurate than a generic summarization prompt for domain-specific "important facts."
-- **Cache-friendly ordering pays for itself even in single-shot use** — Even an application that never has multi-turn conversations benefits from putting static reference material (a product catalog, a style guide, a large FAQ) ahead of the variable question in the prompt, purely for prompt-caching cost savings across many independent requests that share that static prefix.
-- **Re-inject critical constraints near the end, not just once at the start** — For any fact that absolutely cannot be forgotten (a hard safety constraint, a legal disclaimer requirement), don't rely solely on it being stated once in a system prompt at the top of a long context — restate it, briefly, close to where generation begins, to counter the position effects covered in Chapter 1.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **Silent truncation is worse than a visible error.** A sliding-window strategy that quietly drops old turns can cause the model to contradict something the user said earlier, with no error, no warning, and no way for the user to know why — they'll just experience the assistant as "forgetting" and, worse, may not realize it happened until the consequence surfaces (e.g., a shellfish dish gets recommended anyway). Wherever feasible, prefer strategies (structured memory, summarization) that at least *attempt* to carry the fact forward over ones that guarantee its loss past a fixed turn count.
-- **Summaries can confidently misrepresent what was said.** A summarization pass is itself a generation, subject to the same hallucination risks as any other model output (see Chapter 17) — it can compress "the user said they're *not* sure about the budget" into "budget: confirmed," inverting the meaning while looking perfectly well-formed. Treat summaries as a lossy, fallible compression, not a verified record, and where a fact is critical, prefer structured extraction with an explicit schema over prose summarization.
-- **Prompt caching has a time-to-live, and it's shorter than you might assume.** Cached prefixes typically expire after a few minutes of inactivity (exact duration is provider- and tier-specific, and changes — check current docs). A conversational application with long user think-time between turns may not actually benefit from caching as much as a benchmark suggested, because the cache has already expired by the time the next request arrives.
-- **Structured memory can go stale without an update mechanism.** A "known fact" written to structured memory in turn 3 (`"budget": "moderate"`) needs an explicit path for the user to change it later ("actually, let's go higher-end") — if your update logic only ever adds facts and never revises them, structured memory becomes a source of *increasingly wrong* ground truth over time, which is arguably worse than no memory at all, since the model will state the stale fact with full confidence.
-- **Combining strategies can double-count or contradict.** If your rolling summary and your structured memory both separately track "user's budget," and they drift out of sync (the summary says "moderate," the structured field was updated to "high" but the old summary sentence wasn't regenerated), the model receives genuinely contradictory information in the same prompt and has no principled way to know which one is current — per Chapter 1, it will weigh both as real signals, not resolve the conflict for you. Keep a single source of truth per fact, and derive anything else (like summary text) from it, rather than maintaining parallel, independently-updated representations of the same information.
-
-## 🧠 Spot the Issue
-
-A team builds a long-running coding-assistant chat. To manage context, they truncate to the last 15 messages on every turn, with no summarization and no structured memory:
-
-::code-wrapper{language="python"}
+::code-wrapper{language="python" filename="tips.py"}
 ```python
-def build_context(messages):
-    return messages[-15:]
+# [Performance] Budget context like money, not like an afterthought. Decide
+# explicitly what fraction is reserved for system, memory, history, and output.
+# Treat exceeding any budget as a BUG, not something to patch reactively.
+
+# [Idiom] Summarize BEFORE you're forced to, not after. Waiting until the context
+# limit to trigger summarization means the summarization call itself processes
+# near-maximal context — slow and expensive. Trigger at 60-70% of budget.
+
+# [Idiom] Let the model flag what's worth remembering. Ask at end of turn:
+# "Was there anything in this exchange worth persisting to long-term memory?
+# If so, state it as a short fact." This shifts judgment about WHAT matters
+# onto the model, which can be more accurate than generic summarization.
+
+# [Performance] Cache-friendly ordering pays for itself even in single-shot use.
+# Putting static reference material (product catalog, style guide, FAQ) ahead
+# of the variable question saves cost across many independent requests sharing
+# that prefix — even without multi-turn conversations.
+
+# [Idiom] Re-inject critical constraints near the END, not just at the start.
+# For any fact that absolutely cannot be forgotten (hard safety constraint,
+# legal disclaimer), restate it close to where generation begins — counteracts
+# the position effects that weaken mid-context instructions.
 ```
 ::
 
-Users on long debugging sessions report that, after roughly 20-30 turns, the assistant starts suggesting fixes that contradict a design decision explicitly agreed on early in the conversation ("we decided to use optimistic locking, not pessimistic locking, for this table"), even though nothing about the current question directly touches locking. What's going wrong, and why does the fix depend on *what kind* of information was lost?
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="python" filename="edge_cases.py"}
+```python
+# [Gotcha] Silent truncation is WORSE than a visible error. A sliding window that
+# quietly drops old turns causes the model to contradict something the user said
+# earlier — no error, no warning, no way for the user to know why. They'll just
+# experience the assistant as "forgetting." Prefer strategies that ATTEMPT to
+# carry facts forward (structured memory, summarization) over ones that guarantee
+# loss past a fixed turn count.
+
+# [Gotcha] Summaries can confidently misrepresent what was said. A summarization
+# pass is itself a generation subject to hallucination (Chapter 17). It can
+# compress "the user said they're NOT sure about the budget" into "budget:
+# confirmed" — inverting the meaning while looking well-formed. Treat summaries
+# as lossy, fallible compression, not verified records.
+
+# [Gotcha] Prompt caching has a TTL shorter than you might assume. Cached
+# prefixes typically expire after a few minutes of inactivity (provider-specific).
+# A conversational app with long user think-time between turns may not benefit
+# from caching as much as benchmarks suggested — the cache expired before the
+# next request arrived.
+
+# [Gotcha] Structured memory can go STALE without an update mechanism. A "known
+# fact" written in turn 3 ("budget": "moderate") needs a path for the user to
+# change it later ("actually, let's go higher-end"). If your update logic only
+# ADDS facts and never revises, structured memory becomes increasingly WRONG
+# ground truth — arguably worse than no memory at all, since the model states
+# the stale fact with full confidence.
+
+# [Gotcha] Combining strategies can double-count or contradict. If your rolling
+# summary AND your structured memory both track "user's budget" and they drift
+# out of sync (summary says "moderate," structured field updated to "high" but
+# the old summary wasn't regenerated), the model receives contradictory
+# information with no way to know which is current. Keep a SINGLE source of
+# truth per fact — derive everything else from it.
+```
+::
+
+## 🧠 Spot the Bug
+
+A team builds a long-running coding assistant that truncates to the last 15 messages every turn — no summarization, no structured memory. A user establishes in turn 3 that their project uses a specific coding convention. By turn 20, the convention is gone from context. The assistant starts suggesting code that violates the convention. The user is confused because the assistant "knew" this earlier. What's the structural flaw?
 
 <details>
 <summary>Answer</summary>
 
-The design decision was made in a turn that has now aged out of the 15-message window — pure truncation has no concept of "this fact is important, keep it regardless of age," it only knows recency. Because the decision doesn't get restated or referenced in the recent turns (it was a one-time agreement, not something repeated), it's now genuinely absent from what the model sees, and the model has no way to distinguish "this constraint was never established" from "this constraint aged out of context" — from its point of view, both look identical: the fact simply isn't there. The fix depends on the kind of information because a decision like this is exactly the case structured memory is suited for (a durable, discrete fact: "locking strategy: optimistic," which should persist verbatim regardless of conversation length) rather than something a rolling summary would reliably retain (summaries are lossy and tend to compress toward the gist of recent exchanges, not preserve a single early architectural decision word-for-word many turns later). Sliding-window truncation alone is the wrong tool for any fact whose relevance doesn't correlate with recency.
+Truncation with no compensating mechanism (structured memory or summarization) guarantees that any fact established early in the conversation silently disappears once it falls outside the window. The user experiences this as the assistant "forgetting" — but the assistant never knew anything; the fact was simply no longer in context.
 
-**The lesson**: recency-based truncation silently discards anything important that was only ever stated once and doesn't reappear — durable decisions, constraints, and facts need a persistence mechanism (structured memory, in this case) that doesn't depend on staying within a fixed recent-turn window.
+The fix depends on the fact's nature:
+- **Durable user facts/conventions** → structured memory (Strategy 3): extract the convention into a structured field that's re-injected every turn at fixed token cost, regardless of conversation length.
+- **Conversation gist** → summarization (Strategy 2): compress older turns into a summary that carries the convention forward in compressed form.
+- **Neither** → naive truncation is a guaranteed data-loss mechanism for any conversation long enough to exceed the window.
+
+The deeper lesson: every context management strategy is a tradeoff between cost, fidelity, and complexity. Naive truncation is the cheapest and lowest-fidelity — acceptable only when older turns genuinely stop mattering. For any fact that must persist across the full conversation, use structured memory; for conversation flow, use summarization.
 
 </details>
 
 ## Key Takeaways
 
-- The model has no memory between API calls — every "memory" behavior in a product is the result of application logic deciding what to resend, summarize, or store, and that decision is entirely your responsibility to get right.
-- Naive full-transcript resending fails in three ways as conversations grow: hitting hard context limits, wasting tokens on irrelevant history, and degrading quality due to position effects even before the limit is reached.
-- Sliding-window truncation is cheap but silently drops anything that was stated once and never repeated, regardless of how important it was — a real correctness risk, not just a cost optimization tradeoff.
-- Summarization preserves more substance per token than truncation but is itself a lossy, fallible generation — treat compressed summaries as approximate, not as a verified record, especially for facts that must be exact.
-- Structured memory (explicit fields your application maintains and re-injects) gives exact, low-cost recall for durable facts and task state, independent of conversation length, at the cost of needing explicit update logic to avoid staleness.
-- Prompt caching is a distinct, complementary technique for cost/latency (not cross-turn memory) that rewards keeping a stable, identically-ordered prefix — structure prompts with static content first and variable content last to take advantage of it.
+::code-wrapper{language="python" filename="key_takeaways.py"}
+```python
+"""
+Context & memory management — the finite budget problem.
+"""
+
+# 1. The model has NO persistent memory across API calls. "Memory" = the product
+#    resending the transcript every turn. Context management is YOUR job.
+
+# 2. Three strategies, in order of fidelity and complexity:
+#    sliding_window: cheapest, silent data loss past N turns
+#    summarization:  lossy compression, costs an extra model call per compaction
+#    structured_memory: exact, non-lossy, fixed token cost — requires app logic
+#    to decide when to write/update facts.
+
+# 3. Prompt caching ≠ memory. It's efficiency for shared prefixes. Structure
+#    prompts: STABLE first (cached), VARIABLE last. Any change early in the
+#    prompt invalidates the cache for everything after it.
+
+# 4. Production systems LAYER all three: structured memory (facts) + rolling
+#    summary (gist) + recent verbatim turns (exact wording) + cacheable prefix.
+
+# 5. Silent truncation is worse than a visible error — it causes the model to
+#    "forget" with no warning. Always prefer strategies that ATTEMPT to carry
+#    facts forward over ones that guarantee loss past a fixed count.
+#    And: keep a SINGLE source of truth per fact to avoid contradictions between
+#    parallel tracking mechanisms.
+```
+::

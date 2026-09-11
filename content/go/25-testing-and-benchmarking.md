@@ -1,284 +1,350 @@
+---
+title: "25 — Testing & Benchmarking"
+description: "Table-driven tests, subtests with t.Parallel, benchmark allocation analysis, fuzzing, httptest, coverage gating, and testify assertions."
+---
+
 # 25 — Testing & Benchmarking
 
-Go has testing built into the toolchain (`go test`), with benchmarks, fuzzing, and example functions. No external framework needed for the basics.
-
-## Test Functions
-
-A test is a function `TestXxx(t *testing.T)` in a `_test.go` file:
+## Table-Driven Tests — The Production Pattern
 
 ::code-wrapper{language="go"}
 ```go
-// math.go
-package math
-
-func Add(a, b int) int { return a + b }
-
-// math_test.go
-package math
+package user
 
 import "testing"
 
-func TestAdd(t *testing.T) {
-	got := Add(2, 3)
-	want := 5
-	if got != want {
-		t.Errorf("Add(2, 3) = %d, want %d", got, want)
-	}
-}
-```
-::
-
-- `t.Errorf` — reports a failure and continues.
-- `t.Fatalf` — reports a failure and stops the test (for fatal setup failures).
-- `t.Skip` — skips the test (with a reason).
-- `t.Run("subtest", func(t *testing.T) { ... })` — subtests, with `t.Parallel()` for concurrent execution.
-
-## Table-Driven Tests
-
-The idiomatic Go pattern — define cases as table rows, loop over them:
-
-::code-wrapper{language="go"}
-```go
-func TestAdd(t *testing.T) {
+func TestValidate(t *testing.T) {
 	tests := []struct {
-		name     string
-		a, b     int
-		want     int
+		name    string
+		input   User
+		wantErr string  // empty = no error expected
 	}{
-		{"positive", 2, 3, 5},
-		{"negative", -1, -2, -3},
-		{"zero", 0, 0, 0},
-		{"mixed", 5, -3, 2},
+		{"valid user", User{Email: "a@b.com", Age: 25}, ""},
+		{"empty email", User{Age: 25}, "email required"},
+		{"invalid email", User{Email: "no-at-sign", Age: 25}, "email invalid"},
+		{"negative age", User{Email: "a@b.com", Age: -1}, "age must be non-negative"},
+		{"zero age (valid)", User{Email: "a@b.com", Age: 0}, ""},  // 0 is valid
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Add(tt.a, tt.b)
-			if got != tt.want {
-				t.Errorf("Add(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+			t.Parallel()  // ✅ parallel subtests — faster
+
+			err := Validate(tt.input)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate(%+v) = %v, want nil", tt.input, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("Validate(%+v) = nil, want error containing %q", tt.input, tt.wantErr)
+				} else if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("Validate(%+v) = %q, want error containing %q", tt.input, err.Error(), tt.wantErr)
+				}
 			}
 		})
 	}
 }
-``
-::
 
-`t.Run` creates a subtest per case — `go test -v` shows each, and `go test -run TestAdd/positive` runs one. The `name` field identifies the case in output.
-
-## Subtests and `t.Parallel`
-
-::code-wrapper{language="go"}
-```go
-func TestParallel(t *testing.T) {
-	tests := []struct{ name string; input int }{...}
-	for _, tt := range tests {
-		tt := tt   // capture (pre-1.22; 1.22+ doesn't need this)
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()   // mark as parallel
-			// test...
-		})
-	}
-}
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ Table-driven test rules:                                            │
+// │   1. Each case has a name (shown in `go test -v` output)             │
+// │   2. Use t.Run for subtests — enables t.Parallel and filtering       │
+// │   3. Include edge cases (zero, negative, empty, boundary values)     │
+// │   4. Test the error MESSAGE, not just "error != nil"                 │
+// └──────────────────────────────────────────────────────────────────────┘
 ```
-::
-`t.Parallel()` signals that subtests can run concurrently with other parallel tests. Pre-1.22, capture the loop variable (`tt := tt`); 1.22+ doesn't need it.
 
-## Benchmarks
+## Benchmarking — Allocation Analysis
 
 ::code-wrapper{language="go"}
 ```go
-func BenchmarkAdd(b *testing.B) {
+package user
+
+import "testing"
+
+func BenchmarkValidate(b *testing.B) {
+	// b.N is adjusted by the framework until the run takes ~1 second.
+	// The loop body must be the operation under test — no setup inside.
+
+	user := User{Email: "test@example.com", Age: 30}
+
+	b.ReportAllocs()  // ✅ show allocs/op — the key metric
+	b.ResetTimer()    // ✅ exclude setup from the benchmark
+
 	for i := 0; i < b.N; i++ {
-		Add(2, 3)
+		_ = Validate(user)  // discard result — don't let the compiler optimize it away
 	}
 }
-```
-::
 
-`b.N` is adjusted by the benchmark framework until the run takes ~1 second. Run with `go test -bench=.`:
+// Run:
+//   go test -bench=BenchmarkValidate -benchmem -count=5
+//
+// Output:
+//   BenchmarkValidate-8   10000000   112 ns/op   0 B/op   0 allocs/op
+//
+// Key metrics:
+//   ns/op    — nanoseconds per operation (lower = faster)
+//   B/op     — bytes allocated per operation (lower = less GC pressure)
+//   allocs/op — heap allocations per operation (lower = less GC pressure)
+//
+// ⚠️ allocs/op is the most important — heap allocations trigger GC.
+//   Reducing allocs often improves performance more than micro-optimizing.
+```
+
+### Benchmark Comparison — `benchstat`
 
 ::code-wrapper{language="bash"}
 ```bash
-go test -bench=.                  # all benchmarks
-go test -bench=BenchmarkAdd       # specific
-go test -bench=. -benchmem        # show allocations
-go test -bench=. -benchtime=5s    # run each for 5s
-go test -bench=. -count=5         # run 5 times (for variance)
-go test -bench=. -cpu=1,2,4       # different GOMAXPROCS
-```
-::
-Output: `BenchmarkAdd-8   1000000000   0.5 ns/op   0 B/op   0 allocs/op` — `-8` is GOMAXPROCS, `ns/op` is time per operation, `B/op` and `allocs/op` (with `-benchmem`) are memory/allocations.
+# Compare two implementations statistically (eliminates noise):
+# 1. Benchmark the old version:
+git stash
+go test -bench=BenchmarkValidate -benchmem -count=10 > old.txt
 
-### Benchmarking with setup
+# 2. Benchmark the new version:
+git stash pop
+go test -bench=BenchmarkValidate -benchmem -count=10 > new.txt
+
+# 3. Compare:
+benchstat old.txt new.txt
+# goos: darwin
+# goarch: arm64
+#                      │   old.txt   │               new.txt               │
+#                      │   sec/op    │  sec/op     vs base                │
+# Validate-8             112.2n ± 1%   85.4n ± 2%  -23.89% (p=0.000 n=10)
+#
+# The p-value < 0.05 means the difference is statistically significant.
+# "vs base -23.89%" means the new version is 23.89% faster.
+```
+
+## Fuzzing — Go 1.18+
 
 ::code-wrapper{language="go"}
 ```go
-func BenchmarkProcess(b *testing.B) {
-	data := setup()   // setup outside the loop
-	b.ResetTimer()    // exclude setup time
-	for i := 0; i < b.N; i++ {
-		process(data)
-	}
-}
-```
-::
-`b.ResetTimer()` excludes setup. `b.ReportAllocs()` enables allocation reporting per-benchmark.
+package parser
 
-## Fuzzing (Go 1.18+)
+import "testing"
 
-Fuzz tests run the function with random inputs to find panics/crashes:
+// Fuzz target — the engine generates random inputs to find panics.
+func FuzzParse(f *testing.F) {
+	// Seed corpus — initial examples for the fuzzer to mutate:
+	f.Add("hello")
+	f.Add("")
+	f.Add("123")
+	f.Add("hello world 123")
 
-::code-wrapper{language="go"}
-```go
-func FuzzAdd(f *testing.F) {
-	f.Add(2, 3)        // seed corpus
-	f.Add(-1, 1)
-	f.Fuzz(func(t *testing.T, a, b int) {
-		result := Add(a, b)
-		// invariant: Add(a, b) == Add(b, a)
-		if result != Add(b, a) {
-			t.Errorf("Add not commutative: %d, %d", a, b)
+	f.Fuzz(func(t *testing.T, input string) {
+		// The function should not panic on any input:
+		result, err := Parse(input)
+		if err != nil {
+			return  // errors are fine — we're looking for panics
+		}
+
+		// Invariant: Parse(result) should give back something valid:
+		if result != "" && result != input {
+			t.Errorf("Parse(%q) = %q, round-trip mismatch", input, result)
 		}
 	})
 }
+
+// Run:
+//   go test -fuzz=FuzzParse -fuzztime=1m
+//   go test -fuzz=FuzzParse -fuzztime=30m  # longer for more coverage
+//
+// Fuzz findings are saved to testdata/fuzz/FuzzParse/<hash> — these
+// become regression tests automatically (run by `go test`).
 ```
-::
-::code-wrapper{language="bash"}
-```bash
-go test -fuzz=FuzzAdd           # run the fuzzer (until failure or Ctrl-C)
-go test -fuzz=FuzzAdd -fuzztime=30s   # run for 30s
-```
-::
-Failing inputs are saved to `testdata/fuzz/FuzzAdd/` as a regression corpus — subsequent `go test` runs them as regular tests.
-
-## Example Functions
-
-Examples in `_test.go` files are compiled, run, and checked against the output comment:
-
-::code-wrapper{language="go"}
-```go
-func ExampleAdd() {
-	fmt.Println(Add(2, 3))
-	// Output: 5
-}
-
-func ExampleAdd_negative() {
-	fmt.Println(Add(-1, -2))
-	// Output: -3
-}
-```
-::
-If the `// Output:` comment doesn't match, the example fails. Examples also appear in `go doc` as documentation.
 
 ## `httptest` — Testing HTTP Handlers
 
 ::code-wrapper{language="go"}
 ```go
-func TestHandler(t *testing.T) {
+package handler
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestGetUser(t *testing.T) {
+	// Create a mock store (interface-based — see chapter 12):
+	store := &MockUserStore{users: map[int64]*User{1: {ID: 1, Name: "Alice"}}}
+	handler := NewUserHandler(store)
+
+	// Build a request:
 	req := httptest.NewRequest("GET", "/users/1", nil)
-	w := httptest.NewRecorder()
-	handler(w, req)
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
+	req = req.WithContext(context.Background())
+
+	// Record the response (no real HTTP server):
+	rr := httptest.NewRecorder()
+
+	// Call the handler:
+	handler.GetUser(rr, req)
+
+	// Assert:
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	// Check the body:
+	body := strings.TrimSpace(rr.Body.String())
+	if !strings.Contains(body, `"name":"Alice"`) {
+		t.Errorf("body = %q, want name Alice", body)
+	}
+
+	// Check headers:
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 }
-```
-::
-`httptest.NewRequest` + `httptest.NewRecorder` let you test handlers without starting a server. `w.Body` has the response.
 
-## Test Main (setup/teardown)
+// ─── Testing a full HTTP server ───
+func TestServerIntegration(t *testing.T) {
+	srv := httptest.NewServer(NewHandler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/users/1")
+	if err != nil { t.Fatal(err) }
+	defer resp.Body.Close()
+	// assert on resp
+}
+```
+
+## Coverage — Gating CI
+
+::code-wrapper{language="bash"}
+```bash
+# Generate coverage profile:
+go test -coverprofile=coverage.out ./...
+
+# Summary (per function):
+go tool cover -func=coverage.out
+
+# HTML report:
+go tool cover -html=coverage.out -o coverage.html
+
+# ✅ CI gate — fail if any function has < 80% coverage:
+go test -coverprofile=c.out ./...
+go tool cover -func=c.out | grep -v 100.0% | grep -v "total:" && exit 1
+
+# ✅ Better — fail if total coverage < threshold:
+TOTAL=$(go tool cover -func=c.out | grep total | awk '{print $3}' | tr -d '%')
+if (( $(echo "$TOTAL < 80" | bc -l) )); then
+  echo "Coverage $TOTAL% < 80%"
+  exit 1
+fi
+```
+
+## Test Helpers — `t.Helper`
 
 ::code-wrapper{language="go"}
 ```go
-func TestMain(m *testing.M) {
-	// setup
-	os.Exit(m.Run())
-	// teardown (before os.Exit, or use defer with a wrapper)
+// t.Helper() marks a function as a test helper — its line is excluded
+// from error output, pointing to the CALLER's line instead.
+
+func assertUserEqual(t *testing.T, got, want *User) {
+	t.Helper()  // ✅ errors point to the caller, not this helper
+	if got.ID != want.ID {
+		t.Errorf("ID = %d, want %d", got.ID, want.ID)
+	}
+	if got.Name != want.Name {
+		t.Errorf("Name = %q, want %q", got.Name, want.Name)
+	}
+}
+
+func TestGetUser(t *testing.T) {
+	got := getUser(1)
+	want := &User{ID: 1, Name: "Alice"}
+	assertUserEqual(t, got, want)  // error points HERE, not to assertUserEqual
 }
 ```
-::
-`TestMain` runs once for the package — use for global setup (database, mocks).
+
+## `testify` — Assertions Library (Optional)
+
+::code-wrapper{language="go"}
+```go
+// import "github.com/stretchr/testify/assert"
+// import "github.com/stretchr/testify/require"
+
+func TestWithTestify(t *testing.T) {
+	// assert — reports failure, continues:
+	assert.Equal(t, 5, Add(2, 3))
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Contains(t, "hello world", "world")
+
+	// require — reports failure, STOPS the test (for fatal setup):
+	require.NoError(t, err, "database connection failed")
+	// If err != nil, test stops here — don't continue with nil db
+	user := getUser(1)
+	assert.Equal(t, "Alice", user.Name)
+}
+
+// testify is popular but optional — stdlib `t.Errorf` is fine.
+// Use testify for readability in large test suites.
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use table-driven tests — define cases as a slice of structs, loop with `t.Run(name, ...)`. This is the universal Go pattern: easy to add cases, each runs as a named subtest (`go test -v` shows each, `-run` selects one), and the table documents the function's behavior.
-- **Idiom**: use `t.Errorf` (continue) for non-fatal assertion failures and `t.Fatalf` (stop) for fatal setup failures — `Errorf` lets you see all failures in one run; `Fatalf` stops when setup is broken and further assertions would be meaningless.
-- **Idiom**: use `httptest.NewRequest` + `httptest.NewRecorder` to test HTTP handlers without a server — construct a request, pass to the handler, inspect the recorder. Faster and more isolated than starting a real server.
-- **Idiom**: use `b.ResetTimer()` after setup in benchmarks — without it, setup time counts toward the benchmark, skewing `ns/op`. `b.ReportAllocs()` (or `-benchmem`) shows allocations, the key metric for optimization.
-- **Idiom**: use fuzzing (`FuzzXxx` + `go test -fuzz=...`) to find panics and edge cases — random inputs surface bugs that hand-written tests miss. Seed with `f.Add(known inputs)` for a starting corpus; failures are saved to `testdata/` as regression tests.
+- **Idiom**: table-driven tests with `t.Run` and `t.Parallel` — each case is a subtest (filterable with `-run`), runs concurrently (faster). Include edge cases: zero, negative, empty, boundary values.
+- **Idiom**: `b.ReportAllocs()` + `b.ResetTimer()` in benchmarks — allocs/op is the key metric (heap allocations → GC pressure). ResetTimer excludes setup from timing.
+- **Idiom**: use `benchstat` to compare benchmark results statistically — run `-count=10` for both versions, benchstat gives a p-value. Differences < 5% are noise.
+- **Idiom**: fuzz targets find panics the test suite misses — `f.Add(seed)` for initial cases, `f.Fuzz` for the test. Findings auto-save as regression tests.
+- **Idiom**: `t.Helper()` in test helpers — error line numbers point to the caller, not the helper. Makes debugging easier.
+- **Idiom**: `httptest.NewRequest` + `httptest.NewRecorder` for testing HTTP handlers without a real server — fast, no port allocation, no network. For full integration, `httptest.NewServer`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Test files use `package X` or `package X_test`**: `package math` (internal test — can access unexported) or `package math_test` (external test — imports `math` like an external package, only exported). Use external tests for testing the public API.
-- **Loop variable capture in `t.Run` (pre-1.22)**: `for _, tt := range tests { t.Run(tt.name, func(t *testing.T) { use(tt) }) }` — pre-1.22, all subtests see the final `tt`. Fix with `tt := tt`. 1.22+ fixes this.
-- **`t.Parallel` must be called early**: `t.Parallel()` signals parallelism; it should be the first line in the subtest. Tests that call it after doing work may not run in parallel.
-- **Benchmark `b.N` is auto-adjusted**: don't assume `b.N` is a specific value — the framework increases it until the run takes ~1s. Write `for i := 0; i < b.N; i++`.
-- **Benchmark setup counted without `ResetTimer`**: setup outside the `for` loop is included in timing. Call `b.ResetTimer()` after setup.
-- **Benchmark loops must not be optimized away**: if the loop body's result is unused, the compiler may optimize it out, giving misleadingly fast results. Assign to a package-level `var` or use `b.N`-dependent logic to prevent dead-code elimination.
-- **`go test` caches passing tests**: Go caches test results by inputs (files, env). `go test -count=1` disables caching (forces rerun). Useful when you've changed something the cache doesn't track.
-- **Fuzz failures saved to `testdata/`**: these become regular tests — `go test` runs them. Don't delete `testdata/fuzz/` unless you've fixed the bug.
-- **`ExampleXxx` output must match exactly**: trailing whitespace, capitalization — the `// Output:` line is compared exactly. Use `// Unordered output:` for any-order lines.
-- **`t.Skip` vs `t.Skipf`**: skip the test with a reason. Common for tests requiring a database/env: `if os.Getenv("DB_TEST") == "" { t.Skip("set DB_TEST=1 to run") }`.
+- **`go test` caches results**: if nothing changed, `go test` prints "ok (cached)" and doesn't re-run. Use `-count=1` to force re-run (essential for flaky tests).
+- **`b.N` is framework-controlled**: don't set it yourself — the framework adjusts it. Just use `for i := 0; i < b.N; i++`.
+- **Compiler optimizes away the result**: `_ = Validate(user)` — if the compiler sees the result is unused, it may skip the call. Use a package-level `var sink int` and `sink = result` to prevent optimization.
+- **`t.Parallel()` inside subtests**: call it first inside `t.Run`. Pre-1.22, capture the loop variable (`tt := tt`) before the parallel subtest.
+- **`httptest.NewRecorder` doesn't support real HTTP**: it records what the handler writes — no real connection, no client disconnect. For real HTTP, use `httptest.NewServer`.
+- **Coverage doesn't test all paths**: 100% coverage means every line was executed, not that every branch was tested. Use fuzzing and property tests for deeper coverage.
+- **`testify/require` stops the test**: use `require` for setup (if DB connection fails, stop). Use `assert` for checks (if one assertion fails, continue checking others).
+- **Fuzz findings saved to `testdata/`**: the `testdata/` directory is excluded from `go build` but included in `go test`. Don't put test-only code anywhere else.
 
-## 🧠 Spot the Bug
-
-A benchmark shows 0 ns/op — impossibly fast:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-func BenchmarkSum(b *testing.B) {
-	var nums []int
-	for i := 0; i < 1000; i++ {
-		nums = append(nums, i)
-	}
+func BenchmarkBad(b *testing.B) {
+	user := User{Email: "test@example.com"}
 	for i := 0; i < b.N; i++ {
-		Sum(nums)
+		Validate(user)  // result discarded
 	}
 }
 ```
+
+What's wrong with this benchmark?
 ::
-
-What's likely happening?
-
 <details>
 <summary>Answer</summary>
 
-The compiler is optimizing away the call to `Sum(nums)` because its result is unused — dead-code elimination removes it, so the benchmark measures nothing (0 ns/op).
+The compiler may optimize away the `Validate(user)` call because the result is discarded (unused). The benchmark may show 0 ns/op — the function was never called.
 
-The fix — prevent the optimizer from removing the call by using the result:
-
-```go
-func BenchmarkSum(b *testing.B) {
-	nums := make([]int, 1000)
-	for i := range nums { nums[i] = i }
-	var result int   // package-level or function-local sink
-	for i := 0; i < b.N; i++ {
-		result = Sum(nums)
-	}
-	_ = result   // ensure the result is "used"
-}
-```
-::
-Or assign to a package-level var:
+The fix — use a package-level sink to prevent the compiler from eliminating the call:
 
 ```go
-var sink int
+var sink error  // package-level
 
-func BenchmarkSum(b *testing.B) {
-	nums := make([]int, 1000)
-	for i := range nums { nums[i] = i }
+func BenchmarkGood(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	user := User{Email: "test@example.com"}
+	var err error
 	for i := 0; i < b.N; i++ {
-		sink = Sum(nums)
+		err = Validate(user)  // assign to a variable
 	}
+	sink = err  // prevent compiler from optimizing away the loop
 }
 ```
-::
-The "sink" pattern (assigning to a package-level var or a local that's "used") prevents dead-code elimination, so the benchmark measures the real cost.
 
-**The lesson**: if a benchmark's result is unused, the compiler may optimize it away, giving misleadingly fast results. Assign the result to a package-level var (a "sink") to prevent elimination.
+`b.ReportAllocs()` and `b.ResetTimer()` are also missing — without them, you don't see allocation counts, and setup time is included in the benchmark.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now write tests (`TestXxx`, table-driven with `t.Run`), use `t.Parallel`/`t.Skip`/`t.Errorf`/`t.Fatalf`, benchmark (`BenchmarkXxx` with `b.N`/`ResetTimer`/`ReportAllocs`), fuzz (`FuzzXxx`), write example tests, and test HTTP handlers with `httptest` — while avoiding the loop-variable-capture and optimizer-eliminates-the-benchmark traps. Next: concurrency patterns.
+→ [26 — Concurrency Patterns](/go/26-concurrency-patterns) — worker pool, pipeline, fan-out/fan-in, generator, and graceful shutdown patterns.

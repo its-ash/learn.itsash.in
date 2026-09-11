@@ -1,424 +1,380 @@
+---
+title: Vue 3 Engineering Reference — Routing with Vue Router
+description: Route guards composition, lazy loading with code splitting, scroll behavior restoration, nested route params, beforeRouteUpdate vs watch $route, and type-safe route definitions.
+---
+
 # 11 — Routing with Vue Router
 
-## Setting Up the Router
+## Route Definition — Lazy Loading and Code Splitting
 
-::code-wrapper{language="bash"}
-```bash
-npm install vue-router
-```
-::
+::code-wrapper{language="typescript" filename="router/index.ts"}
+```typescript
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '@/views/HomeView.vue'
-import AboutView from '@/views/AboutView.vue'
+// ── Dynamic import = code splitting ────────────────────
+// Each route's component is a SEPARATE chunk, loaded on first navigation.
+// Reduces initial bundle size — only the visited route's code downloads.
 
-const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
-  routes: [
-    { path: '/', name: 'home', component: HomeView },
-    { path: '/about', name: 'about', component: AboutView }
-  ]
-})
-
-export default router
-```
-::
-
-::code-wrapper{language="javascript" filename="main.js"}
-```javascript
-import { createApp } from 'vue'
-import App from './App.vue'
-import router from './router'
-
-createApp(App).use(router).mount('#app')
-```
-::
-
-::code-wrapper{language="vue" filename="App.vue"}
-```vue
-<template>
-  <nav>
-    <RouterLink to="/">Home</RouterLink>
-    <RouterLink to="/about">About</RouterLink>
-  </nav>
-  <RouterView />
-</template>
-```
-::
-
-`createWebHistory` uses the real browser History API (clean URLs, requires server-side fallback routing to `index.html`). `createWebHashHistory` uses a `#`-based URL instead, which needs no server configuration but produces uglier URLs — appropriate for static hosting with no rewrite rules.
-
-## Dynamic Route Params
-
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-import UserProfile from '@/views/UserProfile.vue'
-
-const routes = [
-  { path: '/users/:id', name: 'user-profile', component: UserProfile }
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    name: 'home',
+    // Eager import: part of the main bundle (critical for above-the-fold)
+    component: () => import('@/views/HomeView.vue'),
+  },
+  {
+    path: '/dashboard',
+    name: 'dashboard',
+    // ── Chunk name via magic comment (for bundle analysis) ──
+    component: () => import(/* webpackChunkName: "dashboard" */ '@/views/DashboardView.vue'),
+    // ── Meta: route-level metadata accessible in guards ──
+    meta: { requiresAuth: true, title: 'Dashboard' },
+    // ── Nested routes: render in <RouterView> inside the parent ──
+    children: [
+      {
+        path: 'settings',  // matches /dashboard/settings (no leading slash)
+        name: 'dashboard.settings',
+        component: () => import('@/views/SettingsView.vue'),
+      },
+      {
+        path: 'analytics',
+        name: 'dashboard.analytics',
+        component: () => import('@/views/AnalyticsView.vue'),
+      },
+    ],
+  },
+  {
+    // ── Dynamic route params: /users/42 → params.id = "42" (string!) ──
+    path: '/users/:id',
+    name: 'user',
+    component: () => import('@/views/UserView.vue'),
+    // Props mode: pass route params as component props (decouples from $route)
+    props: true,
+  },
+  {
+    // ── Catch-all 404: must be LAST in the routes array ──
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('@/views/NotFoundView.vue'),
+  },
 ]
+
+export const router = createRouter({
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes,
+  // ── scrollBehavior: control scroll on navigation ──
+  scrollBehavior(to, from, savedPosition) {
+    // savedPosition: browser back/forward → restore previous scroll
+    if (savedPosition) return savedPosition
+    // Hash anchor: scroll to the element
+    if (to.hash) return { el: to.hash, behavior: 'smooth' }
+    // Default: top of page
+    return { top: 0, behavior: 'smooth' }
+  },
+})
 ```
 ::
 
-::code-wrapper{language="vue" filename="UserProfile.vue"}
-```vue
-<script setup>
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+## Navigation Guards — Composable Auth Pipeline
 
-const route = useRoute()
+::code-wrapper{language="typescript" filename="router/guards.ts"}
+```typescript
+import { type Router } from 'vue-router'
+import { useUserStore } from '@/stores/user'
 
-// route.params.id is ALWAYS a string, even for numeric-looking IDs —
-// exactly the same "everything from the DOM/URL is a string" rule as
-// form inputs in chapter 09
-const userId = computed(() => Number(route.params.id))
-</script>
+// ── Global before guard: runs before EVERY navigation ──
+// `to`: target route, `from`: current route, `next`: control function
+// In Vue Router 4, return values replace next():
+//   return false → cancel navigation
+//   return '/path' → redirect
+//   return { name: 'route' } → redirect by name
+//   return undefined/true → proceed
+export function setupGuards(router: Router) {
+  router.beforeEach(async (to, from) => {
+    const userStore = useUserStore()
 
-<template>
-  <p>Viewing user #{{ userId }}</p>
-</template>
+    // ── Check meta.requiresAuth on the route or any parent ──
+    // to.matched: array of matched route records (parent → child)
+    // .some() checks if ANY matched route requires auth
+    const requiresAuth = to.matched.some(r => r.meta.requiresAuth)
+
+    if (requiresAuth && !userStore.isAuthenticated) {
+      // ── Redirect to login, preserve the intended destination ──
+      return {
+        name: 'login',
+        query: { redirect: to.fullPath },  // return to original page after login
+      }
+    }
+
+    // ── If already authenticated and going to login, redirect to dashboard ──
+    if (to.name === 'login' && userStore.isAuthenticated) {
+      return { name: 'dashboard' }
+    }
+
+    // ── Set document title from route meta ──
+    if (to.meta.title) {
+      document.title = `${to.meta.title} — MyApp`
+    }
+
+    // No return → proceed with navigation
+  })
+
+  // ── Per-route guard: runs only for this specific route ──
+  // More efficient than global guard for route-specific checks
+  router.beforeResolve(async (to) => {
+    // Runs after all beforeEach guards resolve, before component loading
+    // Good for: fetching data that multiple components need
+    if (to.meta.requiresFeature) {
+      const featureStore = useFeatureStore()
+      await featureStore.checkFeature(to.meta.requiresFeature as string)
+      if (!featureStore.hasFeature) {
+        return { name: 'upgrade' }
+      }
+    }
+  })
+
+  // ── afterEach: runs after navigation is confirmed ──
+  // Cannot cancel navigation — use for analytics, logging
+  router.afterEach((to, from, failure) => {
+    if (!failure) {
+      analytics.track('page_view', { path: to.fullPath })
+    }
+  })
+}
 ```
 ::
 
-### Reacting to param changes on the same route
+## In-Component Guards — beforeRouteUpdate vs watch $route
 
-Navigating from `/users/1` to `/users/2` reuses the same component instance — Vue Router doesn't unmount/remount just because the param changed, so `onMounted`-based data fetching silently fails to re-run:
-
-::code-wrapper{language="vue" filename="UserProfile.vue"}
+::code-wrapper{language="vue" filename="UserView.vue"}
 ```vue
 <script setup>
-import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { watch, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { ref } from 'vue'
 
-const route = useRoute()
+const route = useRoute()   // current route (reactive)
+const router = useRouter() // navigation methods
 const user = ref(null)
 
-async function loadUser(id) {
+async function fetchUser(id) {
   const res = await fetch(`/api/users/${id}`)
   user.value = await res.json()
 }
 
-// immediate: true covers the initial navigation too, so there's no
-// need for a separate onMounted call alongside this watcher
-watch(() => route.params.id, (id) => loadUser(id), { immediate: true })
+// ── onBeforeRouteUpdate: fires when navigating between same-route params ──
+// /users/1 → /users/2: same component, different param. Component is REUSED.
+// This guard fires, giving you a chance to refetch data.
+onBeforeRouteUpdate(async (to, from) => {
+  // `to.params.id` is the NEW param; route.params is still the old one
+  if (to.params.id !== from.params.id) {
+    await fetchUser(to.params.id)
+  }
+  // return false to cancel the navigation
+})
+
+// ── Alternative: watch the route param reactively ──
+watch(
+  () => route.params.id,
+  async (newId) => {
+    if (newId) await fetchUser(newId)
+  },
+  { immediate: true }
+)
+// Both work — onBeforeRouteUpdate is more explicit and can cancel navigation.
 </script>
 ```
 ::
-
-## Query Strings
-
-::code-wrapper{language="vue" filename="SearchResults.vue"}
-```vue
-<script setup>
-import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-
-const route = useRoute()
-const router = useRouter()
-
-// /search?q=vue&page=2 → route.query = { q: 'vue', page: '2' }
-const searchTerm = computed(() => route.query.q ?? '')
-const page = computed(() => Number(route.query.page ?? 1))
-
-function goToPage(n) {
-  router.push({ query: { ...route.query, page: n } })
-}
-</script>
-
-<template>
-  <p>Results for "{{ searchTerm }}" — page {{ page }}</p>
-  <button @click="goToPage(page + 1)">Next page</button>
-</template>
-```
-::
-
-`router.push({ query: {...} })` merges into the current path automatically; forgetting `...route.query` when updating one query param silently drops every other existing param, since the object you pass fully replaces the query string rather than patching it.
-
-## Nested Routes
-
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-const routes = [
-  {
-    path: '/settings',
-    component: SettingsLayout,
-    children: [
-      { path: '', name: 'settings-general', component: SettingsGeneral },
-      { path: 'security', name: 'settings-security', component: SettingsSecurity },
-      { path: 'billing', name: 'settings-billing', component: SettingsBilling }
-    ]
-  }
-]
-```
-::
-
-::code-wrapper{language="vue" filename="SettingsLayout.vue"}
-```vue
-<template>
-  <div class="settings-layout">
-    <aside>
-      <RouterLink to="/settings">General</RouterLink>
-      <RouterLink to="/settings/security">Security</RouterLink>
-      <RouterLink to="/settings/billing">Billing</RouterLink>
-    </aside>
-    <!-- child routes render into THIS nested RouterView, not the top-level one -->
-    <RouterView />
-  </div>
-</template>
-```
-::
-
-An empty child `path: ''` matches the parent path exactly (`/settings`), making it the default view shown when no more specific child segment is given — a common pattern for tabbed layouts.
-
-## Navigation Guards
-
-### Global guards
-
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-import { useAuthStore } from '@/stores/auth'
-
-router.beforeEach((to, from) => {
-  const authStore = useAuthStore()
-
-  if (to.meta.requiresAuth && !authStore.isLoggedIn) {
-    return { name: 'login', query: { redirect: to.fullPath } }
-  }
-  // returning nothing (undefined) or true allows the navigation
-})
-
-router.afterEach((to) => {
-  document.title = to.meta.title ?? 'My App'
-})
-```
-::
-
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-const routes = [
-  { path: '/dashboard', component: Dashboard, meta: { requiresAuth: true, title: 'Dashboard' } }
-]
-```
-::
-
-### Per-route and in-component guards
-
-::code-wrapper{language="javascript"}
-```javascript
-const routes = [
-  {
-    path: '/admin',
-    component: AdminPanel,
-    beforeEnter: (to, from) => {
-      const authStore = useAuthStore()
-      if (!authStore.isAdmin) return false   // false cancels the navigation outright
-    }
-  }
-]
-```
-::
-
-::code-wrapper{language="vue" filename="EditForm.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
-
-const isDirty = ref(false)
-
-onBeforeRouteLeave((to, from) => {
-  if (isDirty.value && !window.confirm('Discard unsaved changes?')) {
-    return false
-  }
-})
-</script>
-```
-::
-
-Guard return value conventions: `undefined`/`true` proceeds, `false` cancels and stays put, a route location object (or string path) redirects there instead — throwing inside a guard is treated as navigation failure and surfaces through `router.onError`.
-
-## Lazy-Loaded Routes
-
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-const routes = [
-  {
-    path: '/reports',
-    // dynamic import — this component's code (and its dependencies) ship
-    // in a separate chunk, downloaded only when this route is visited
-    component: () => import('@/views/ReportsView.vue')
-  }
-]
-```
-::
-
-This is the single most impactful routing-level performance technique in a real app — without it, every route's component code ships in the initial bundle regardless of whether the user ever visits that route. Chapter 21 covers the Vite chunking mechanics that make this work.
 
 ## Programmatic Navigation
 
-::code-wrapper{language="javascript"}
-```javascript
-import { useRouter } from 'vue-router'
+::code-wrapper{language="typescript" filename="navigation.ts"}
+```typescript
+import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
-
-router.push('/about')                          // adds a new history entry
-router.push({ name: 'user-profile', params: { id: 42 } })
-router.replace('/login')                       // replaces current entry, no back-button trap
-router.back()
-router.go(-2)
-```
-::
-
-## Route Meta Fields for Layouts and Breadcrumbs
-
-::code-wrapper{language="javascript" filename="router/index.js"}
-```javascript
-const routes = [
-  { path: '/', component: HomeView, meta: { layout: 'default' } },
-  { path: '/login', component: LoginView, meta: { layout: 'blank' } }
-]
-```
-::
-
-::code-wrapper{language="vue" filename="App.vue"}
-```vue
-<script setup>
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
-import DefaultLayout from '@/layouts/DefaultLayout.vue'
-import BlankLayout from '@/layouts/BlankLayout.vue'
-
 const route = useRoute()
-const layout = computed(() => (route.meta.layout === 'blank' ? BlankLayout : DefaultLayout))
-</script>
 
-<template>
-  <component :is="layout">
-    <RouterView />
-  </component>
-</template>
+// ── Push: add to history stack (back button returns) ──
+router.push('/users/42')
+router.push({ name: 'user', params: { id: '42' } })  // by name (preferred)
+router.push({ path: '/search', query: { q: 'vue', page: '2' } })
+
+// ── Replace: replace current entry (back button skips this page) ──
+// Use after login: don't want back button to return to the login page
+router.replace({ name: 'dashboard' })
+
+// ── Query params: always strings — type coercion needed ──
+const page = parseInt(route.query.page as string) || 1
+const q = route.query.q as string
+
+// ── Dynamic params: always strings — even if defined as /users/:id ──
+const userId = route.params.id  // "42" (string), NOT 42 (number)
+
+// ── Go: relative history movement ──
+router.go(-1)  // back
+router.go(1)   // forward
+router.go(-2)  // back two pages
+
+// ── Async navigation: returns a promise ──
+await router.push('/dashboard')  // resolves after navigation completes
 ```
 ::
 
-## Options API Equivalent
+## Type-Safe Routes (Vue Router 4.x + TypeScript)
 
-::code-wrapper{language="vue"}
-```vue
-<script>
-export default {
-  computed: {
-    userId() {
-      return Number(this.$route.params.id)
-    }
-  },
-  watch: {
-    '$route.params.id': {
-      handler(id) {
-        this.loadUser(id)
-      },
-      immediate: true
-    }
-  },
-  methods: {
-    async loadUser(id) {
-      const res = await fetch(`/api/users/${id}`)
-      this.user = await res.json()
-    },
-    goToSettings() {
-      this.$router.push({ name: 'settings-general' })
-    }
+::code-wrapper{language="typescript" filename="typed-routes.ts"}
+```typescript
+import 'vue-router'
+
+// ── Module augmentation: type-safe route names and params ──
+declare module 'vue-router' {
+  interface RouteMeta {
+    requiresAuth?: boolean
+    title?: string
+    roles?: string[]
+  }
+
+  // Type-safe route names: typo in router.push({ name: 'dasboard' }) → TS error
+  interface RouteNamedMap {
+    home: RouteRecordInfo<'home', '/', {}, {}>
+    user: RouteRecordInfo<'user', '/users/:id', { id: string }, {}>
+    dashboard: RouteRecordInfo<'dashboard', '/dashboard', {}, {}>
   }
 }
-</script>
+
+// ── Now router.push is type-checked: ──
+// router.push({ name: 'user', params: { id: '42' } })  ✅
+// router.push({ name: 'user', params: { id: 42 } })      ❌ id must be string
+// router.push({ name: 'dasboard' })                     ❌ typo caught
+
+// ── route.meta is also typed: ──
+// if (route.meta.requiresAuth) { ... }  ✅ boolean | undefined
+// route.meta.unknownProp                        ❌ not in interface
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Name every route (`name: 'user-profile'`) and navigate by name (`router.push({ name: 'user-profile', params: { id } })`) rather than by hard-coded path strings — renaming a URL path later becomes a one-line change in the route table instead of a find-and-replace across the whole codebase.
-- **Performance** — Lazy-load every route component by default (`() => import(...)`) except perhaps the home page — there's essentially no downside for a multi-page app, and the initial bundle size difference compounds quickly as an app grows.
-- **Debug** — `router.isReady()` returns a promise that resolves once the initial navigation completes — useful when code outside a component (like an app-level analytics initializer) needs to know the router has finished resolving the current URL before reading `router.currentRoute`.
-- **Idiom** — Keep auth/permission checks in a single global `beforeEach` guard rather than scattering `beforeEnter` checks across many route definitions — one central place to audit "what's protected" is much easier to reason about and test than logic spread across a dozen files.
-- **Debug** — `to.matched` is an array of every matched route record, from the outermost parent down to the leaf — inspect it when debugging why a `meta` field isn't showing up as expected on a nested child route (meta fields don't automatically merge from parent to child; check which record actually declared the field you're reading).
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. useRoute() is reactive — route.params updates on navigation ──
+// Don't destructure: const { id } = route.params → not reactive
+// Use: route.params.id directly in template, or watch(() => route.params.id)
+
+// ── 2. Lazy loading with loading state ──
+const routes = [{
+  path: '/admin',
+  component: () => import('@/views/AdminView.vue'),
+  // The promise resolves when the chunk loads; shows fallback until then
+}]
+
+// ── 3. Route-level data fetching with beforeEnter ──
+{
+  path: '/post/:id',
+  component: PostView,
+  beforeEnter: async (to) => {
+    // Fetch data before component loads — available in route.meta
+    const res = await fetch(`/api/posts/${to.params.id}`)
+    to.meta.post = await res.json()
+  }
+}
+
+// ── 4. Scroll position: savedPosition for back/forward, explicit for push ──
+scrollBehavior(to, from, savedPosition) {
+  return savedPosition ?? { top: 0 }
+}
+
+// ── 5. Route key: force re-creation on param change ──
+// <RouterView :route-key="route.fullPath" /> → component re-mounts on every change
+// Default: component is reused (only params change, hooks fire, not re-mount)
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Route params are always strings, exactly like DOM input values** — `route.params.id` for `/users/42` is the string `"42"`, not the number `42` — comparing it with `===` against a number, or using it in arithmetic, hits the exact same string-vs-number trap as an un-modified `v-model` from chapter 09.
-- **Navigating between two routes matching the same component doesn't remount it** — Vue Router reuses the component instance across `/users/1` → `/users/2` since both match the same route record; `onMounted`-based fetching only fires once and silently goes stale — watch the relevant route param instead, with `{ immediate: true }` to also cover the first load.
-- **Forgetting to spread the existing query object when updating one query param wipes the rest** — `router.push({ query: { page: 2 } })` replaces the entire query string; if `?q=vue&page=1` was current, the `q` param is silently gone unless you write `{ query: { ...route.query, page: 2 } }`.
-- **`beforeEach` guards run on every single navigation, including the very first page load** — Code assuming a guard only fires on subsequent client-side navigations (never on initial load) will be surprised the first time a user lands directly on a deep link and the guard redirects them unexpectedly, particularly for auth checks that assume some prior state has already been set up.
-- **A `beforeEnter` guard or `beforeEach` that returns nothing from an `async` function without an explicit `return` still resolves to `undefined`, which allows navigation** — An `async` guard that performs a check but forgets the `return false`/`return { name: ... }` on a particular code path lets navigation through unconditionally, because a promise resolving to `undefined` is treated identically to a synchronous guard returning nothing.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Dynamic params are ALWAYS strings ──
+// path: '/users/:id' → route.params.id is "42" (string), not 42 (number)
+// Even with .number in path: '/users/:id(\\d+)' → still string
+
+// ── 2. Same-component navigation doesn't re-mount ──
+// /users/1 → /users/2: same UserView component, only params change.
+// onMounted does NOT fire again. Use onBeforeRouteUpdate or watch route.params.
+
+// ── 3. Query params are not in route.matched ──
+// meta is on route records; query is on the route object itself.
+// to.matched.some(r => r.meta.x) checks route records, not query params.
+
+// ── 4. Hash mode vs history mode — URL format differs ──
+// History: example.com/users/42 → clean URL, needs server config (fallback to index.html)
+// Hash: example.com/#/users/42 → no server config, but URLs have #, worse SEO
+
+// ── 5. beforeEach guard order: global → parent → child ──
+// Multiple guards fire in order: global beforeEach, per-route beforeEnter,
+// in-component beforeRouteEnter. If any returns false, later ones don't run.
+
+// ── 6. Navigation cancellation is silent ──
+// If a guard returns false, router.push() resolves (not rejects).
+// Check the return: const failure = await router.push('/x'); if (failure) { ... }
+```
+::
 
 ## 🧠 Spot the Bug
 
-A "Next User" button on a profile page should load the next user's data on click, but clicking it repeatedly shows the previous user's data one click "behind."
+Navigating from `/users/1` to `/users/2` doesn't refresh the displayed user data.
 
-::code-wrapper{language="vue" filename="UserProfile.vue"}
+::code-wrapper{language="vue" filename="RouteBug.vue"}
 ```vue
 <script setup>
-import { ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const router = useRouter()
 const user = ref(null)
 
-async function loadUser() {
+// onMounted fires only ONCE — component is reused for /users/2
+onMounted(async () => {
   const res = await fetch(`/api/users/${route.params.id}`)
   user.value = await res.json()
-}
-
-loadUser()
-
-function goToNext() {
-  router.push({ name: 'user-profile', params: { id: Number(route.params.id) + 1 } })
-  loadUser()
-}
+})
 </script>
+
+<template>
+  <div>{{ user?.name }}</div>
+</template>
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`loadUser()` is called directly inside `goToNext`, immediately after `router.push(...)`. But `router.push` is asynchronous — it returns a promise that resolves once the navigation completes, and `route.params.id` inside the reactive `route` object doesn't update synchronously the instant `push` is called. So `loadUser()` reads the *old* `route.params.id` before the navigation has actually applied the new param, fetching the previous user instead of the next one — the classic "read reactive state immediately after triggering an async update" trap, the routing-flavored cousin of the `nextTick` issue from chapter 08.
+When navigating between `/users/1` and `/users/2`, Vue Router reuses the same `UserView` component instance (only the `params` change). `onMounted` fires only on the initial mount — it does not fire again on param-only changes.
 
-::code-wrapper{language="vue" filename="UserProfile.vue"}
+**Fix** — use `onBeforeRouteUpdate` or `watch` the route param:
+
+::code-wrapper{language="vue" filename="RouteFixed.vue"}
 ```vue
 <script setup>
 import { ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const router = useRouter()
 const user = ref(null)
 
-async function loadUser(id) {
+async function fetchUser(id) {
   const res = await fetch(`/api/users/${id}`)
   user.value = await res.json()
 }
 
-watch(() => route.params.id, (id) => loadUser(id), { immediate: true })
-
-function goToNext() {
-  router.push({ name: 'user-profile', params: { id: Number(route.params.id) + 1 } })
-}
+// Watch fires whenever route.params.id changes (including initial load with immediate)
+watch(() => route.params.id, (id) => {
+  if (id) fetchUser(id)
+}, { immediate: true })
 </script>
 ```
 ::
 
-**The lesson**: never assume `router.push` has applied its target route synchronously — either `await` it before reading `route.params` again, or (preferably) drive data fetching from a `watch` on the param itself so it reacts correctly no matter what triggered the navigation.
+**The lesson**: same-route navigation (only params change) reuses the component instance — lifecycle hooks don't re-fire. Use `watch` on `route.params` or `onBeforeRouteUpdate` to react to param changes.
 
 </details>
-
-## Key Takeaways
-
-- `createWebHistory` gives clean URLs but needs server-side fallback to `index.html`; `createWebHashHistory` needs no server config but produces `#`-based URLs.
-- Route params and query values are always strings — cast them explicitly (`Number(...)`) before using them as numbers.
-- Navigating between routes that share a component reuses the instance — drive re-fetching from a `watch` on the relevant param, not from `onMounted`.
-- Navigation guards (`beforeEach`, `beforeEnter`, `onBeforeRouteLeave`) return `undefined`/`true` to proceed, `false` to cancel, or a location to redirect.
-- Lazy-load route components with dynamic `import()` — the single highest-leverage performance change available at the routing layer.
-- `router.push`/`replace` are asynchronous; reading reactive route state immediately after calling them without awaiting is a race condition, not a guarantee.

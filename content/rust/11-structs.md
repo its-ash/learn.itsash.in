@@ -1,275 +1,513 @@
 # 11 — Structs
 
-Structs group related data. Rust structs come in three flavors.
+A struct's layout decision determines cache behavior, FFI compatibility, binary size, and refactor blast radius. This chapter treats structs as a memory layout decision with a type-safety veneer.
 
-## Named-Field Structs
+## Under-the-Hood Mechanics
 
-::code-wrapper{language="rust"}
+### Default layout is unspecified — and that's the point
+
+`#[repr(Rust)]` (the default) lets the compiler reorder fields to minimize padding:
+
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-struct User {
-    username: String,
-    email: String,
-    sign_in_count: u64,
-    active: bool,
-}
-
-let u = User {
-    username: String::from("ada"),
-    email: String::from("ada@example.com"),
-    sign_in_count: 1,
-    active: true,
-};
-```
-::
-
-### Field-Init Shorthand
-
-::code-wrapper{language="rust"}
-```rust
-fn new(email: String, username: String) -> User {
-    User { email, username, active: true, sign_in_count: 0 }
-}
-```
-::
-
-When a variable name matches the field, omit `: value`.
-
-### Struct Update Syntax
-
-::code-wrapper{language="rust"}
-```rust
-let u2 = User { email: String::from("ada2@x.com"), ..u };
-```
-::
-
-- `..u` copies/moves the remaining fields from `u`.
-- Like a partial move — `u.username` is now invalid if `String` was moved (non-`Copy`).
-- For `Copy` fields, they're copied; for non-`Copy`, they're moved out of `u`.
-
-## Tuple Structs
-
-### Why this exists
-
-A tuple struct looks like a tuple but is a **distinct nominal type** — `Color(i32, i32, i32)` and `Point(i32, i32, i32)` are *different types* to the compiler even though they have the same fields. This is the foundation of the **newtype pattern**: wrapping a type in a struct (`struct Meters(f64)`) creates a new type the compiler won't freely mix with `f64` or with `struct Miles(f64)`. You get type safety (you can't accidentally add `Meters` to `Miles`) at **zero runtime cost** — the wrapper is erased in the final binary. Without this, you'd rely on naming conventions that the compiler can't enforce.
-
-### When to reach for it
-
-- **Newtype for type safety**: wrap a primitive (`UserId(u64)`, `Meters(f64)`) so it can't be confused with other values of the same primitive type.
-- **Tuple-like access**: when field *names* would be noise (e.g., a coordinate's `.0`/`.1` is clearer than `.x`/`.y` in some math code).
-- **Pattern matching**: `let Color(r, g, b) = c;` is a positional destructure, useful when you don't need named fields.
-
-::code-wrapper{language="rust"}
-```rust
-struct Color(i32, i32, i32);
-let c = Color(255, 128, 0);
-let r = c.0;
-```
-::
-
-- Look like tuples but are distinct types.
-- Useful for newtype pattern: `struct Meters(f64);` prevents mixing with other `f64`.
-- Pattern match: `let Color(r, g, b) = c;`.
-
-## Unit Structs
-
-### Why this exists
-
-A unit struct carries **no data** (it's zero-sized) but is still a distinct type. Its purpose is **type-level tagging**: a value that exists only to be a *type* you can attach trait implementations to, not to carry runtime information. This is how marker traits, type-state patterns, and trait-based dispatch work — you encode information in the *type* rather than in a runtime value. For example, a `struct Uninitialized;` vs `struct Initialized;` can encode a state machine at the type level with zero runtime cost.
-
-::code-wrapper{language="rust"}
-```rust
-struct AlwaysEqual;
-let _a = AlwaysEqual;
-```
-::
-
-Zero-sized; useful for trait implementations with no data (e.g., marker traits, type-state).
-
-## `impl` Blocks
-
-::code-wrapper{language="rust"}
-```rust
-impl User {
-    fn new(email: String, username: String) -> Self {
-        User { email, username, active: true, sign_in_count: 0 }
-    }
-    fn is_active(&self) -> bool { self.active }
-    fn sign_in(&mut self) { self.sign_in_count += 1; }
-    fn deactivate(self) -> User { User { active: false, ..self } }
-}
-```
-::
-
-You can split `impl` across multiple blocks (common in real codebases: one for methods, one for trait impls).
-
-## Methods vs Associated Functions
-
-### Why the distinction exists
-
-**Methods** take a receiver (`&self`/`&mut self`/`self`) and operate on an *instance* — they're called as `u.is_active()`. **Associated functions** don't take `self` — they're functions *namespaced* under the type, not tied to a value; the canonical example is a constructor (`User::new`). The distinction matters because methods are part of the type's *behavior* (they need an instance), while associated functions are part of the type's *namespace* (constructors, helpers, conversions that don't operate on an existing value). This is why you call `User::new(...)` (a static-like associated fn) but `u.is_active()` (a method on an instance).
-
-- Methods take `&self`/`&mut self`/`self` and are called on instances: `u.is_active()`.
-- Associated functions (no `self`) are constructors: `User::new(...)`.
-- Convention: `new` for the canonical constructor, `with_x` for variant constructors.
-
-## Lifetime on Structs (recap)
-
-::code-wrapper{language="rust"}
-```rust
-struct Excerpt<'a> { part: &'a str }
-impl<'a> Excerpt<'a> { fn part(&self) -> &'a str { self.part } }
-```
-::
-
-## Generic Structs
-
-::code-wrapper{language="rust"}
-```rust
-struct Point<T> { x: T, y: T }
-
-impl<T> Point<T> {
-    fn x(&self) -> &T { &self.x }
-}
-
-impl Point<f64> {            // specialized impl for f64
-    fn distance(&self, other: &Self) -> f64 {
-        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
-    }
-}
-```
-::
-
-Type params can be specialized: methods exist only for a specific `T`.
-
-## Constants in Structs
-
-::code-wrapper{language="rust"}
-```rust
-struct Grid<const W: usize, const H: usize> {
-    cells: [[u8; W]; H],
-}
-let g: Grid<10, 20> = Grid { cells: [[0; 10]; 20] };
-```
-::
-
-Const generics (1.51+) allow parametrizing by compile-time constants. Limited to integers/bool/char for now (full generic constants are unstable).
-
-## Derive Macros
-
-### How it works
-
-A `#[derive(...)]` attribute asks the compiler to **auto-generate a trait implementation** for you by expanding a macro at compile time. Derives exist because most trait impls for simple structs are pure boilerplate (`Debug` just walks the fields, `Clone` just clones each field, `PartialEq` just compares fields). Without derives, you'd hand-write the same field-by-field logic for every struct. With them, a one-line attribute produces the impl. Reach for derives for the common traits; write the impl by hand only when you need custom behavior (a `Debug` that hides a secret field, a `Display` that formats user-facing text — note `Display` is **not** derivable).
-
-::code-wrapper{language="rust"}
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct Pos { x: i32, y: i32 }
-```
-::
-
-Common derives:
-- `Debug` → `{:?}`
-- `Clone, Copy` → value duplication
-- `PartialEq, Eq` → `==`
-- `PartialOrd, Ord` → comparison and sorting
-- `Hash` → usable in `HashSet`/`HashMap`
-- `Default` → `Pos::default()`
-
-`Eq`/`Ord` require no `NaN`-like values — floats only get `PartialEq`/`PartialOrd`.
-
-## `Default`
-
-::code-wrapper{language="rust"}
-```rust
-#[derive(Default)]
-struct Config { host: String, port: u16 }
-let c = Config { host: "localhost".into(), ..Default::default() };
-```
-::
-
-Idiomatic way to provide "default with overrides".
-
-## `Debug` vs `Display`
-
-### Why two traits exist
-
-`Debug` and `Display` exist for the two *different audiences* of formatted output. `Debug` is for **developers/diagnostics** — it's auto-derivable, produces a `{:?}` representation that shows the structure (including private fields), and is meant for logging and debugging, not for users. `Display` is for **end users** — it's intentionally **not** derivable, because user-facing formatting is a design decision the compiler can't make for you (how should a `User` render to a human?). You must write `Display` by hand precisely so the output is a deliberate choice. This is why `{:?}` works on almost anything (derivable) while `{}` requires a hand-written impl.
-
-::code-wrapper{language="rust"}
-```rust
-impl std::fmt::Display for User {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} <{}>", self.username, self.email)
-    }
-}
-```
-::
-
-- `Debug` is derived, machine-readable-ish (`{:?}` / pretty `{:#?}`).
-- `Display` is user-facing; you must write it manually.
-
-## Struct Updates and Moves
-
-::code-wrapper{language="rust"}
-```rust
-let u = User { /* filled */ };
-let email = u.email;             // partial move
-// u is partially moved; can still read other fields, but not u as a whole
-```
-::
-
-Reconstruct with `..` if needed.
-
-## 💡 Tips & Tricks
-
-- **Debug**: `#[derive(Debug)]` plus `{:#?}` (pretty-print) on a deeply nested struct is far more readable in `println!`/`dbg!` output than the compact `{:?}` form — flip to pretty-print the moment a struct has more than two or three fields.
-- **Idiom**: use field-init shorthand (`User { email, username, .. }`) everywhere the local variable name matches the field name — it's not just shorter, it also means renaming a field forces every construction site relying on shorthand to be visibly touched (a useful refactor safety net).
-- **Idiom**: derive `Default` and use `..Default::default()` in struct literals for "mostly-defaults" construction instead of writing out every field — pairs especially well with a builder for the few fields that need validation.
-- **Performance**: field reordering for minimal padding happens automatically for Rust's default struct layout — don't hand-order fields "by size" the way you might in C; only reach for `#[repr(C)]` when FFI or a wire format genuinely requires a fixed layout.
-- **Idiom**: use tuple structs (`struct Meters(f64)`) for lightweight newtype wrappers where you don't need named fields, and named-field structs the moment a type has more than one piece of data — mixing positional (`.0`) access into a struct with two or more fields quickly becomes unreadable.
-- **Clippy**: `clippy::field_reassign_with_default` flags patterns like `let mut c = Config::default(); c.port = 8080;` and suggests the equivalent, more idiomatic `Config { port: 8080, ..Default::default() }`.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **Out-of-order field initialization** is allowed — order doesn't matter in struct literals.
-- **Mutability is per-binding, not per-field**: there's no `mut` field modifier. Use `Cell`/`RefCell` for interior mutability of single fields.
-- **No inheritance**: Rust has no class inheritance. Use composition + traits.
-- **Private fields**: by default, fields are private to the module. Use `pub` to expose.
-- **`pub(crate)`**: visible within the same crate only.
-- **`#[non_exhaustive]`** prevents external crates from constructing the struct with literal syntax — forces them to use a constructor (future-proofing).
-- **Self-referential structs**: not expressible directly in safe Rust (the borrow checker can't describe the relationship); use crates like `ouroboros` or own the data.
-- **ZST struct**: `struct Marker;` has size 0.
-- **Field order and `Drop`**: struct fields drop in **declaration order** (RFC 1857), unlike locals which drop in reverse order. This can matter for field destructors that depend on each other.
-
-## 🧠 Spot the Bug
-
-Why does this fail to compile?
-
-::code-wrapper{language="rust"}
-```rust
-struct Inventory {
-    items: Vec<String>,
-    total_weight: f64,
-}
-
-impl Inventory {
-    fn add_item(&mut self, item: String, weight: f64) {
-        self.items.push(item);
-        self.total_weight += weight;
-    }
-
-    fn heaviest_summary(&mut self) -> &String {
-        let last = self.items.last().unwrap();
-        self.total_weight += 0.0;
-        last
-    }
+struct Naive {
+    a: u8,   // 1 byte
+    b: u64,  // 8 bytes, needs 8-byte alignment
+    c: u8,   // 1 byte
 }
 
 fn main() {
-    let mut inv = Inventory { items: vec!["box".to_string()], total_weight: 5.0 };
-    let name = inv.heaviest_summary();
-    inv.add_item("crate".to_string(), 2.0);
-    println!("{name}");
+    // C-style mental model (declaration order, padded individually) predicts 24 bytes.
+    // repr(Rust) reorders to b, then a+c packed together -> 16 bytes.
+    assert_eq!(std::mem::size_of::<Naive>(), 16);
+    assert_eq!(std::mem::align_of::<Naive>(), 8);
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Field declaration order never implies memory order under repr(Rust).
+struct Reordered1 { a: u8, b: u64, c: u8 }
+struct Reordered2 { b: u64, a: u8, c: u8 }
+
+fn main() {
+    // Same fields, different declaration order -> compiler is free to produce
+    // the same layout either way. Never assume order == memory order.
+    assert_eq!(std::mem::size_of::<Reordered1>(), std::mem::size_of::<Reordered2>());
+}
+```
+::
+
+### `#[repr(C)]`, `#[repr(transparent)]`, `#[repr(packed)]`
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[repr(C)]
+struct CCompatible { a: u8, b: u64, c: u8 } // 24 bytes — declaration order preserved, no reordering
+
+#[repr(transparent)]
+struct Meters(f64); // ABI-identical to f64; free to pass across FFI as a raw double
+
+#[repr(packed)]
+struct Packed { a: u8, b: u64 } // 9 bytes — no padding, but b is now unaligned
+
+fn main() {
+    assert_eq!(std::mem::size_of::<CCompatible>(), 24);
+    assert_eq!(std::mem::size_of::<Meters>(), 8);
+    assert_eq!(std::mem::size_of::<Packed>(), 9);
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[repr(packed)]
+struct Packed { a: u8, b: u64 }
+
+fn main() {
+    let p = Packed { a: 1, b: 2 };
+    // let r: &u64 = &p.b; // compile error: reference to unaligned packed field
+    let val = { p.b }; // must copy out by value, not reference
+    println!("{val}");
+}
+```
+::
+
+- `#[repr(C)]`: mandatory for any struct crossing an FFI boundary — `repr(Rust)` layout is not stable across compiler versions, so `transmute`-ing it into C is UB.
+- `#[repr(transparent)]`: single-field newtype gets exactly the inner type's ABI — free to hand to C code expecting a raw `f64`.
+- `#[repr(packed)]`: shrinks size but produces unaligned fields — reading them by reference is a compile error; reading by value forces a copy, since unaligned loads can UB or fault on some architectures.
+
+### Auto-ref/deref: compile-time-only, zero call overhead
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Counter { n: u32 }
+impl Counter {
+    fn get(&self) -> u32 { self.n }
+}
+
+fn main() {
+    let c = Counter { n: 5 };
+    let boxed = Box::new(Counter { n: 9 });
+
+    c.get();       // sugar for Counter::get(&c)
+    boxed.get();   // sugar for Counter::get(&*boxed) — auto-deref through Box, resolved at compile time
+}
+```
+::
+
+This is unrelated to `dyn Trait` vtable dispatch (a genuine runtime cost, covered in the Traits chapter) — conflating the two is a common interview mistake.
+
+### Zero-sized types (ZSTs) are load-bearing, not a curiosity
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Marker;
+
+fn main() {
+    assert_eq!(std::mem::size_of::<Marker>(), 0);
+
+    let v: Vec<Marker> = vec![Marker, Marker, Marker];
+    assert_eq!(v.len(), 3);
+    // No heap allocation occurred for these three "instances" — Vec<ZST> just tracks length.
+    assert_eq!(v.capacity(), usize::MAX);
+}
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+**Layout freedom vs. ABI stability** — packing is free, but you lose any cross-build layout guarantee:
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Wire { a: u8, b: u64 }
+
+fn unsound(w: &Wire) -> [u8; 16] {
+    unsafe { std::mem::transmute_copy(w) } // WRONG: repr(Rust) layout isn't guaranteed across builds
+}
+```
+::
+
+**Derives generate real code per monomorphization** — not free:
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Deriving Debug/Clone on a type instantiated across many generic contexts
+// generates a full impl per concrete type — not deduplicated across types.
+#[derive(Debug, Clone)]
+struct Wrapper<T> { value: T }
+
+fn main() {
+    let _a = Wrapper { value: 1u32 };
+    let _b = Wrapper { value: "s" };
+    let _c = Wrapper { value: 3.14f64 };
+    // Three separate Debug + Clone impls compiled, even though none may ever be printed/cloned.
+}
+```
+::
+
+**Builder pattern costs moves + `Option` branching per field**:
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[derive(Default)]
+struct ConfigBuilder { host: Option<String>, port: Option<u16> }
+
+impl ConfigBuilder {
+    fn host(mut self, h: impl Into<String>) -> Self { self.host = Some(h.into()); self }
+    fn port(mut self, p: u16) -> Self { self.port = Some(p); self }
+    fn build(self) -> Config {
+        Config { host: self.host.unwrap_or_else(|| "localhost".into()), port: self.port.unwrap_or(8080) }
+    }
+}
+struct Config { host: String, port: u16 }
+
+fn main() {
+    // Fine for infrequent, config-shaped construction...
+    let _cfg = ConfigBuilder::default().host("example.com").port(443).build();
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Config2 { host: String, port: u16 }
+
+fn hot_path_construct() -> Config2 {
+    // ...but for thousands-per-second hot construction, a plain literal skips
+    // the Option wrapping and unwrap branching entirely.
+    Config2 { host: "localhost".into(), port: 8080 }
+}
+```
+::
+
+**`#[repr(packed)]`**: memory savings traded for unaligned-access cost — "merely slower" on x86, can fault on ARM. Reserve for proven, measured constraints (embedded, wire formats) — never as a default.
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: `#[repr(Rust)]` struct sent across FFI/process boundary
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// WRONG — layout is compiler-version-dependent, not a wire contract
+struct Header { version: u8, flags: u16, length: u32 }
+
+fn serialize_wrong(h: &Header) -> [u8; 7] {
+    unsafe { std::mem::transmute_copy(h) } // UB: assumes a layout repr(Rust) never promises
+}
+```
+::
+
+This is self-consistent within one binary and silently breaks the moment sender/receiver are compiled by different `rustc` versions or optimization levels — a real incident class: a recompile on one side of a wire protocol corrupts cross-version messages without necessarily crashing.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[repr(C)]
+struct Header { version: u8, flags: u16, length: u32 }
+
+fn serialize_right(h: &Header) -> Vec<u8> {
+    // Field-by-field, not even a transmute of the repr(C) struct itself —
+    // repr(C) still has padding bytes that are uninitialized memory.
+    let mut buf = Vec::with_capacity(7);
+    buf.push(h.version);
+    buf.extend_from_slice(&h.flags.to_le_bytes());
+    buf.extend_from_slice(&h.length.to_le_bytes());
+    buf
+}
+
+fn deserialize(buf: &[u8]) -> Header {
+    Header {
+        version: buf[0],
+        flags: u16::from_le_bytes([buf[1], buf[2]]),
+        length: u32::from_le_bytes([buf[3], buf[4], buf[5], buf[6]]),
+    }
+}
+```
+::
+
+### Anti-pattern: reflexive `#[derive(Clone, Debug)]` on sensitive/expensive fields
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// WRONG: blanket-derive "just in case"
+#[derive(Debug, Clone)]
+struct Session {
+    user_id: u64,
+    auth_token: String,          // secret — now printed by any {:?} log line
+    request_cache: Vec<Vec<u8>>, // potentially megabytes — now deep-cloned everywhere
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Session {
+    user_id: u64,
+    auth_token: String,
+    request_cache: Vec<Vec<u8>>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("user_id", &self.user_id)
+            .field("auth_token", &"[REDACTED]")
+            .field("request_cache", &format!("<{} entries>", self.request_cache.len()))
+            .finish()
+    }
+}
+// No Clone impl — force callers to be explicit (Arc<Session>, or a named
+// .clone_for_retry()) rather than reflexively cloning to dodge a borrow error.
+```
+::
+
+`Debug` leaking secrets into log aggregators, and `Clone` silently deep-copying large buffers under load, are both real, hard-to-trace production regressions — not hypothetical.
+
+### Anti-pattern: over-privileged receiver type
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Inventory { items: Vec<String>, total_weight: f64 }
+
+impl Inventory {
+    // WRONG: &mut self "just in case," but nothing here actually needs mutation
+    fn heaviest_summary_wrong(&mut self) -> &String {
+        let last = self.items.last().unwrap();
+        self.total_weight += 0.0; // vestigial mutation, forces exclusive borrow on every caller
+        last
+    }
+
+    // RIGHT: least-privileged receiver
+    fn heaviest_summary(&self) -> &String {
+        self.items.last().unwrap()
+    }
+}
+```
+::
+
+Receiver type is part of the struct's public contract — default to `&self`, widen only when a real mutation demands it.
+
+## Architectural Application
+
+**Newtype pattern — zero-cost domain boundary:**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[repr(transparent)]
+struct UserId(u64);
+#[repr(transparent)]
+struct OrderId(u64);
+
+fn charge(user: UserId, order: OrderId) { /* ... */ }
+
+fn main() {
+    let user = UserId(42);
+    let order = OrderId(42);
+    charge(user, order);
+    // charge(order, user); // compile error — swapped IDs are now unrepresentable
+}
+```
+::
+
+**`#[non_exhaustive]` — versioning contract:**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[non_exhaustive]
+pub struct ApiResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+impl ApiResponse {
+    pub fn new(status: u16, body: String) -> Self {
+        Self { status, body } // external crates must go through this constructor
+    }
+}
+
+// Downstream crate:
+fn handle(r: ApiResponse) {
+    match r.status {
+        200 => {}
+        _ => {} // wildcard arm required — adding a field later stays non-breaking
+    }
+}
+```
+::
+
+**Typestate via `PhantomData` — compile-time-enforced protocol:**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+use std::marker::PhantomData;
+
+struct Unconfigured;
+struct Configured;
+
+struct Connection<State = Unconfigured> {
+    host: Option<String>,
+    _state: PhantomData<State>,
+}
+
+impl Connection<Unconfigured> {
+    fn new() -> Self { Self { host: None, _state: PhantomData } }
+    fn host(self, h: &str) -> Connection<Configured> {
+        Connection { host: Some(h.to_string()), _state: PhantomData }
+    }
+}
+
+impl Connection<Configured> {
+    fn send(&self) { println!("sending to {}", self.host.as_ref().unwrap()); }
+}
+
+fn main() {
+    let conn = Connection::new().host("example.com");
+    conn.send();
+    // Connection::new().send(); // compile error: send() doesn't exist on Connection<Unconfigured>
+}
+```
+::
+
+## 💡 Tips & Tricks
+
+- **Debug**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(Debug)]
+  struct Nested { a: u8, b: Vec<u8>, c: Option<String> }
+
+  fn main() {
+      let n = Nested { a: 1, b: vec![1, 2, 3], c: Some("x".into()) };
+      println!("{:?}", n);   // compact — hard to scan past 2-3 fields
+      println!("{:#?}", n);  // pretty-printed — flip to this once nesting grows
+  }
+  ```
+  ::
+- **Idiom**: field-init shorthand makes renames visible everywhere.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  struct User { email: String, username: String }
+  fn make(email: String, username: String) -> User {
+      User { email, username } // renaming `email` breaks this line at compile time, not silently
+  }
+  ```
+  ::
+- **Performance**: don't hand-order fields by size — the compiler already does it under `repr(Rust)`. Only reach for `#[repr(C)]` when FFI/wire format demands a fixed layout.
+- **Idiom**: tuple structs for lightweight wrappers, named fields once there's more than one value.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  struct Meters(f64);          // fine: single value, `.0` is unambiguous
+  struct Point { x: f64, y: f64 } // once there's 2+, positional access gets unreadable
+  ```
+  ::
+- **Debug**: assert layout assumptions in a test, not a scratch `main`, so CI catches accidental size regressions.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  struct Packet { id: u32, kind: u8 }
+
+  #[test]
+  fn layout_is_stable() {
+      assert_eq!(std::mem::size_of::<Packet>(), 8);
+  }
+  ```
+  ::
+- **Clippy**: `field_reassign_with_default` catches the two-step pattern.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(Default)]
+  struct Config { port: u16 }
+
+  fn main() {
+      let mut c = Config::default();
+      c.port = 8080; // flagged
+      let _c2 = Config { port: 8080, ..Default::default() }; // suggested fix
+  }
+  ```
+  ::
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Out-of-order init is legal, order is meaningless in memory**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  struct P { x: i32, y: i32 }
+  fn main() {
+      let p = P { y: 2, x: 1 }; // fine — literal order doesn't need to match declaration order
+      println!("{} {}", p.x, p.y);
+  }
+  ```
+  ::
+- **Mutability is per-binding, not per-field** — no `mut` field modifier:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  use std::cell::Cell;
+  struct Counter { n: Cell<u32> } // interior mutability for one field without `let mut counter`
+  fn bump(c: &Counter) { c.n.set(c.n.get() + 1); }
+  ```
+  ::
+- **No inheritance** — compose and delegate via traits, not a "base struct" field copied by convention.
+- **`#[non_exhaustive]` is a one-way door** — cannot retrofit onto an already-published type without a breaking change.
+- **Self-referential structs aren't expressible in safe Rust** — use `ouroboros`/`self_cell`, or store an index instead of a reference.
+- **ZST collections don't allocate**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  struct Marker;
+  fn main() {
+      let v = vec![Marker; 1_000_000];
+      assert_eq!(std::mem::size_of_val(&v[..]), 0); // a million ZSTs, zero heap bytes
+  }
+  ```
+  ::
+- **Drop order is declaration order**, not reverse (unlike stack locals):
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  struct Loud(&'static str);
+  impl Drop for Loud {
+      fn drop(&mut self) { println!("dropping {}", self.0); }
+  }
+  struct Pair { first: Loud, second: Loud }
+  fn main() {
+      let _p = Pair { first: Loud("first"), second: Loud("second") };
+      // prints "dropping first" then "dropping second" — declaration order, not reverse
+  }
+  ```
+  ::
+- **Packed struct field references are a compile error**, not just discouraged:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[repr(packed)]
+  struct Packed { a: u8, b: u32 }
+  fn main() {
+      let p = Packed { a: 1, b: 2 };
+      // let r = &p.b; // compile error: reference to unaligned field
+      let v = { p.b }; // must copy by value via a block
+      println!("{v}");
+  }
+  ```
+  ::
+
+## 🧠 Spot the Bug
+
+Will this compile, and if so, what's the size of `Shape` compared to `ShapeWithTag`?
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+enum Shape {
+    Circle(f64),
+    Square(f64),
+}
+
+struct ShapeWithTag {
+    tag: u8,
+    circle_radius: Option<f64>,
+    square_side: Option<f64>,
+}
+
+fn main() {
+    println!("{}", std::mem::size_of::<Shape>());
+    println!("{}", std::mem::size_of::<ShapeWithTag>());
 }
 ```
 ::
@@ -277,106 +515,48 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-`error[E0502]: cannot borrow \`inv\` as mutable because it is also borrowed as immutable`.
+Both compile; `ShapeWithTag` is roughly double `Shape`'s size.
 
-`heaviest_summary` takes `&mut self` and returns `&String` — a reference borrowed *from* `self.items`. Because the return value's lifetime is tied to `&mut self` (the only lifetime available in the signature), the compiler must treat the returned `&String` as keeping the **entire** `self` borrowed for as long as `name` is alive, even though the method body only actually needs a shared borrow of `self.items` to produce that reference. This is a well-known limitation of whole-struct borrowing through method signatures: the borrow checker can see disjoint *field* accesses within a single function body (as in the split-borrow patterns from the References chapter), but it cannot see through a method call's boundary — from the caller's perspective, `inv.heaviest_summary()` mutably borrows all of `inv`, full stop, for as long as `name` lives. The subsequent `inv.add_item(...)` call needs `&mut inv` too, which conflicts.
-
-The fix is to change `heaviest_summary` to take `&self` (it doesn't actually need to mutate anything — the `+= 0.0` is a red herring/smell) or to return an owned `String` (`.clone()`) if a genuine mutation is required alongside the borrow.
-
-**The lesson**: a method's return-value lifetime that borrows from `self` locks the *entire* receiver for the borrow's duration from the caller's point of view, even if the method body only touches one field — the borrow checker doesn't see inside function calls the way it sees inside a single function body.
-
-</details>
-
-## `impl` Method Dispatch
-
-### How auto-ref/deref works
-
-When you call `u.is_active()` on an owned `User`, but `is_active` takes `&self`, the compiler **auto-inserts the `&`** for you — this is *auto-ref*. Deref chains go the other way: calling a `&self` method on a `Box<User>` auto-derefs through the `Box`. This is *why* you can call `u.is_active()` whether `u` is owned, borrowed, or behind a smart pointer, without manually writing `&u.is_active()` or `(*u).is_active()` — the receiver type is adjusted to match the method's signature. The compiler picks the receiver form that fits; if multiple methods match ambiguously, you must disambiguate explicitly.
-
-- Methods taking `self` by value consume the receiver.
-- Method resolution finds methods on `Self`, `&Self`, `&mut Self` automatically based on call syntax.
-- Auto-ref/deref lets you call `&self` methods on owned values and vice versa.
-
-## Memory Layout
-
-### Why the compiler reorders fields
-
-By default, the compiler is free to **reorder your struct's fields** to minimize padding — gaps inserted for alignment. Because different types have different alignment requirements (e.g., `u64` must sit at an 8-byte boundary), a naive field order can waste memory on padding; the optimizer sorts fields to pack them tightly, producing a smaller struct that uses cache better. You give up a guaranteed layout in exchange for size/perf.
-
-You override this when a **specific layout is required**: FFI needs the C ABI's field order (`#[repr(C)]`); a newtype wrapper must have *exactly* the inner type's layout (`#[repr(transparent)]`, so `struct Wrapper(u64)` is binary-identical to `u64`); a binary format with no padding needs `#[repr(packed)]` (but unaligned reads become UB — read field-by-field through `addr_of!`).
-
-- Reorder fields for minimal padding — the compiler does this by default (repr optimization). Use `#[repr(C)]` to force C-compatible layout (FFI). Use `#[repr(transparent)]` for newtype wrappers (same layout as inner). Use `#[repr(packed)]` to disable padding (careful with alignment → unaligned reads are UB).
-
-## Struct Tricks & Patterns
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-// Trick: builder pattern for structs with many optional fields
-struct Config {
-    host: String,
-    port: u16,
-    timeout: u32,
-}
-struct ConfigBuilder {
-    host: Option<String>,
-    port: Option<u16>,
-    timeout: Option<u32>,
-}
-impl ConfigBuilder {
-    fn new() -> Self { ConfigBuilder { host: None, port: None, timeout: None } }
-    fn host(mut self, h: String) -> Self { self.host = Some(h); self }
-    fn port(mut self, p: u16) -> Self { self.port = Some(p); self }
-    fn build(self) -> Config {
-        Config {
-            host: self.host.unwrap_or_default(),
-            port: self.port.unwrap_or(8080),
-            timeout: self.timeout.unwrap_or(30),
-        }
-    }
-}
+fn main() {
+    // Shape: one discriminant + space for the largest variant's payload (f64) —
+    // variants overlap in memory, never coexist.
+    assert_eq!(std::mem::size_of::<Shape>(), 16); // discriminant + f64, padded
 
-// Trick: use field-level visibility with pub(super)
-struct Private {
-    pub(super) field1: i32, // visible in parent module
-    field2: i32, // private
+    // ShapeWithTag: circle_radius and square_side are separate fields that both
+    // exist simultaneously, each independently sized (Option<f64> needs its own
+    // discriminant since every f64 bit pattern is valid — no niche optimization).
+    assert_eq!(std::mem::size_of::<ShapeWithTag>(), 24);
 }
-
-// Trick: phantom type parameter for type-level info
-use std::marker::PhantomData;
-struct Celsius(f64);
-struct Fahrenheit(f64);
-struct Temperature<T> {
-    value: f64,
-    _unit: PhantomData<T>,
-}
-impl Temperature<Celsius> {
-    fn to_fahrenheit(self) -> Temperature<Fahrenheit> {
-        Temperature { value: self.value * 9.0 / 5.0 + 32.0, _unit: PhantomData }
-    }
-}
-
-// Trick: use newtype pattern to wrap scalar types
-struct UserId(u64);
-struct Email(String);
-// Now you can't accidentally mix UserId and Email
-
-// Trick: const methods for compile-time computations
-#[derive(Default)]
-struct Point { x: i32, y: i32 }
-impl Point {
-    const fn origin() -> Self { Point { x: 0, y: 0 } }
-}
-const ZERO: Point = Point::origin();
-
-// Trick: Default + .. pattern for partial updates
-#[derive(Default)]
-struct Config { a: i32, b: String, c: bool }
-let c1 = Config { a: 1, ..Default::default() };
 ```
 ::
 
+A hand-rolled "tagged struct" (struct + tag + one `Option<T>` per variant) pays for every variant's payload at once. Rust's actual `enum` only pays for the active one — struct fields can never overlap in memory the way enum variants can.
+
+</details>
+
 ## Summary
 
-Structs come in named, tuple, and unit forms. Methods live in `impl` blocks. Derive macros give you common traits for free. Const generics, generics, and lifetimes parametrize them. Memory layout can be controlled with `repr` attributes. Use builder pattern for complex initialization; use phantom types for type-level reasoning.
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// repr(Rust): compiler reorders fields, saves memory, no cross-build layout guarantee.
+struct A { a: u8, b: u64, c: u8 } // 16 bytes, not 24
 
-Next: Enums — Rust's algebraic data types.
+// repr(C)/repr(transparent): restore a stable layout for FFI/wire formats.
+#[repr(C)] struct B { a: u8, b: u64, c: u8 } // 24 bytes, stable
+
+// Derives cost real code per monomorphization — opt in per trait, per struct.
+#[derive(Debug)] struct C { x: u32 } // fine, only if actually printed
+
+// Receiver type is a design decision: least-privileged by default.
+impl C { fn read(&self) -> u32 { self.x } }
+```
+::
+
+- Default layout optimizes memory; `#[repr(...)]` trades that back for stability where FFI/wire formats require it.
+- Treat every derive as deliberate — especially `Debug`/`Clone` on secrets or large buffers.
+- `&self` vs `&mut self` is an aliasing contract, not an implementation detail.
+- Newtype, `#[non_exhaustive]`, and typestate-via-`PhantomData` are zero-cost tools for domain safety, API evolution, and protocol correctness — apply at boundaries, not everywhere.
+
+Next: Enums — Rust's algebraic data types, and how variant payload overlap makes them the more memory-efficient sibling to a struct-plus-tag.

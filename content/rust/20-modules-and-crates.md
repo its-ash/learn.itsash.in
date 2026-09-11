@@ -1,320 +1,320 @@
-# 20 — Modules, Crates, Packages & Paths
+# 20 — Modules, Crates & Compilation Units (Architectural View)
 
-Rust's module system controls visibility, organization, and namespacing.
+The module system looks like a namespacing convenience. It isn't. `mod`, `pub`, and crate boundaries are Rust's **only** mechanism for encapsulation, and they double as **compilation unit boundaries** that determine incremental-build granularity, monomorphization duplication, and how much of your codebase rustc has to re-check on every change. A senior engineer treats crate/module layout as an architecture decision with real compile-time and binary-size consequences — not a filesystem tidiness exercise.
 
-## Definitions
+## Under-the-Hood Mechanics
 
-- **Package**: a Cargo project (a `Cargo.toml` + one or more crates).
-- **Crate**: a compilation unit (binary or library). Root file (`main.rs`/`lib.rs`).
-- **Module**: a named scope inside a crate. Controls visibility.
-- **Path**: how you reference an item (`crate::foo::bar`).
+### Crates are the real compilation unit, not modules
 
-## Module Declaration
+`mod` is a **namespace within a compilation unit**; the crate is the actual thing rustc compiles and LLVM optimizes as a unit.
 
-### Why the module system exists
-
-Rust's module system **separates code organization from file layout**: a module is a named *scope* that controls visibility, and the file system is one (of several) ways to *provide* the module's contents. This decoupling means the same logical structure (`crate::network::server`) can live in one file or several, and you reorganize without rewriting paths. You split code into modules when a single file gets too large, when you want to enforce visibility boundaries (a public API surface backed by private internals), or when logical groupings (network, ui, db) make the codebase navigable. Reach for modules when "one file" stops scaling; keep one file when the code is small enough to grasp at once.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="lib.rs"}
 ```rust
-// src/lib.rs
+// A single crate with many `mod` declarations still compiles (typecheck + codegen)
+// as ONE unit — the module boundary is a namespace, not a build boundary.
 mod network;
-mod ui {
-    pub mod window;
-    pub mod button;
+mod storage;
+mod api;
+// changing one line in network.rs can force re-typecheck/re-codegen of THIS WHOLE crate
+```
+::
+
+::code-wrapper{language="toml" filename="Cargo.toml"}
+```toml
+# RIGHT fix for slow incremental rebuilds: split into a workspace, not more `mod`s
+[workspace]
+members = ["crates/network", "crates/storage", "crates/api"]
+# changing crates/api doesn't force crates/network to recompile — its .rlib is cached
+```
+::
+
+### `pub` is a compile-time visibility check, not a runtime concept
+
+Visibility is resolved entirely during name resolution, before type-checking starts — there's no vtable, no runtime check.
+
+::code-wrapper{language="rust"}
+```rust
+mod internal {
+    pub(crate) fn helper_a() -> u32 { 42 }
+    pub fn helper_b() -> u32 { 42 }
+    // helper_a and helper_b generate BYTE-FOR-BYTE IDENTICAL machine code —
+    // only the set of allowed call sites differs, and that's compile-time-only
 }
 ```
 ::
 
-`mod network;` looks for `network.rs` or `network/mod.rs` (legacy) and includes it as a submodule.
-
-## File Layout Conventions (2018+)
-
-::code-wrapper{language="text"}
-```text
-src/
-├── lib.rs            // crate root: `pub mod ...`
-├── main.rs
-├── network.rs        // corresponds to `mod network;`
-└── network/
-    └── server.rs     // corresponds to `mod server;` *inside* network.rs
+::code-wrapper{language="rust"}
+```rust
+mod a {
+    pub(super) fn only_parent_can_call() {}
+    pub(in crate::a) fn only_this_subtree() {}
+}
+fn caller() {
+    a::only_parent_can_call();   // OK: caller is in `a`'s parent module
+}
 ```
 ::
 
-The 2018 edition prefers `network.rs` over `network/mod.rs`. Don't mix the two for the same module.
+### Monomorphization crosses module boundaries but not crate boundaries (usually)
 
-## `use` — Importing
-
-### When to use each path form
-
-Rust deliberately doesn't **auto-import** anything (no global prelude beyond `std::prelude`) — every import is explicit so you always know where a name comes from. The path forms differ by *what they're relative to*:
-
-- **`crate::`** — absolute from the crate root. Use when you want a stable path that doesn't change if you move the *current* file (the path is anchored to the crate, not the file's location).
-- **`super::`** — one module up (the parent). Use for siblings in the same parent module, but be aware it's *relative*: moving the file changes what `super::` resolves to.
-- **`self::`** — the current module. Rare; mostly for disambiguation or for items defined in the same file you're importing into a nested scope.
-
-Reach for `crate::` in larger projects (it's stable under file moves); `super::` is fine for tightly-coupled sibling modules that move together. Aliasing (`as`) is for resolving name conflicts or shortening verbose paths.
+Modules don't create separate monomorphization domains; crate boundaries do.
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::collections::HashMap;
-use std::io::{self, Read, Write};   // bring multiple items
-use std::io::Read as IoRead;        // alias
-use crate::network::server;          // absolute path from crate root
-use super::sibling;                  // one module up
-use self::inner;                     // current module
+// In core_lib (a dependency):
+pub fn process<T: std::fmt::Debug>(item: T) {
+    println!("{item:?}");
+}
+
+// In app (the dependent crate):
+process(5i32);       // monomorphized INSIDE app's compilation, not reused from core_lib
+process("hello");    // a second, separate monomorphized copy, also inside app
 ```
 ::
 
-### Glob Imports
+### `use` and path resolution cost nothing at runtime — but glob imports cost compile-time ambiguity-checking
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::io::prelude::*;            // rare; usually too broad
-use crate::network::*;               // bring all public items
+use std::collections::HashMap;   // pure alias, emits no code, near-zero resolver cost
 ```
 ::
 
-Avoid glob imports except for preludes.
-
-## `pub use` — Re-exports
-
 ::code-wrapper{language="rust"}
 ```rust
-// lib.rs
+// Glob imports force the resolver to enumerate every public item and check
+// for collisions against everything already in scope — real, if small, compile-time cost
+use std::collections::*;   // HashMap, HashSet, BTreeMap, VecDeque, ... all checked for conflicts
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+| Decision | Compile-time cost | Runtime cost | Binary size | Maintenance cost |
+|---|---|---|---|---|
+| More `mod`s in one crate | Low–Medium (whole crate still one incremental unit for cross-module generics) | Zero | Zero | Improves navigability |
+| Splitting into a workspace of crates | **Reduces** total rebuild time (parallel + cached compilation of unchanged crates) | Zero | Zero (same code, different link units) | Adds `Cargo.toml` overhead, version-sync burden |
+| `pub` vs `pub(crate)` | Zero difference | Zero difference | Zero difference | `pub(crate)` documents intent, shrinks your real API surface for semver purposes |
+| Generic public API (`pub fn f<T>()`) | **Higher** for downstream crates — every call site re-monomorphizes | Zero (fully inlined/specialized) | **Higher** — N call sites with N distinct `T`s means N copies of the function body | Flexible API, but see code-bloat below |
+| `dyn Trait` public API | Lower for downstream crates (one compiled implementation, dispatched via vtable) | Small (indirect call, no inlining across the vtable boundary) | Lower — one copy regardless of caller types | Less flexible, but predictable compile times |
+| Deep module nesting (`a::b::c::d::e`) | Marginal | Zero | Zero | Real: cognitive overhead, `super::super::super` fragility |
+| Workspace-wide `[workspace.dependencies]` | Slightly higher initial resolution, but avoids **duplicate versions** of the same crate compiling into different member crates | Zero | Lower — avoids double-instantiation of the same external crate at two versions | Prevents "two versions of `serde` in one binary" bloat |
+
+The generic-vs-`dyn` trade-off deserves emphasis: a public `pub fn parse<T: Deserialize>(...)` that's called with 40 different types across a large downstream codebase produces **40 monomorphized copies** at 40 call sites, each independently optimized and inlined — this is the "convenient generic API" tax, and it shows up as bloated `.text` sections and slow downstream compile times, invisible from the API's ergonomic surface.
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: the "god crate" with unenforced internal boundaries
+
+::code-wrapper{language="rust" filename="lib.rs"}
+```rust
+// BAD: everything pub, one flat module, no encapsulation
+pub mod db;
 pub mod api;
-pub use api::Client;   // re-export so users can `use my_crate::Client`
-```
-::
+pub mod billing;
+pub mod auth;
 
-Re-export is the standard way to flatten the public API and hide internal structure.
-
-## Paths and `crate`, `self`, `super`
-
-- `crate::` — absolute from crate root.
-- `self::` — current module.
-- `super::` — parent module.
-
-::code-wrapper{language="rust"}
-```rust
-// in src/network/server.rs
-use super::connection;     // src/network/connection.rs
-use crate::network::connection;   // same, explicit
-```
-::
-
-## Visibility
-
-::code-wrapper{language="rust"}
-```rust
-pub fn public_fn() {}            // visible everywhere
-fn private_fn() {}                // visible only in this module
-pub(crate) fn internal() {}       // visible within this crate only
-pub(super) fn for_parent() {}     // visible in parent module
-pub(in path) fn scoped() {}       // visible in a specific module path
-```
-::
-
-Fields and variants have their own visibility:
-
-::code-wrapper{language="rust"}
-```rust
-pub struct User {
-    pub name: String,
-    email: String,       // private — only this module can construct/modify
+// db.rs
+pub struct Connection {
+    pub raw_handle: *mut std::ffi::c_void,   // leaked implementation detail
+    pub pool_size: usize,
 }
 ```
 ::
 
-Enums' variants inherit the enum's visibility by default; you can override per-variant.
+This compiles and "works" — but every field of `Connection` is now part of the crate's public contract, with nothing to stop `billing` from reaching directly into `db::Connection.raw_handle` six months later, creating undocumented coupling the compiler can't flag.
 
-## Struct Visibility
+**The fix**: default to private, promote to `pub(crate)` when genuinely needed, reserve bare `pub` for the real external contract.
 
-### Why private fields matter
+::code-wrapper{language="rust" filename="lib.rs"}
+```rust
+// GOOD: encapsulated, minimal surface
+mod db;      // not pub — internal to the crate entirely, or pub(crate) if only some modules need it
+pub mod api; // the actual external surface
 
-A `pub` struct with **private fields** is the foundation of Rust's encapsulation/newtype pattern: external code can *use* the type (call its methods, pass it around) but can't **construct** it with literal syntax or **access** the private fields directly. This lets the module enforce **invariants** — only the module's own constructor/methods can build a valid instance, so you can't accidentally create an invalid state from outside. This is how newtypes preserve their guarantees: the constructor is a method that validates, not a public struct literal. Without private fields, any caller could construct a `User { email: "garbage" }` bypassing your validation.
+// db.rs
+pub(crate) struct Connection {
+    raw_handle: *mut std::ffi::c_void,   // private — only db's own methods touch it
+    pool_size: usize,
+}
 
-A struct can be `pub` but have private fields — external code can't construct it with literal syntax or access private fields, but can use it via methods. This is how newtypes preserve invariants.
-
-## Module Path Items
-
-- Modules
-- Functions
-- Structs/Enums/Types
-- Constants/Statics
-- `use` statements
-- Macros (via `macro_rules!` and `pub use`)
-
-## Submodules and Privacy
-
-### How the privacy model works
-
-Rust's privacy is **per-module-tree**, not hierarchical in the OOP sense. The rule: an item is visible within its own module and all its **descendants** — a child can see its parent's private items, but a parent *cannot* see a child's private items unless the child marks them `pub`. This is the opposite of "private = only this class." The conceptual basis: a child module is a more-specific piece of the parent's implementation, so it's trusted with the parent's internals; the parent, being more general, isn't automatically trusted with the child's specifics. `pub` opens an item up the tree to ancestors and beyond. This is why `pub(crate)` exists for the common case of "internal to this crate but not exposed to users."
-
-A child module can access anything in its parent (privacy is per-module-tree, with `pub` opening it up). Children can use private items of parents and ancestors.
-
-## `pub` Items and `#[doc(hidden)]`
-
-`#[doc(hidden)]` hides an item from docs while keeping it `pub` (used for internal macros or re-exports you don't want users to call directly).
-
-## Crates Within a Package
-
-::code-wrapper{language="toml"}
-```toml
-# Cargo.toml
-[lib]
-name = "my_lib"
-path = "src/lib.rs"
-
-[[bin]]
-name = "my_app"
-path = "src/main.rs"
+impl Connection {
+    pub(crate) fn query(&self, sql: &str) -> Result<Rows, DbError> {
+        // db enforces its own invariants; callers never see raw_handle
+        todo!()
+    }
+}
 ```
 ::
 
-A package can have many binaries and at most one library. Binaries can use the library via `use my_lib::...`.
+### Anti-pattern: leaking a private type through a public function signature (a compile error, but a common design trap that gets "fixed" the wrong way)
 
-## External Crates
+::code-wrapper{language="rust"}
+```rust
+mod internal {
+    pub struct Handle(pub(crate) u64);   // meant to be crate-internal
+}
 
-::code-wrapper{language="toml"}
-```toml
-# Cargo.toml
-[dependencies]
-serde = "1.0"
+// A mid-level dev hits E0446 here and "fixes" it by just slapping `pub` everywhere:
+pub fn get_handle() -> internal::Handle {   // ERROR: private type in public interface
+    internal::Handle(42)
+}
 ```
 ::
 
 ::code-wrapper{language="rust"}
 ```rust
-use serde::Serialize;     // external crates are in the extern prelude
+// NAIVE FIX: compiles, but now `u64` is part of your semver contract forever
+pub struct HandleNaive(pub u64);
 ```
 ::
 
-In edition 2018+, you don't need `extern crate serde;` — `use` finds it.
+The production-grade fix decides, deliberately, whether the type should be public at all:
 
-## Workspaces
+::code-wrapper{language="rust"}
+```rust
+// Option A: it genuinely is public API — make it public but keep the field private,
+// so construction/inspection still goes through your controlled API.
+pub struct Handle(u64);
+impl Handle {
+    pub(crate) fn new(id: u64) -> Self { Handle(id) }
+    pub fn id(&self) -> u64 { self.0 }
+}
 
-### When to use a workspace
+// Option B: it should stay internal — don't expose it in a pub fn signature at all.
+pub(crate) fn get_handle() -> internal::Handle {
+    internal::Handle::new(42)
+}
+```
+::
 
-A workspace lets multiple crates share a single `target/` (disk + compile-time savings), a single `Cargo.lock` (unified dependency versions across crates), and unified dependency declarations via `[workspace.dependencies]`. You reach for a workspace when you have **multiple related crates** evolving together: a multi-crate library (core + derive + macros), a monorepo (app + shared internal libs), or a project with separate binary/library/tooling crates. Keep a single crate when there's only one publishable unit — a workspace adds structure you don't need. Members can depend on each other via `path = "../core"` and stay in sync during local development.
+### Anti-pattern: workspace member version drift causing duplicate dependency compilation
 
-::code-wrapper{language="toml"}
+::code-wrapper{language="toml" filename="crates/api/Cargo.toml"}
 ```toml
-# Cargo.toml
+[dependencies]
+serde = "1.0.150"
+```
+::
+
+::code-wrapper{language="toml" filename="crates/cli/Cargo.toml"}
+```toml
+[dependencies]
+serde = "1.0.190"
+```
+::
+
+Both are `^1.0` so Cargo usually unifies them — but incompatible ranges link **two separate copies** into the binary, and a `Serialize` impl from one copy is a *different type* than from the other, producing "expected `Serialize`, found `Serialize`" errors.
+
+**The fix**: centralize with `[workspace.dependencies]` so every member inherits the same version by construction.
+
+::code-wrapper{language="toml" filename="Cargo.toml"}
+```toml
 [workspace]
 members = ["crates/api", "crates/cli", "crates/core"]
+
+[workspace.dependencies]
+serde = { version = "1.0.190", features = ["derive"] }
 ```
 ::
 
-Members can depend on each other via `path = "../core"`. Shared `Cargo.lock` and `target/` directory.
+::code-wrapper{language="toml" filename="crates/api/Cargo.toml"}
+```toml
+[dependencies]
+serde.workspace = true
+```
+::
 
-## Macros Across Modules
-
-### Why macros need special export treatment
-
-`macro_rules!` macros are **resolved at a different compilation stage** than items — they expand *before* the module system is fully finalized, so the normal `pub` visibility rules don't apply to them by default. `#[macro_export]` opts a macro into crate-wide (and external) visibility by placing it at the **crate root** regardless of where it's defined. You reach for `#[macro_export]` when you want users of your crate (or other modules within it) to invoke your macro by path (`crate::my_macro!` or `my_crate::my_macro!`). Use `pub use my_macro;` to re-export it under a different module path if you want it visible at a non-root location.
-
-`macro_rules!` macros need `#[macro_export]` to be used outside their defining module:
+## Architectural Application
 
 ::code-wrapper{language="rust"}
 ```rust
-#[macro_export]
-macro_rules! my_macro { /* ... */ }
-```
-::
-
-They're exported at the crate root. Use `pub use my_macro;` to re-export.
-
-## Module Organization Patterns
-
-### Library + Binaries
-
-::code-wrapper{language="text"}
-```text
-my_project/
-├── Cargo.toml
-├── src/
-│   ├── lib.rs       # public API
-│   └── bin/
-│       ├── server.rs
-│       └── client.rs
-```
-::
-
-### Feature-Gated Modules
-
-::code-wrapper{language="rust"}
-```rust
-#[cfg(feature = "json")]
-pub mod json;
-```
-::
-
-### Tests Inline and Separate
-
-::code-wrapper{language="rust"}
-```rust
-// src/lib.rs
-pub fn add(a: i32, b: i32) -> i32 { a + b }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_add() { assert_eq!(add(1, 2), 3); }
+// Module boundary = encapsulation boundary, same discipline as a class in OOP
+mod account {
+    pub struct Account { balance: i64 }   // field private — invariant protected
+    impl Account {
+        pub fn new() -> Self { Account { balance: 0 } }
+        pub fn deposit(&mut self, amount: i64) { self.balance += amount; }
+        pub fn balance(&self) -> i64 { self.balance }   // read-only accessor
+    }
 }
 ```
 ::
 
-Integration tests live in `tests/` as separate crate:
+::code-wrapper{language="text" filename="workspace layout"}
+```
+Cargo.toml           [workspace]
+crates/core/          <- pure domain logic, few deps, changes rarely
+crates/infra/         <- DB/HTTP adapters, depends on core
+crates/app/           <- thin binary wiring infra + core together
+```
+::
 
-::code-wrapper{language="text"}
-```text
-tests/
-└── integration.rs
+::code-wrapper{language="rust"}
+```rust
+// Generic public API: monomorphization cost pushed onto every downstream caller
+pub fn process<T: Handler>(h: T) { h.handle(); }
+
+// dyn public API: cost centralized into YOUR crate's own compiled artifact
+pub fn process_dyn(h: &dyn Handler) { h.handle(); }
+trait Handler { fn handle(&self); }
+```
+::
+
+::code-wrapper{language="rust" filename="lib.rs"}
+```rust
+// Re-exports: a stable facade over an internal tree that's free to reorganize
+mod internal { pub mod parser { pub mod lexer { pub struct Token; } } }
+pub use internal::parser::lexer::Token;   // downstream: `use my_crate::Token;`
+// internal::parser::lexer can be renamed/moved freely — the re-export path is the contract
 ```
 ::
 
 ## 💡 Tips & Tricks
 
 - **Idiom**: expose a `pub mod prelude { pub use ...; }` module for crates with many commonly-used types — it gives consumers a one-line `use my_crate::prelude::*;` without forcing a broad glob import of your entire public API.
+- **Performance**: if incremental rebuilds are slow on a large single-crate binary, measure with `cargo build --timings` before reorganizing modules — the fix is almost always splitting into a workspace of crates, not rearranging `mod` declarations within one crate, since modules don't create separate incremental compilation units.
 - **Debug**: `cargo modules generate tree` (via `cargo install cargo-modules`) prints your crate's actual module hierarchy as a tree — useful for spotting an accidental `mod.rs`/`module.rs` duplicate or a module nested deeper than intended.
-- **Idiom**: use `pub(crate)` liberally for anything shared between your own modules but not meant for external consumers — it documents intent precisely, unlike `pub` (too open) or private (too restrictive for cross-module internal use).
-- **Debug**: "private type in public interface" errors point at real API design problems, not just visibility — if a public function needs to return a private type, either make the type `pub` deliberately or restructure so the function returns a public trait/wrapper instead.
-- **Idiom**: keep re-exports (`pub use`) in one clearly-named place (often `lib.rs` or a dedicated `prelude` module) rather than scattered across many files — it gives you a single file to scan when auditing exactly what your crate's public surface looks like.
+- **Idiom**: use `pub(crate)` liberally for anything shared between your own modules but not meant for external consumers — it costs nothing at runtime and documents your real API surface for semver purposes far better than bare `pub`.
+- **Debug**: "private type in public interface" errors point at real API design problems, not just visibility — if a public function needs to return a private type, decide deliberately whether the type becomes genuinely public (with private fields to preserve invariants) or the function itself should be `pub(crate)`.
+- **Performance**: run `cargo tree -d` to spot duplicate dependency versions across a workspace before they cause both binary bloat and cross-crate type mismatches; centralize with `[workspace.dependencies]`.
+- **Idiom**: keep re-exports (`pub use`) in one clearly-named place (often `lib.rs` or a dedicated `prelude` module) rather than scattered across many files — it gives you a single file to scan when auditing exactly what your crate's public surface looks like, and a single place to reason about semver breakage.
 - **Debug**: `cargo doc --open` is a fast way to sanity-check what's *actually* publicly visible from outside your crate — rustdoc only shows `pub` items reachable from the crate root, so it's an accurate mirror of what consumers see, unlike scanning source files by eye.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`pub` doesn't propagate to ancestors**: a `pub mod` is public *if its parent is also accessible*. Privacy is layered.
-- **`pub use` ambiguity**: re-exporting two items with the same name into the same scope is an error.
-- **Module path and item name conflicts**: `mod foo;` and `use crate::foo;` are different things.
-- **`#[non_exhaustive]`** prevents exhaustive construction outside the crate.
-- **Private items in `pub` functions**: a public function can't have private types in its signature (e.g., `pub fn get() -> PrivateType` is an error — leaks private type).
-- **`extern crate self as foo;`**: lets you refer to your own crate by name (rare).
-- **Hidden `mod.rs`**: still works but is discouraged; the new layout is cleaner.
-- **`pub use` for preludes**: many crates expose `pub mod prelude { pub use ...; }` for one-line imports.
+- **`pub` doesn't propagate to ancestors**: a `pub mod` is public *if its parent is also accessible* — nesting a `pub` module inside a private one makes it unreachable from outside, silently, with no warning that the outer privacy is the actual gate.
+- **Generic public functions duplicate code per instantiation, invisibly**: a `pub fn process<T: Display>(t: T)` called with 30 distinct types across a large downstream codebase compiles into 30 separate machine-code bodies — none of this shows up in the source, only in `cargo bloat` output or unexpectedly slow downstream builds.
+- **Two crates, two versions, two incompatible types**: workspace members pinned to different semver-incompatible versions of the same dependency link in two copies of that crate — a `Foo` from copy A is a *different type* than `Foo` from copy B even with identical source, producing trait-not-implemented errors that look like a bug but are a dependency-graph problem.
+- **`#[macro_export]` ignores module nesting entirely**: a macro defined deep inside `mod a::b` with `#[macro_export]` is called as `my_crate::my_macro!()`, not `my_crate::a::b::my_macro!()` — the nesting is invisible to callers because macros resolve at the crate root, a different resolution stage than items.
+- **`mod.rs` and `module_name.rs` can silently coexist and both compile**: mixing 2015-style (`network/mod.rs`) and 2018-style (`network.rs`) file layouts for different modules in the same crate compiles fine but confuses every new contributor trying to find where a module's contents live.
+- **Private items in `pub` function signatures are a hard compile error, not a lint**: unlike many "leaky abstraction" mistakes in other languages that compile silently, Rust's `E0446` catches this at compile time — but only for the function's *signature* types, not for values reachable at runtime through a public trait object, which can still leak internal type information via `Any::downcast`.
+- **`pub(in path)` requires the path to be an ancestor module**: `pub(in crate::foo::bar)` only compiles if the item is actually inside `crate::foo::bar` or one of its descendants — you cannot use it to grant visibility to an unrelated sibling module, which surprises people expecting arbitrary-scope visibility grants.
 
 ## 🧠 Spot the Bug
 
-Why does this fail to compile, given that `Config` is clearly used successfully inside the crate?
+This workspace compiles, links, and runs — but two engineers debugging a `Serialize` trait error insist the same `serde` version is in use. What's actually going on?
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="toml" filename="crates/parser/Cargo.toml"}
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+::
+
+::code-wrapper{language="toml" filename="crates/exporter/Cargo.toml"}
+```toml
+[dependencies]
+serde = "=1.0.188"
+```
+::
+
+::code-wrapper{language="rust" filename="crates/app/src/main.rs"}
 ```rust
-mod settings {
-    struct Config {
-        pub host: String,
-    }
-
-    impl Config {
-        pub fn new(host: &str) -> Self {
-            Config { host: host.to_string() }
-        }
-    }
-}
-
-pub fn load_config() -> settings::Config {
-    settings::Config::new("localhost")
+fn main() {
+    let doc = parser::parse("...");
+    exporter::export(doc);   // ERROR: expected `exporter::Document`,
+                              // found a struct with the same fields and name
 }
 ```
 ::
@@ -322,38 +322,32 @@ pub fn load_config() -> settings::Config {
 <details>
 <summary>Answer</summary>
 
-`error[E0446]: private type \`settings::Config\` in public interface`.
+`exporter` pins `serde = "=1.0.188"` (exact), `parser` accepts `"1"` (`>=1.0.0, <2.0.0`). If anything else in the graph needs a newer `1.0.x`, Cargo can't unify the exact pin with the broader range and links **two separate copies** of `serde` — one at exactly `1.0.188`, one newer.
 
-The `Config` struct itself is declared without `pub` (`struct Config`, not `pub struct Config`) — it's private to the `settings` module, even though its `host` field and `new` associated function are marked `pub`. Marking members `pub` doesn't make the *containing type* public; visibility is checked at every level independently. The function `load_config` is declared `pub fn load_config() -> settings::Config`, which means any external crate calling it would receive a value of type `settings::Config` — but that type is private, so external code couldn't even name it, store it in a variable with an explicit type, or reference it in their own function signatures. Rust refuses to compile this contradiction: a public function cannot expose a private type in its signature, because doing so would create a type that callers can receive but can't meaningfully use or refer to.
+Rust's type identity includes the crate's compiled instance, not just its name — a `Document` deriving `Serialize` via one copy is a structurally identical but nominally different type from one derived against the other. The compiler correctly refuses to unify them.
 
-The fix is to make the struct itself `pub` (in addition to whichever fields/methods should be public):
+The fix is to eliminate the version split, ideally by centralizing the dependency at the workspace level so no member can independently pin an incompatible range:
 
-::code-wrapper{language="rust"}
-```rust
-mod settings {
-    pub struct Config {
-        pub host: String,
-    }
-    // ...
-}
+::code-wrapper{language="toml" filename="Cargo.toml"}
+```toml
+[workspace.dependencies]
+serde = { version = "1.0.195", features = ["derive"] }
 ```
 ::
 
-**The lesson**: `pub` on a struct's fields or methods does not make the struct type itself public — a public function cannot return (or accept) a type that is private, and each level of visibility (module, type, field, method) is checked independently.
+::code-wrapper{language="toml" filename="crates/exporter/Cargo.toml"}
+```toml
+[dependencies]
+serde.workspace = true
+```
+::
+
+**The lesson**: an exact-pin (`=1.0.188`) dependency requirement anywhere in a workspace can force Cargo to link two copies of the same crate, and Rust's type system will correctly (if confusingly) treat types derived against each copy as distinct — always prefer range requirements or `workspace.dependencies` inheritance across a multi-crate project.
 
 </details>
 
-## Best Practices
-
-- One responsibility per module.
-- Hide internals; expose minimal API.
-- Use `pub use` to flatten the surface.
-- Test files live alongside source (`#[cfg(test)] mod tests`).
-- Re-export crates you wrap so users don't need direct deps (`pub use serde;`).
-- Don't go too deep — 3 levels is usually enough.
-
 ## Summary
 
-Modules organize code; `pub` controls visibility; `use` brings items into scope; `crate`/`super`/`self` form absolute/relative paths; `pub use` re-exports flatten APIs. Files and modules are connected but distinct — the 2018 edition simplified the file/module mapping.
+Modules are compile-time-only namespacing and encapsulation with zero runtime cost; crates are the real compilation and monomorphization boundary, and workspace layout is your primary lever for incremental-build performance at scale. `pub`/`pub(crate)`/`pub(super)` cost nothing at runtime but define your actual API surface and semver contract — default to the narrowest visibility and widen deliberately. Public generic APIs trade compile-time and binary-size cost (per-call-site monomorphization) for zero-cost dispatch; public `dyn` APIs centralize that cost at the cost of indirect calls. Workspace dependency version drift is a real production failure mode that manifests as baffling "same type, different type" errors, not just wasted disk space.
 
-Next: Cargo features, build scripts, and release engineering.
+Next: Testing — unit, integration, and doc tests, and how to make test failures actually diagnosable in production-scale suites.

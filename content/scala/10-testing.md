@@ -1,473 +1,357 @@
-# 10 — Testing with ScalaTest
+---
+title: Scala — Testing: ScalaTest, ScalaCheck & Property-Based Testing
+description: Production testing patterns — test fixtures, property-based testing with ScalaCheck, mock-free design with traits, parallel test execution, and CI integration with sbt and munit.
+---
 
-## ScalaTest Basics
+# 10 — Testing: ScalaTest, ScalaCheck & Property-Based Testing
 
-ScalaTest is a flexible testing framework for Scala:
+## Test Styles — Choosing the Right One
 
 ::code-wrapper{language="scala"}
 ```scala
+// FunSuite — flat, function-style. Good for unit tests.
 import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers.*
 
-class CalculatorTest extends AnyFunSuite {
-  test("addition") {
-    assert(2 + 2 == 4)
-  }
-  
-  test("subtraction") {
-    assert(5 - 3 == 2)
-  }
-  
-  test("division by zero") {
-    assertThrows[ArithmeticException] {
-      10 / 0
-    }
-  }
-}
-```
-::
+class CalculatorTest extends AnyFunSuite:
+  test("add returns sum of two integers"):
+    Calculator.add(2, 3) shouldBe 5
 
-Run tests:
+  test("divide by zero throws"):
+    assertThrows[ArithmeticException]:
+      Calculator.divide(10, 0)
 
-::code-wrapper{language="bash"}
-```bash
-sbt test
-sbt testOnly CalculatorTest
-sbt "testOnly CalculatorTest -- -z addition"  # run specific test
-```
-::
-
-## Assertion Styles
-
-### AnyFunSuite (Function style)
-
-::code-wrapper{language="scala"}
-```scala
-import org.scalatest.funsuite.AnyFunSuite
-
-class MyTest extends AnyFunSuite {
-  test("example") {
-    assert(true)
-  }
-}
-```
-::
-
-### FunSpec (Spec style)
-
-::code-wrapper{language="scala"}
-```scala
+// FunSpec — describe/it style. Good for BDD-ish specs.
 import org.scalatest.funspec.AnyFunSpec
+class UserSpec extends AnyFunSpec:
+  describe("User"):
+    it("should create with valid email"):
+      User.create("alice@x.com") shouldBe Right(User("alice@x.com"))
+    it("should reject invalid email"):
+      User.create("not-email") shouldBe Left("invalid email")
 
-class CalculatorSpec extends AnyFunSpec {
-  describe("Calculator") {
-    it("should add two numbers") {
-      assert(2 + 2 == 4)
-    }
-    
-    it("should multiply") {
-      assert(3 * 4 == 12)
-    }
-  }
-}
+// munit — lightweight, fast, with diffs built in. Recommended for new projects.
+class MyTest extends munit.FunSuite:
+  test("add"):
+    assertEquals(Calculator.add(2, 3), 5)
+  test("divide by zero"):
+    intercept[ArithmeticException]:
+      Calculator.divide(10, 0)
 ```
 ::
 
-### WordSpec (BDD style)
-
-::code-wrapper{language="scala"}
-```scala
-import org.scalatest.wordspec.AnyWordSpec
-
-class CalculatorWordSpec extends AnyWordSpec {
-  "Calculator" when {
-    "adding numbers" should {
-      "return sum" in {
-        assert(2 + 2 == 4)
-      }
-    }
-  }
-}
-```
-::
-
-## Assertions and Matchers
-
-::code-wrapper{language="scala"}
-```scala
-import org.scalatest._
-import org.scalatest.matchers.should.Matchers._
-
-class MyTest extends AnyFunSuite {
-  test("equality") {
-    2 + 2 should equal(4)
-    2 + 2 shouldBe 4
-    2 + 2 == 4 shouldBe true
-  }
-  
-  test("comparison") {
-    5 should be > 3
-    5 should be >= 5
-    3 should be < 5
-  }
-  
-  test("container") {
-    List(1, 2, 3) should contain(2)
-    List(1, 2, 3) should have length 3
-    List(1, 2, 3) should not contain 4
-  }
-  
-  test("string matching") {
-    "hello world" should include("world")
-    "hello world" should startWith("hello")
-    "hello world" should endWith("world")
-  }
-  
-  test("option") {
-    Some(42) should be(defined)
-    Some(42).value should equal(42)
-    None should be(empty)
-  }
-  
-  test("exception") {
-    an[ArithmeticException] should be thrownBy { 10 / 0 }
-  }
-}
-```
-::
-
-## Setup and Teardown
+## Fixtures — Before/After, Loan Pattern, and Resource Management
 
 ::code-wrapper{language="scala"}
 ```scala
 import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.{BeforeAndAfterEach, BeforeAndAfterAll}
 
-class DatabaseTest extends AnyFunSuite {
-  var db: Database = _
-  
-  override def beforeEach(): Unit = {
-    db = new Database()
-    db.connect()
-  }
-  
-  override def afterEach(): Unit = {
-    db.close()
-  }
-  
-  test("query") {
-    val result = db.query("SELECT *")
-    assert(result.nonEmpty)
-  }
-}
+// ❌ ANTI-PATTERN: shared mutable state across tests
+class BadTest extends AnyFunSuite:
+  var counter = 0                           // shared across tests — order-dependent!
+  test("inc"):
+    counter += 1
+    assert(counter == 1)                    // passes IF this runs first
+  test("check"):
+    assert(counter == 0)                    // fails IF inc ran first
+
+// ✅ CORRECT: BeforeAndAfterEach for per-test isolation
+class GoodTest extends AnyFunSuite with BeforeAndAfterEach:
+  private var db: TestDatabase = _
+
+  override def beforeEach(): Unit =
+    db = TestDatabase.inMemory()            // fresh DB per test
+
+  override def afterEach(): Unit =
+    db.close()                              // cleanup after each test
+
+  test("insert and query"):
+    db.insert(User("Alice"))
+    db.findAll() shouldBe List(User("Alice"))
+
+// ✅ CORRECT: Loan pattern for resource management
+class FileTest extends AnyFunSuite:
+  // Loan pattern — pass resource to test, guarantee cleanup
+  def withTempFile[T](test: java.io.File => T): T =
+    val file = java.io.File.createTempFile("test", ".tmp")
+    try test(file)
+    finally file.delete()
+
+  test("write and read"):
+    withTempFile { file =>
+      Files.write(file.toPath, "hello".getBytes)
+      Files.readAllLines(file.toPath).get(0) shouldBe "hello"
+    }                                       // file deleted after test, guaranteed
 ```
 ::
 
-## Fixtures
-
-Reusable test data:
+## Property-Based Testing with ScalaCheck — Generators & Shrinking
 
 ::code-wrapper{language="scala"}
 ```scala
+import org.scalacheck.{Gen, Prop, Arbitrary}
+import org.scalacheck.Prop.forAll
 import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.Checkers
 
-class UserTest extends AnyFunSuite {
-  def fixture = new {
-    val user = User("Alice", 30)
-    val admin = User("Admin", 50)
-  }
-  
-  test("user name") {
-    val f = fixture
-    assert(f.user.name == "Alice")
-  }
-  
-  test("admin privileges") {
-    val f = fixture
-    assert(f.admin.isAdmin)
-  }
-}
+// Property: a statement that should hold for ALL valid inputs
+class ListPropertyTest extends AnyFunSuite with Checkers:
+
+  test("reverse of reverse equals identity"):
+    check((list: List[Int]) => list.reverse.reverse == list)
+
+  test("head of sorted list is minimum"):
+    check((list: List[Int]) =>
+      list.nonEmpty ==> (list.sorted.head == list.min)  // ==> is implication
+    )
+
+  test("map + filter = filter + map for commutative ops"):
+    check((list: List[Int], f: Int => Int) =>
+      list.map(f).filter(_ > 0) == list.filter(_ > 0).map(f)  // WRONG property — catches bug!
+    )
+
+// Custom generators — control the generated data distribution
+object Generators:
+  val userIdGen: Gen[Long] = Gen.choose(1L, 999_999_999L)
+  val emailGen: Gen[String] = for
+    local <- Gen.alphaStr.filter(_.nonEmpty)
+    domain <- Gen.oneOf("gmail.com", "yahoo.com", "example.org")
+  yield s"$local@$domain"
+
+  // Generate case class instances
+  val userGen: Gen[User] = for
+    id   <- userIdGen
+    name <- Gen.alphaStr.filter(_.nonEmpty)
+    email <- emailGen
+  yield User(id, name, email)
+
+  // Generate lists of a specific size range
+  val userListGen: Gen[List[User]] = Gen.listOf(userGen)
+
+// Shrinking — ScalaCheck automatically finds the MINIMAL failing case
+// If a property fails for List(4, 8, 15, 16, 23, 42), ScalaCheck tries:
+//   List(4, 8, 15, 16, 23) → still fails? → List(4, 8, 15, 16) → ... → List(0)
+// The minimal counterexample is shown in the test output.
+// This is the #1 value of PBT — it finds edge cases you'd never think to test.
 ```
 ::
 
-## Property-Based Testing (ScalaCheck)
-
-Test with generated random data:
+## Mock-Free Testing with Traits — The Functional Core
 
 ::code-wrapper{language="scala"}
 ```scala
-import org.scalatest.propspec.AnyPropSpec
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-
-class ListSpec extends AnyPropSpec with ScalaCheckPropertyChecks {
-  property("reverse of reverse is identity") {
-    forAll { (list: List[Int]) =>
-      list.reverse.reverse shouldBe list
-    }
-  }
-  
-  property("length preserved after reverse") {
-    forAll { (list: List[Int]) =>
-      list.reverse.length shouldBe list.length
-    }
-  }
-  
-  property("append then take") {
-    forAll { (list: List[Int], n: Int) =>
-      val positive = math.abs(n) + 1
-      (list ++ list).take(positive) shouldBe list.take(positive)
-    }
-  }
-}
-```
-::
-
-## Test Organization
-
-::code-wrapper{language="scala"}
-```scala
-// src/test/scala/com/example/CalculatorTest.scala
-package com.example
-
-import org.scalatest.funsuite.AnyFunSuite
-
-class CalculatorTest extends AnyFunSuite {
-  // tests here
-}
-
-// Run: sbt test
-// Typical structure:
-// src/test/scala/
-//   ├── com/example/
-//   │   ├── CalculatorTest.scala
-//   │   ├── UserTest.scala
-//   │   └── IntegrationTest.scala
-```
-::
-
-## Integration Testing
-
-::code-wrapper{language="scala"}
-```scala
-import org.scalatest.funsuite.AnyFunSuite
-
-class IntegrationTest extends AnyFunSuite {
-  // Expensive setup
-  private val db = new TestDatabase()
-  private val api = new TestAPI()
-  
-  override def beforeAll(): Unit = {
-    db.setup()
-    api.start()
-  }
-  
-  override def afterAll(): Unit = {
-    api.stop()
-    db.teardown()
-  }
-  
-  test("full flow") {
-    val user = api.createUser("Alice")
-    db.getUser(user.id) shouldBe defined
-  }
-}
-```
-::
-
-## Test Tagging
-
-Organize tests for selective execution:
-
-::code-wrapper{language="scala"}
-```scala
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatest.Tag
-
-object Database extends Tag("database")
-object Slow extends Tag("slow")
-object Expensive extends Tag("expensive")
-
-class MyTest extends AnyFunSuite {
-  test("quick unit test", Slow) {
-    // runs with -n Slow or -N Slow (excludes)
-  }
-  
-  test("database test", Database) {
-    // integration test
-  }
-  
-  test("expensive operation", Expensive, Slow) {
-    // can have multiple tags
-  }
-}
-```
-::
-
-Run with tags:
-
-::code-wrapper{language="bash"}
-```bash
-sbt "test -- -n Slow"        # run only Slow tests
-sbt "test -- -N Slow"        # exclude Slow tests
-sbt "test -- -l Database"    # exclude Database tests
-```
-::
-
-## Mocking (with ScalaTest)
-
-::code-wrapper{language="scala"}
-```scala
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalamock.scalatest.MockFactory
-
-class UserServiceTest extends AnyFunSuite with MockFactory {
-  test("get user from repository") {
+// ❌ ANTI-PATTERN: mocking everything — tests test the mocks, not the logic
+class BadUserServiceTest extends AnyFunSuite with MockFactory:
+  test("get user"):
     val mockRepo = mock[UserRepository]
-    val user = User(1, "Alice")
-    
-    (mockRepo.getUser _).expects(1).returning(Some(user))
-    
-    val service = new UserService(mockRepo)
-    val result = service.getUser(1)
-    
-    assert(result == Some(user))
-  }
-}
+    (mockRepo.find _).expects(42).returning(Some(User("Alice")))
+    // This test ONLY verifies that find(42) was called — not that the logic works
+
+// ✅ CORRECT: design for testability — inject traits, use fakes (not mocks)
+trait UserRepository:
+  def find(id: Long): Option[User]
+  def save(user: User): Long
+
+// Fake — in-memory implementation for tests
+class FakeUserRepo extends UserRepository:
+  private val store = scala.collection.mutable.Map.empty[Long, User]
+  private var nextId = 1L
+  def find(id: Long): Option[User] = store.get(id)
+  def save(user: User): Long =
+    val id = nextId; nextId += 1; store(id) = user; id
+
+class UserServiceTest extends AnyFunSuite:
+  val repo = FakeUserRepo()                 // real logic, no mocking framework
+  val service = UserService(repo)
+
+  test("create and find"):
+    val id = service.create("Alice")
+    service.find(id) shouldBe Some(User("Alice"))
+
+  test("find non-existent returns None"):
+    service.find(999) shouldBe None
+
+// This tests the SERVICE logic with a fast, deterministic in-memory repo.
+// No mock framework needed. Tests are robust to refactoring (no "expects" to update).
 ```
 ::
 
-## Best Practices
+## Integration Testing — Tagged, Separated, and Parallel
 
 ::code-wrapper{language="scala"}
 ```scala
-class BestPracticesTest extends AnyFunSuite {
-  // ✅ Good: descriptive names
-  test("should return sum of two numbers") {
-    assert(add(2, 3) == 5)
-  }
-  
-  // ✅ Good: one assertion per test (or related assertions)
-  test("user creation") {
-    val user = User("Alice", 30)
-    assert(user.name == "Alice")
-    assert(user.age == 30)
-  }
-  
-  // ✅ Good: use matchers
-  test("list operations") {
-    List(1, 2, 3) should contain(2)
-    List(1, 2, 3) should have length 3
-  }
-  
-  // ❌ Bad: multiple unrelated assertions
-  // test("everything") { ... many different things ... }
-  
-  // ❌ Bad: vague test names
-  // test("test") { ... }
-  
-  // ❌ Bad: side effects in test data
-  var globalCounter = 0
-  test("uses global state") {
-    globalCounter += 1  // don't do this
-  }
-}
+import org.scalatest.{Tag, BeforeAndAfterAll}
+import org.scalatest.funsuite.AnyFunSuite
+
+// Tags for selective execution in CI
+object UnitTest extends Tag("unit")
+object IntegrationTest extends Tag("integration")
+object SlowTest extends Tag("slow")
+
+class UserDBTest extends AnyFunSuite with BeforeAndAfterAll:
+  private var db: PostgresContainer = _
+
+  override def beforeAll(): Unit =
+    db = PostgresContainer.start()          // Testcontainers — real Postgres in Docker
+
+  override def afterAll(): Unit =
+    db.stop()
+
+  test("insert and query real DB", IntegrationTest):
+    val repo = PostgresUserRepo(db.jdbcUrl)
+    repo.save(User("Alice"))
+    repo.findAll() shouldBe List(User("Alice"))
+
+  test("connection retry on transient failure", IntegrationTest, SlowTest):
+    // takes 30s+ — only run in nightly CI, not on every push
+
+// sbt commands for tagged execution:
+//   sbt "testOnly * -- -n unit"              # only unit tests
+//   sbt "testOnly * -- -n integration -l slow"  # integration but not slow
+//   sbt "Test/serial"                        # run tests serially (for shared resources)
+```
+::
+
+## Async Testing — `Future`-Based Assertions
+
+::code-wrapper{language="scala"}
+```scala
+import org.scalatest.funsuite.AsyncFunSuite
+import scala.concurrent.Future
+
+// AsyncFunSuite: test bodies return Future[Assertion] — no Await needed
+class UserServiceAsyncTest extends AsyncFunSuite:
+  import scala.concurrent.ExecutionContext.Implicits.global
+
+  test("async user creation"):
+    for
+      id   <- service.create("Alice")       // returns Future[Long]
+      user <- service.find(id)              // returns Future[Option[User]]
+    yield assert(user == Some(User("Alice")))
+    // The test framework handles awaiting — the Future completes the test
+
+  test("async error handling"):
+    recoverToSucceededIf[IllegalArgumentException]:
+      service.create("")                    // should fail with IAE
+```
+::
+
+## Test Parallelism & Race Conditions in Tests
+
+::code-wrapper{language="scala"}
+```scala
+import org.scalatest.funsuite.AnyFunSuite
+
+// ⚠️ ScalaTest runs tests in PARALLEL by default (different test classes in parallel).
+// Within a class, tests are sequential UNLESS ParallelTestExecution is mixed in.
+
+import org.scalatest.ParallelTestExecution
+class ParallelTest extends AnyFunSuite with ParallelTestExecution:
+  // These tests MAY run concurrently — don't share mutable state!
+  test("a"): assert(1 + 1 == 2)
+  test("b"): assert(2 + 2 == 4)
+
+// ❌ ANTI-PATTERN: shared DB across parallel test classes
+class TestA extends AnyFunSuite:
+  test("insert user"):
+    sharedDb.save(User("Alice"))            // races with TestB
+class TestB extends AnyFunSuite:
+  test("count users"):
+    assert(sharedDb.count() == 0)           // flaky — depends on TestA's timing
+
+// ✅ CORRECT: per-class isolated DB (Testcontainers or in-memory)
+class TestA extends AnyFunSuite with BeforeAndAfterAll:
+  private var db: TestDatabase = _
+  override def beforeAll(): Unit = db = TestDatabase.fresh()
+  // Each class gets its own DB — no cross-test interference
+```
+::
+
+## Assertion Deep-Dive — Matchers and Custom Assertions
+
+::code-wrapper{language="scala"}
+```scala
+import org.scalatest.matchers.should.Matchers.*
+import org.scalatest.matchers.be
+
+// Structural equality — checks field by field (case class equals)
+User("Alice") shouldBe User("Alice")        // ✓
+User("Alice") should be(User("Alice"))      // same thing
+
+// Collection matchers
+List(1, 2, 3) should contain(2)
+List(1, 2, 3) should contain theSameElementsAs List(3, 2, 1)  // order-independent
+Map("a" -> 1, "b" -> 2) should contain key "a"
+Map("a" -> 1) should contain value 1
+
+// Option/Either matchers
+Some(42) shouldBe defined
+None shouldBe empty
+Right(42) shouldBe Right(42)
+Left("err") shouldBe Left("err")
+
+// Exception assertions
+assertThrows[ArithmeticException](10 / 0)
+the[ArithmeticException] thrownBy (10 / 0) should have message "/ by zero"
+
+// Custom matcher for domain-specific assertions
+def beWithinTolerance(expected: Double, tolerance: Double) =
+  be >= (expected - tolerance) and be <= (expected + tolerance)
+
+3.14159 should beWithinTolerance(3.14, 0.01)  // → passes
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Use descriptive test names**: "should return sum" is better than "test1".
+**`sbt ~test` for continuous testing**: Watches for file changes and re-runs affected tests — instant feedback loop during development.
 
-**Arrange-Act-Assert pattern**: Organize test into setup, action, verification.
-
-::code-wrapper{language="scala"}
-```scala
-test("add function") {
-  // Arrange
-  val calc = Calculator()
-  
-  // Act
-  val result = calc.add(2, 3)
-  
-  // Assert
-  result shouldBe 5
-}
+::code-wrapper{language="bash"}
+```bash
+sbt "~testOnly *UserService*"           # re-run user service tests on every save
+sbt "~Test/compile"                      # just compile tests on save (faster, no execution)
 ```
 ::
 
-**Run tests during development**: `sbt ~test` for continuous testing.
+**Test data builders for complex domain objects**: Use the Builder pattern or a test data factory to create valid objects without verbose constructor calls.
 
-**Use beforeEach/afterEach for isolation**: Each test starts fresh.
+::code-wrapper{language="scala"}
+```scala
+object UserBuilder:
+  def apply(name: String = "test-user", email: String = "test@x.com", roles: List[String] = Nil): User =
+    User(name = name, email = email, roles = roles)
+
+// In tests:
+UserBuilder(email = "alice@x.com")         // uses defaults for other fields
+UserBuilder(roles = List("admin"))         // only override what matters
+```
+::
+
+**Property-based tests for invariants, example-based for regressions**: Use ScalaCheck for universal invariants (reverse.reverse == id), use explicit examples for specific bug regressions (with a comment referencing the issue number).
 
 ## ⚠️ Edge Cases & Gotchas
 
-**Tests can run in any order**: Don't assume execution order. Tests should be independent.
+**Flaky tests reveal real bugs**: If a test passes/fails randomly, it's usually a concurrency bug (race condition, timing dependency) — investigate, don't ignore.
 
-**Shared mutable state is problematic**: Use beforeEach/afterEach to reset state.
+**`beforeAll` runs once per class, not per test**: Expensive setup (DB containers) goes here. But if tests are parallel, `beforeAll` may run while another class's tests are still running — use distinct databases.
 
-**Mocking can hide bugs**: Real tests should use real dependencies when possible.
+**Mock frameworks can hide integration bugs**: A test with mocks only verifies that the right calls were made, not that the real dependency actually works. Always have integration tests with real dependencies.
 
-**Flaky tests are testing problems**: If test passes/fails randomly, it's revealing a concurrency bug.
+**ScalaCheck generators can be slow**: Generating large lists (Gen.listOfN(100000, ...)) is expensive. Use `Gen.listOfN` with reasonable sizes, or configure `PropertyCheckConfig` with `minSuccessful = 50` instead of the default 100.
 
-**Expensive setup slows CI**: Use fast unit tests in main test suite; relegate integration tests to separate job.
+## 🧠 Quick Quiz
 
-## 🧠 Spot the Bug
-
-What's wrong with this test?
-
-::code-wrapper{language="scala"}
-```scala
-class MyTest extends AnyFunSuite {
-  var counter = 0
-  
-  test("increments counter") {
-    counter += 1
-    assert(counter == 1)
-  }
-  
-  test("counter is 1") {
-    assert(counter == 1)
-  }
-}
-```
-::
+What's the difference between a **mock**, a **stub**, and a **fake**?
 
 <details>
 <summary>Answer</summary>
 
-Tests share state. If first test runs, counter is 1. If second test runs first, counter is 0 and assertion fails.
+- **Mock**: A test double that verifies interactions — "was `find(42)` called?" It records calls and lets you assert on them. The test is about the *interaction*, not the result. (e.g., ScalaMock's `mock[UserRepository]`)
 
-Tests should not depend on execution order. Use `beforeEach` to reset state:
+- **Stub**: A test double that returns canned responses — `find(42) => Some(User("Alice"))`. It doesn't verify interactions, just provides predetermined outputs. Simpler than a mock.
 
-::code-wrapper{language="scala"}
-```scala
-class MyTest extends AnyFunSuite {
-  var counter = 0
-  
-  override def beforeEach(): Unit = {
-    counter = 0
-  }
-  
-  test("increments counter") {
-    counter += 1
-    assert(counter == 1)
-  }
-  
-  test("counter starts at zero") {
-    assert(counter == 0)
-  }
-}
-```
-::
+- **Fake**: A real working implementation that's simplified for testing — `FakeUserRepo` with an in-memory `Map`. It has real logic (find actually looks up the map), but isn't production-ready (no persistence, no concurrency). Fakes are preferred in functional Scala because they test real behavior without a mock framework's coupling.
 
+**Best practice**: Prefer fakes > stubs > mocks. Fakes test the most real behavior. Mocks couple tests to implementation details (every refactor breaks the mock expectations).
 </details>
-
-## Key Takeaways
-
-- ScalaTest offers multiple testing styles (FunSuite, FunSpec, WordSpec).
-- Use matchers for readable assertions: `x shouldBe y`.
-- Setup/teardown with `beforeEach`/`afterEach`.
-- Property-based testing with ScalaCheck for random data.
-- Tag tests for selective execution.
-- Mock dependencies with ScalaTest + ScalaMock.
-- Arrange-Act-Assert pattern for clarity.
-- Keep tests independent; don't share state.
-- Run tests continuously during development.

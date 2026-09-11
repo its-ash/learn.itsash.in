@@ -1,267 +1,364 @@
-# 08 — Null Safety in Depth
+---
+title: "Dart — Sound Null Safety, Promotion & Flow Analysis"
+description: "Deep-dive into Dart's sound null safety system, type promotion rules across closures/async/fields, late initialization semantics, nullable collection algebra, and JSON interop patterns. Code-first engineering reference."
+---
 
-Dart has **sound null safety** (since Dart 2.12). Types are non-nullable by default; `?` marks a type as nullable. The compiler enforces null safety at compile time.
+# Dart — Sound Null Safety, Promotion & Flow Analysis
 
-## Non-nullable by default
-
-::code-wrapper{language="dart"}
-```dart
-String name = 'Alice';    // non-nullable, can't be null
-// name = null;           // ✗ compile error
-
-String? maybeName;        // nullable, can be null
-maybeName = null;         // ✓
-maybeName = 'Bob';        // ✓
-```
-::
-`String` can never be null. `String?` can be null or a `String`. The compiler tracks this and prevents null-dereference errors.
-
-## Null-Aware Operators (recap)
-
-### `?.` (null-aware access)
+## Type Promotion — The Complete Rule Set
 
 ::code-wrapper{language="dart"}
 ```dart
-String? name;
-int? length = name?.length;   // null (name is null, no call)
-```
-::
-### `??` (if-null)
+// Type promotion narrows a type within a scope based on control flow.
+// It works ONLY on local variables (not fields, not across closures, not across await).
 
-::code-wrapper{language="dart"}
-```dart
-String? name;
-String display = name ?? 'Anonymous';   // 'Anonymous'
-```
-::
-### `??=` (null-aware assignment)
-
-::code-wrapper{language="dart"}
-```dart
-String? name;
-name ??= 'Alice';   // name is 'Alice' (was null)
-```
-::
-### `!` (null assertion)
-
-::code-wrapper{language="dart"}
-```dart
-String? name = getText();
-print(name!.length);   // asserts non-null, throws if null
-```
-::
-`!` promotes `T?` to `T`. Throws `TypeError` at runtime if null. Use sparingly.
-
-## Flow Analysis and Type Promotion
-
-Dart's compiler tracks nullability through control flow — **type promotion**:
-
-### `if (x != null)` promotion
-
-::code-wrapper{language="dart"}
-```dart
+// ── 1. `if (x != null)` promotion ──
 String? name = getInput();
 if (name != null) {
-	print(name.length);   // ✓ name promoted to String (non-null)
+  // name is promoted: String? → String. No `!` or `?.` needed.
+  print(name.length);
 }
-print(name?.length);     // name is still String? outside the if
-```
-::
-Inside the `if (name != null)` block, `name` is promoted to `String` — no `!` or `?.` needed.
+// Outside the if: name is still String?.
 
-### `if (x is T)` promotion
-
-::code-wrapper{language="dart"}
-```dart
-Object x = 'hello';
-if (x is String) {
-	print(x.length);   // ✓ x promoted to String
+// ── 2. `if (x is T)` promotion ──
+Object obj = 'hello';
+if (obj is String) {
+  print(obj.length);  // obj promoted: Object → String
 }
-```
-::
-### Early return
+// Outside: obj is still Object.
 
-::code-wrapper{language="dart"}
-```dart
+// ── 3. Early return promotion ──
 String process(String? input) {
-	if (input == null) return 'default';
-	return input.toUpperCase();   // ✓ input promoted to String after the null check
+  if (input == null) return 'default';
+  // After the null-return, input is promoted to String for the rest of the function.
+  return input.toUpperCase();  // no `!` needed
+}
+
+// ── 4. `??` default promotion ──
+String? maybeName = getInput();
+String name = maybeName ?? 'Anonymous';
+// `name` is non-nullable String (if maybeName was null, it's 'Anonymous').
+
+// ── 5. Definite assignment (late locals) ──
+late String result;
+if (condition) {
+  result = 'yes';
+} else {
+  result = 'no';
+}
+print(result);  // ✓ assigned in all branches — definite assignment analysis
+```
+::
+
+### Promotion Failures — Fields, Closures, Async Gaps
+
+::code-wrapper{language="dart"}
+```dart
+// ── FIELDS: promotion does NOT work on class fields. ──
+// The field is shared mutable state — another method could set it to null
+// between the check and the use.
+class Service {
+  String? _cached;
+
+  void use() {
+    if (_cached != null) {
+      // print(_cached.length);  // ✗ _cached is still String?
+    }
+  }
+
+  // ✓ Fix: copy to a local (immutable snapshot).
+  void useFixed() {
+    final cached = _cached;  // local — can't be mutated externally
+    if (cached != null) {
+      print(cached.length);  // ✓ promoted to String
+    }
+  }
+}
+
+// ── CLOSURES: promotion doesn't cross function boundaries. ──
+void closureExample() {
+  String? name = getInput();
+  if (name != null) {
+    final callback = () {
+      // print(name.length);  // ✗ not promoted inside the closure
+      // The closure could execute later, after `name` was set to null.
+    };
+    callback();
+  }
+}
+
+// ✓ Fix: capture in a final local before the closure.
+void closureFixed() {
+  final name = getInput();
+  if (name != null) {
+    final captured = name;  // final — immutable, promotion-safe
+    final callback = () => print(captured.length);  // ✓
+    callback();
+  }
+}
+
+// ── AWAIT GAP: promotion is invalidated after `await`. ──
+Future<void> awaitExample() async {
+  String? name = getInput();
+  if (name != null) {
+    await Future.delayed(Duration.zero);  // yields to event loop
+    // print(name.length);  // ✗ not promoted after await
+    // During the await, another async task could set `name = null`.
+  }
+}
+
+// ✓ Fix: snapshot before await.
+Future<void> awaitFixed() async {
+  final name = getInput();
+  if (name != null) {
+    final captured = name;
+    await Future.delayed(Duration.zero);
+    print(captured.length);  // ✓ captured is final, non-nullable
+  }
 }
 ```
 ::
-After an early return on null, the rest of the function has `input` promoted to `String`.
 
-## `late` and null safety
-
-`late` variables are non-nullable but assigned later:
+## `late` — Lazy Initialization & Initialization Semantics
 
 ::code-wrapper{language="dart"}
 ```dart
-class Widget {
-	late String title;   // non-nullable, assigned later
+// `late` tells the compiler: "this non-nullable variable will be assigned before first read."
+// Without an initializer: you must assign it manually — reading first throws.
+// With an initializer: runs lazily on first read, caches the result.
 
-	void init(String t) {
-		title = t;
-	}
+// ── late without initializer — manual assignment ──
+class Controller {
+  late Database db;  // will be set in initialize()
+
+  Future<void> initialize(String connStr) async {
+    db = await Database.connect(connStr);
+  }
+
+  Future<List<User>> getUsers() async {
+    // If initialize() wasn't called, this throws LateInitializationError.
+    return db.query('SELECT * FROM users');
+  }
+}
+
+// ── late final with initializer — lazy, cached, runs once ──
+class AppConfig {
+  // _loadConfig() runs ONLY on first read of `config`, then caches.
+  // If `config` is never read, _loadConfig() never runs — zero cost.
+  late final String config = _loadConfig();
+
+  String _loadConfig() {
+    print('Loading config...');  // runs once
+    return Platform.environment['APP_ENV'] ?? 'development';
+  }
+}
+
+// ❌ Anti-pattern: late on a field that might not be assigned.
+class Risky {
+  late String value;  // if used before assignment → LateInitializationError
+
+  void maybeInit(bool condition) {
+    if (condition) value = 'initialized';
+    // If condition is false, reading `value` throws.
+  }
+}
+
+// ✓ Correct: use late final with an initializer (guaranteed safe) or nullable.
+class Safe {
+  late final String value = _compute();  // always safe — runs on first read
+  String? maybeValue;  // nullable — check with `!= null` before use
+
+  String _compute() => 'computed';
 }
 ```
 ::
-`late` tells the compiler "I'll assign this before it's read." If you read before assignment, it throws `LateInitializationError`.
 
-### `late final` with initializer (lazy)
+## Nullable Collection Algebra
 
 ::code-wrapper{language="dart"}
 ```dart
-class Config {
-	late final String value = _load();   // runs on first read, then cached
+// Four distinct nullability dimensions for collections — choose carefully.
+
+// 1. List<int> — non-null list, non-null elements.
+List<int> a = [1, 2, 3];
+// a = null;       // ✗ list can't be null
+// a.add(null);    // ✗ elements can't be null
+a.add(4);          // ✓
+
+// 2. List<int>? — nullable list, non-null elements.
+List<int>? b;
+b = null;          // ✓ list can be null
+b = [1, 2, 3];     // ✓
+// b.add(null);    // ✗ elements can't be null
+b?.add(4);         // ✓ no-op if b is null (null-aware access)
+print(b?.length);  // 3 or null
+
+// 3. List<int?> — non-null list, nullable elements.
+List<int?> c = [1, null, 3];
+// c = null;       // ✗ list can't be null
+c.add(null);       // ✓ elements can be null
+for (var val in c) {
+  print(val?.abs());  // null-aware on each element
+}
+
+// 4. List<int?>? — both nullable.
+List<int?>? d;
+d = null;          // ✓
+d = [1, null, 3];  // ✓
+d?.add(null);      // ✓ no-op if d is null
+// Accessing elements: d?.first → int? or null (double nullable)
+
+// ❌ Anti-pattern: confusing List<int>? with List<int?>.
+int sumList(List<int>? nums) {
+  if (nums == null) return 0;
+  return nums.fold(0, (a, b) => a + b);  // b is int (non-null)
+}
+
+int sumNullableElements(List<int?> nums) {
+  return nums.whereType<int>().fold(0, (a, b) => a + b);  // filters out nulls
 }
 ```
 ::
-## `required` and null safety
 
-For function parameters, `required` makes a named param mandatory (and non-nullable):
-
-::code-wrapper{language="dart"}
-```dart
-void createUser({required String name, int? age}) { ... }
-createUser(name: 'Alice');   // ✓ age is optional (nullable)
-```
-::
-Without `required`, a non-nullable named param would need a default (or be nullable).
-
-## The `Null` type
-
-`Null` is the type of `null`. `null` is the only value of type `Null`. In sound null safety:
-- `T?` is `T | Null` (a union of `T` and `Null`).
-- `T` (non-nullable) excludes `Null`.
-
-## Working with nullable collections
-
-### Nullable element vs nullable collection
+## JSON Interop — Safe Parsing Patterns
 
 ::code-wrapper{language="dart"}
 ```dart
-List<int> a = [1, 2, 3];          // list non-null, elements non-null
-List<int>? b;                     // list nullable, elements non-null
-List<int?> c = [1, null, 3];      // list non-null, elements nullable
-List<int?>? d;                    // both nullable
+import 'dart:convert';
+
+// jsonDecode returns dynamic — cast carefully.
+final raw = jsonDecode('{"name": "Alice", "age": 30, "email": null}');
+
+// ❌ Anti-pattern: `as Type` on possibly-null/missing values — throws.
+final name = raw['name'] as String;       // ✓ (exists, is String)
+// final age = raw['age'] as int;          // ✓ (exists, is int)
+// final email = raw['email'] as String;   // ✗ throws: null is not a String
+// final phone = raw['phone'] as String;   // ✗ throws: missing key → null
+
+// ✓ Correct: `as Type?` (nullable cast) then handle null.
+final name2 = raw['name'] as String?;         // String? — null if missing
+final age2 = raw['age'] as int?;              // int? — null if missing
+final email = raw['email'] as String?;        // String? — null (the value is null)
+final phone = raw['phone'] as String?;        // null (key missing)
+
+// Type-safe parsing with defaults and validation:
+User parseUser(Map<String, dynamic> json) {
+  final name = json['name'] as String?;
+  if (name == null || name.isEmpty) {
+    throw FormatException('User name is required');
+  }
+  final age = (json['age'] as num?)?.toInt();  // num? handles int or double
+  return User(name: name, age: age);
+}
+
+// Deeply nested JSON — chain null-aware operators:
+final city = (raw['address'] as Map<String, dynamic>?)?['city'] as String?;
+// If 'address' is missing or null → city is null (no throw).
+// If 'city' is missing → city is null.
 ```
 ::
-### Accessing nullable collection
+
+## `Object?` vs `dynamic` — The Safety Boundary
 
 ::code-wrapper{language="dart"}
 ```dart
-List<int>? list;
-list?.length;      // null (list is null)
-list?.first;       // null (list is null)
-list?.add(1);      // no-op (list is null)
+// ── Object?: nullable, type-safe supertype of ALL types (including Null) ──
+// Static checking is ON. You must check/cast to use methods.
+Object? maybeAnything = 'hello';
+maybeAnything = null;          // ✓
+maybeAnything = 42;            // ✓
+// maybeAnything.length;       // ✗ Object? has no `length` — must check type
+if (maybeAnything is String) {
+  print(maybeAnything.length); // ✓ promoted to String
+}
+
+// ── dynamic: disables ALL static type checking ──
+// Any method call compiles — checked at RUNTIME (NoSuchMethodError).
+dynamic dyn = 'hello';
+dyn.length;      // ✓ compiles, works (String has length)
+dyn = 42;
+dyn.length;      // ✓ compiles, throws NoSuchMethodError at runtime (int has no length)
+dyn.nonExistent; // ✓ compiles, throws at runtime
+
+// ❌ Anti-pattern: using `dynamic` for "I don't know the type."
+// It defeats the entire type system. Bugs surface at runtime, not compile time.
+
+// ✓ Correct: use `Object?` for "any value including null."
+// Use `Object` for "any non-null value."
+// Use `dynamic` ONLY at interop boundaries (JSON, JS interop) — never in APIs.
 ```
 ::
-`?.` on the list accesses only if it's non-null.
-
-## `Object?` vs `Object`
-
-- `Object` — non-nullable, the supertype of all non-null types.
-- `Object?` — nullable, the supertype of all types (including `Null`).
-
-::code-wrapper{language="dart"}
-```dart
-Object a = 'hello';   // ✓
-// a = null;           // ✗ Object is non-nullable
-Object? b = 'hello';  // ✓
-b = null;             // ✓
-```
-::
-## Null safety and JSON
-
-JSON from `dart:convert` produces `Map<String, dynamic>` — values are `dynamic` (which is nullable-ish). Parse carefully:
-
-::code-wrapper{language="dart"}
-```dart
-final json = {'name': 'Alice', 'age': 30};
-final name = json['name'] as String;        // cast (throws if wrong type or null)
-final age = json['age'] as int;             // cast
-
-// Safer: handle nullable
-final name2 = json['name'] as String?;      // String? (null if missing)
-final age2 = (json['age'] as num?)?.toInt(); // int? (null if missing)
-```
-::
-Use `as Type?` (nullable cast) then handle the null, rather than `as Type` (throws on null).
-
-## Migrating to null safety
-
-- `dart pub outdated --mode=nullity` — shows which dependencies aren't null-safe.
-- `dart migrate` — interactive migration tool (for Dart 2.x code).
-- New projects (Dart 3+) are null-safe by default — no opt-out.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `if (x != null)` for promotion (preferred over `!`) — `if (name != null) { name.length }` promotes `name` to non-null inside the block, no `!` needed. It's safe (no runtime throw), unlike `!` which throws if you're wrong.
-- **Idiom**: use `??` for defaults and `??=` for lazy initialization — `name ?? 'Anonymous'` and `cache[key] ??= compute(key)`. Clean null handling without verbose `if` checks.
-- **Idiom**: use `late final` with an initializer for lazy fields — `late final value = expensive()` runs the initializer on first read, then caches. Useful for expensive initialization that should be deferred.
-- **Idiom**: prefer `as Type?` then handle null over `as Type` for JSON — `(json['x'] as String?)` returns `null` if missing, which you handle. `json['x'] as String` throws if the key is missing or null.
-- **Idiom**: use `Object?` (not `dynamic`) for "any value including null" — `Object?` keeps type safety (you must check/cast to use), while `dynamic` disables checks (runtime errors). Use `dynamic` only for genuine JS interop or unknown JSON.
+- **Idiom**: `if (x != null)` for promotion (preferred over `!`) — promotes `x` to non-null inside the block, no runtime throw risk. `!` is a runtime assertion that crashes if wrong. Use `!` only on framework invariants (Flutter widget properties after `initState`).
+- **Idiom**: `??=` for lazy cache initialization — `cache[key] ??= compute(key)` runs `compute` only on cache miss. The right side is evaluated only if the left is null. Zero overhead if cached.
+- **Idiom**: `late final x = expensive()` for lazy fields — the initializer runs once on first read, then caches. If `x` is never read, the initializer never runs. Use for expensive fields that may not always be needed.
+- **Idiom**: `as Type?` then handle null for JSON — `(json['key'] as String?)` returns `null` if missing or null. `json['key'] as String` throws if missing. Use `as Type?` for all JSON field access.
+- **Idiom**: `Object?` over `dynamic` for "any value" — `Object?` preserves static type checking (you must check/cast), `dynamic` disables it. Use `dynamic` only for JSON/JS interop, never in public APIs.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`!` throws at runtime**: `null!` throws `TypeError`. It defeats null safety. Use only when you're certain (and prefer `if (x != null)` promotion or `??`).
-- **Type promotion doesn't cross closures**: `if (x != null) { () => x.length; }` — inside the closure, `x` isn't promoted (the closure could run after `x` changed). Assign to a local first: `final local = x; () => local.length;`.
-- **Type promotion doesn't survive `await`**: after `await`, a nullable variable may have been set to null by another async task. Re-check after `await` or assign to a local before.
-- **`late` throws on early read**: `late int x; print(x)` throws `LateInitializationError`. Ensure `late` vars are assigned before first read. Use `late final` with an initializer to avoid this (it's always assigned).
-- **`List<int?>` vs `List<int>?`**: `List<int?>` is a non-null list with nullable elements; `List<int>?` is a nullable list with non-null elements. They're different — choose carefully based on whether the list or the elements can be null.
-- **`dynamic` is nullable-ish**: `dynamic x = null` is valid. `x` has no static checks, so `x.foo()` compiles (throws at runtime). Don't confuse `dynamic` with `Object` (non-nullable).
-- **`Object?` accepts everything, including null**: `Object? x = null` is valid. `Object x = null` is a compile error. Use `Object?` for "any value, including null."
-- **Fields aren't promoted like locals**: a class field `this.x` (nullable) accessed twice — `if (x != null) { print(x.length); }` — may not promote (the field could be changed by another method between the check and use). Assign to a local: `final local = x; if (local != null) { local.length; }`.
-- **`??` only checks for null, not falsy**: `0 ?? 'default'` is `0` (0 isn't null). Only `null` triggers the fallback.
-- **Migrating legacy code**: Dart 3 requires null safety (no opt-out). All dependencies must be null-safe. Run `dart pub outdated --mode=nullity` to check.
+- **`!` throws `TypeError` at runtime**: `null!` crashes. It defeats null safety. Use only when certain (framework invariants). Prefer `if (x != null)`, `??`, or `?.`.
+- **Fields don't promote**: `if (this.x != null) { x.length }` — `x` is still nullable. Copy to a local: `final x = this.x; if (x != null) { x.length; }`.
+- **Promotion doesn't cross closures**: `if (x != null) { () => x.length; }` — `x` isn't promoted inside the closure. Capture in a `final` local before the closure.
+- **Promotion is invalidated after `await`**: after `await`, a nullable local may have been set to null. Snapshot before await: `final captured = x; if (captured != null) { await ...; captured.length; }`.
+- **`late` throws on early read**: `late int x; print(x)` → `LateInitializationError`. Use `late final x = initializer` (safe lazy) or make the variable nullable.
+- **`List<int?>` ≠ `List<int>?`**: `List<int?>` is a non-null list with nullable elements. `List<int>?` is a nullable list with non-null elements. Choose based on what can be null.
+- **`dynamic` is nullable**: `dynamic x = null` is valid. `x.foo()` compiles (throws at runtime). Don't confuse `dynamic` with `Object` (non-nullable).
+- **`??` only checks for null**: `0 ?? 'default'` is `0` (0 isn't null). `false ?? true` is `false`. Only `null` triggers the fallback — no falsy coercion.
+- **`Object?` accepts everything including `null`**: `Object? x = null` is valid. `Object x = null` is a compile error. Use `Object?` for "any value, including null."
+- **Sound null safety is mandatory in Dart 3**: there's no opt-out. All dependencies must be null-safe. Run `dart pub outdated --mode=nullity` to check legacy deps.
 
 ## 🧠 Spot the Bug
 
-A developer accesses a nullable field after a null check, but the compiler still complains it's nullable:
+A developer checks a nullable field in an async method, then uses it after an await:
 
 ::code-wrapper{language="dart"}
 ```dart
-class Service {
-	String? _cached;
+class Repo {
+  String? _cached;
 
-	void use() {
-		if (_cached != null) {
-			print(_cached.length);   // ✗ compiler error: _cached is still String?
-		}
-	}
+  Future<void> refresh() async {
+    if (_cached != null) {
+      await _fetchUpdate();
+      print(_cached.length);  // ✗ compile error: _cached is String?
+    }
+  }
+
+  Future<void> _fetchUpdate() async { /* ... */ }
 }
 ```
 ::
 
-Why?
+Two problems — what are they?
 
 <details>
 <summary>Answer</summary>
 
-**Type promotion doesn't apply to class fields** (only to local variables). The compiler can't promote `_cached` to `String` after the `if (_cached != null)` check, because between the check and the use, another method (or the same method, via a callback) could set `_cached` to null — the field is mutable shared state.
+1. **Fields don't promote**: `if (_cached != null)` doesn't promote `_cached` to `String` because it's a class field — another method could set `_cached = null` between the check and the use.
 
-The fix — assign to a local variable, which can be promoted:
+2. **Promotion invalidated after `await`**: even if promotion worked for fields, the `await _fetchUpdate()` yields to the event loop. During that gap, another async task could set `_cached = null`. The compiler knows this and refuses to promote.
+
+The fix — snapshot to a final local before the await:
 
 ```dart
-class Service {
-	String? _cached;
+class Repo {
+  String? _cached;
 
-	void use() {
-		final cached = _cached;   // local copy
-		if (cached != null) {
-			print(cached.length);   // ✓ cached is promoted to String
-		}
-	}
+  Future<void> refresh() async {
+    final cached = _cached;  // immutable local snapshot
+    if (cached != null) {
+      await _fetchUpdate();
+      // `cached` is still the non-null snapshot — safe to use after await.
+      print(cached.length);  // ✓ promoted to String, safe after await
+    }
+  }
+
+  Future<void> _fetchUpdate() async { /* ... */ }
 }
 ```
-::
-The local `cached` can't be changed by other methods, so the promotion holds. After the null check, `cached` is `String` (non-null) for the rest of the block.
 
-**The lesson**: Dart's type promotion works for local variables, not class fields (fields can be mutated by other code between the check and use). To promote a nullable field, assign it to a local first, then check the local.
+The local `cached` is `final` — it can't be reassigned by anyone, so the promotion holds across the `await` gap. The snapshot captures the value at check time, immune to concurrent mutation of `_cached`.
 
 </details>
-
-## Summary
-
-You understand sound null safety (non-nullable by default, `?` for nullable), the null-aware operators (`?.`, `??`, `??=`, `!`), flow analysis and type promotion (`if (x != null)`, `if (x is T)`), `late` (non-nullable assigned later, lazy `late final`), `required` params, nullable collections (`List<int>?` vs `List<int?>`), `Object?` vs `Object`, and JSON null handling — with the fields-don't-promote and `!`-throws traps avoided. Next: asynchronous programming.

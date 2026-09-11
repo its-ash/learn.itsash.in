@@ -1,343 +1,339 @@
-# 08 — Arrays & Array Methods
+---
+title: "JavaScript 08 — Array Internals: Sparse Holes, Iteration Methods & Mutation Semantics"
+description: "Deep-dive into JavaScript array mechanics: holes (empty slots) vs undefined, typed arrays, mutation vs non-mutation methods, reduce/fold patterns, and array-like objects. Code-first reference for senior engineers."
+---
 
-## Array Creation
+# 08 — Array Internals: Sparse Holes, Iteration Methods & Mutation Semantics
+
+## Array Holes: Empty Slots vs `undefined`
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// Literal (preferred)
-const arr = [1, 2, 3]
+// ── Arrays with holes: empty slots (not the same as undefined) ──
+const arr = [1, , 3];  // hole at index 1 (comma with nothing between)
+console.log(arr.length);     // 3
+console.log(arr[1]);         // undefined (accessing a hole returns undefined)
+console.log(1 in arr);       // false — index 1 has NO element (it's a hole)
+console.log(arr.hasOwnProperty(1));  // false — no property at index 1
 
-// Array.from — from iterable or array-like
-Array.from('hello')           // ['h','e','l','l','o']
-Array.from({ length: 3 }, (_, i) => i)  // [0, 1, 2]
-Array.from(document.querySelectorAll('div'))  // real array from NodeList
+// ── Holes vs explicit undefined: behavior differs across methods ──
+const withHole = [1, , 3];
+const withUndefined = [1, undefined, 3];
 
-// Array.of — handles single-argument edge case
-Array.of(7)      // [7]
-Array(7)         // [empty × 7] ⚠️ (array with 7 empty slots, not [7])
-Array.of(1, 2, 3)  // [1, 2, 3]
+// ── forEach: SKIPS holes, visits undefined ──
+withHole.forEach(x => console.log(x));     // 1, 3 (skips index 1!)
+withUndefined.forEach(x => console.log(x));  // 1, undefined, 3 (visits all)
 
-// Spread
-const copy = [...arr]
-const fromSet = [...new Set([1, 2, 2, 3])]  // [1, 2, 3]
+// ── map: SKIPS holes (preserves them) ──
+console.log(withHole.map(x => x * 2));         // [2, <empty>, 6] (hole preserved)
+console.log(withUndefined.map(x => x * 2));    // [2, NaN, 6] (undefined * 2 = NaN)
+
+// ── filter: skips holes ──
+console.log(withHole.filter(() => true));     // [1, 3] (hole skipped, not in result)
+console.log(withUndefined.filter(() => true));  // [1, undefined, 3] (undefined kept)
+
+// ── spread and Array.from: convert holes to undefined ──
+console.log([...withHole]);  // [1, undefined, 3] (holes → undefined)
+console.log(Array.from(withHole));  // [1, undefined, 3]
+
+// ── Creating arrays with Array(n) (all holes) ──
+const empty = Array(3);  // [empty × 3] — 3 holes (NOT 3 undefined values!)
+console.log(empty.map(x => x));  // [empty × 3] — map skips holes, does nothing
+console.log([...Array(3)]);      // [undefined, undefined, undefined] — spread fills with undefined
+console.log(Array(3).fill(0));   // [0, 0, 0] — fill replaces holes with a value
+
+// ── Array(n) vs Array.of(n) ──
+Array(3);     // [empty × 3] — creates array with 3 holes (length 3)
+Array.of(3);  // [3] — creates array with 3 as a single element
+Array(1, 2, 3);   // [1, 2, 3] — multiple args → array of args
+Array.of(1, 2, 3); // [1, 2, 3] — same with multiple args
 ```
 ::
 
-### Edge case: holes (empty slots)
+## Mutation vs Non-Mutation Methods
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const arr = [1, , 3]  // hole at index 1
-arr.length    // 3
-arr[1]        // undefined
-arr.map(x => x * 2)   // [2, empty, 6] — map skips holes!
-arr.flatMap(x => [x]) // [1, 3] — flatMap removes holes
+// ── MUTATING methods (modify the original array) ──
+const arr = [3, 1, 2];
 
-// Avoid holes — use explicit undefined
-const clean = [1, undefined, 3]
-clean.map(x => x * 2)  // [2, NaN, 6]
+arr.push(4);       // [3, 1, 2, 4] — adds to end, returns new length
+arr.pop();         // returns 4, arr is [3, 1, 2] — removes from end
+arr.unshift(0);    // [0, 3, 1, 2] — adds to start (O(n) — shifts all elements!)
+arr.shift();       // returns 0, arr is [3, 1, 2] — removes from start (O(n))
+arr.sort();        // [1, 2, 3] — sorts IN PLACE (returns same array, modified!)
+arr.reverse();    // [3, 2, 1] — reverses IN PLACE
+arr.splice(1, 1);  // removes 1 element at index 1 — [3, 1] (mutates)
+arr.fill(0);       // [0, 0] — fills with 0 IN PLACE
+
+// ── NON-MUTATING methods (return a new array) ──
+const arr2 = [3, 1, 2];
+
+arr2.map(x => x * 2);       // [6, 2, 4] — new array, original unchanged
+arr2.filter(x => x > 1);   // [3, 2] — new array
+arr2.slice(0, 2);          // [3, 1] — new array (subarray)
+arr2.concat([4, 5]);      // [3, 1, 2, 4, 5] — new array
+arr2.flatMap(x => [x, x]); // [3, 3, 1, 1, 2, 2] — new array
+[...arr2].sort();          // [1, 2, 3] — copy + sort (original unchanged)
 ```
 ::
 
-## Accessing and Modifying
+## Anti-Pattern: `sort()` Without a Comparator
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const arr = ['a', 'b', 'c', 'd']
+// ❌ NAIVE — .sort() without a comparator converts to STRING and sorts lexicographically
+[10, 2, 1, 21].sort();  // [1, 10, 2, 21] — string sort! ("10" < "2" because "1" < "2")
+[100, 1, 2].sort();     // [1, 100, 2] — string sort!
+["banana", "apple", "cherry"].sort();  // ["apple", "banana", "cherry"] — correct for strings
 
-arr[0]          // 'a'
-arr.at(-1)      // 'd' (negative index — ES2022)
-arr.length      // 4
+// ✅ CORRECT — numeric sort with comparator
+[10, 2, 1, 21].sort((a, b) => a - b);  // [1, 2, 10, 21] — numeric ascending
+[10, 2, 1, 21].sort((a, b) => b - a);  // [21, 10, 2, 1] — numeric descending
 
-// Mutating
-arr[0] = 'x'
-arr[arr.length] = 'e'  // append
-arr.push('f')           // append (returns new length)
-arr.unshift('z')        // prepend (returns new length)
-arr.pop()               // remove last (returns removed)
-arr.shift()             // remove first (returns removed)
-arr.splice(1, 2)        // remove 2 items at index 1
-arr.splice(1, 0, 'x')   // insert 'x' at index 1
-arr.fill(0, 0, 3)       // fill indices 0-2 with 0
+// ── Comparator semantics ──
+// (a, b) => a - b  → ascending (return <0: a first, >0: b first, 0: equal)
+// (a, b) => b - a  → descending
+// ⚠️ The comparator must return a NUMBER (not boolean). Returning true/false is a bug.
+
+// ── Sort by multiple criteria ──
+const people = [
+    { name: "Alice", age: 30 },
+    { name: "Bob", age: 30 },
+    { name: "Charlie", age: 25 },
+];
+people.sort((a, b) => a.age - b.age || a.name.localeCompare(b.name));
+// Sort by age ascending, then name ascending (for ties)
+// `||` falls through to the next criterion when the first returns 0 (tie)
+
+// ── ⚠️ .sort() MUTATES the original array ──
+const original = [3, 1, 2];
+const sorted = original.sort();  // both `original` and `sorted` are [1, 2, 3]
+console.log(original === sorted);  // true — same reference, original was modified!
+// ✅ Non-mutating sort: const sorted = [...original].sort();
 ```
 ::
 
-## Iteration Methods
-
-### `forEach` — side effects, no return
+## `reduce`: The Fold Pattern
 
 ::code-wrapper{language="javascript"}
 ```javascript
-['a', 'b', 'c'].forEach((item, index, array) => {
-  console.log(index, item)
-})
+// ── reduce: fold left (processes left-to-right) ──
+// Signature: arr.reduce((accumulator, current, index, array) => newAccumulator, initialValue)
 
-// ⚠️ Cannot break out of forEach — use for...of or some() instead
+// ── Sum ──
+const sum = [1, 2, 3, 4].reduce((acc, cur) => acc + cur, 0);  // 10
+// Step: 0+1=1, 1+2=3, 3+3=6, 6+4=10
+
+// ── Product ──
+const product = [1, 2, 3, 4].reduce((acc, cur) => acc * cur, 1);  // 24
+
+// ── Group by (object accumulator) ──
+const people = [
+    { role: "admin", name: "Alice" },
+    { role: "user", name: "Bob" },
+    { role: "admin", name: "Charlie" },
+];
+const grouped = people.reduce((acc, person) => {
+    (acc[person.role] ??= []).push(person.name);  // ??= creates array if not exists
+    return acc;
+}, {});
+// { admin: ["Alice", "Charlie"], user: ["Bob"] }
+
+// ── reduceRight: fold right (processes right-to-left) ──
+// Useful for building nested structures from inside-out
+const piped = [double, addOne, square].reduceRight((acc, fn) => fn(acc), 5);
+// Right-to-left: square(5)=25 → addOne(25)=26 → double(26)=52
+
+// ── ⚠️ reduce on empty array without initial value throws ──
+[].reduce((acc, cur) => acc + cur);  // TypeError: Reduce of empty array with no initial value
+[].reduce((acc, cur) => acc + cur, 0);  // 0 — safe with initial value
+// ALWAYS provide an initial value to avoid the empty array error and for clarity.
 ```
 ::
 
-### `map` — transform, returns new array
+## Production Pattern: Pipeline Composition
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const doubled = [1, 2, 3].map(x => x * 2)  // [2, 4, 6]
-const users = people.map(p => ({ ...p, fullName: `${p.first} ${p.last}` }))
+// ── Function pipeline using reduce ──
+const pipe = (...fns) => (input) => fns.reduce((acc, fn) => fn(acc), input);
 
-// Edge case: map with index
-['a', 'b', 'c'].map((item, i) => `${i}:${item}`)
-// ['0:a', '1:b', '2:c']
+const pipeline = pipe(
+    x => x + 1,       // 5 → 6
+    x => x * 2,       // 6 → 12
+    x => x - 3,       // 12 → 9
+);
+console.log(pipeline(5));  // 9
+
+// ── Async pipeline (each step is async) ──
+const pipeAsync = (...fns) => (input) =>
+    fns.reduce(async (acc, fn) => fn(await acc), Promise.resolve(input));
+
+const asyncPipeline = pipeAsync(
+    async x => { await delay(100); return x + 1; },
+    async x => { await delay(100); return x * 2; },
+);
+asyncPipeline(5).then(console.log);  // 12 (after ~200ms)
+
+// ── Array flattening with flat and flatMap ──
+[[1, 2], [3, 4], [5]].flat();       // [1, 2, 3, 4, 5] (1 level deep)
+[[1, [2, [3]]]].flat();             // [1, 2, [3]] (1 level — [3] still nested)
+[[1, [2, [3]]]].flat(Infinity);     // [1, 2, 3] (fully flat)
+[1, 2, 3].flatMap(x => [x, x * 2]); // [1, 2, 2, 4, 3, 6] (map + flat in one pass)
+
+// ── Chaining array methods (each creates a new array) ──
+const result = [1, 2, 3, 4, 5, 6]
+    .filter(x => x % 2 === 0)     // [2, 4, 6]
+    .map(x => x * x)              // [4, 16, 36]
+    .reduce((a, b) => a + b, 0);  // 56
+// ⚠️ Each method creates an intermediate array (3 arrays total).
+// For large arrays, a single reduce loop is more efficient (one pass, no intermediates).
 ```
 ::
 
-### `filter` — select matching elements
+## Array-Like Objects and Typed Arrays
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const evens = [1, 2, 3, 4, 5, 6].filter(x => x % 2 === 0)
-// [2, 4, 6]
+// ── Array-like: has .length and indexed access, but NOT array methods ──
+const arrayLike = { 0: "a", 1: "b", length: 2 };
+// arrayLike.map(...)  // TypeError: arrayLike.map is not a function
+console.log(arrayLike[0]);  // "a" (indexed access works)
+console.log(arrayLike.length);  // 2
 
-const adults = users.filter(u => u.age >= 18)
+// ── Convert array-like to real array ──
+Array.from(arrayLike);     // ["a", "b"] — creates a real Array
+[...arrayLike];            // ["a", "b"] — spread works on iterables (but arrayLike isn't iterable by default!)
+// Actually: spread works on iterables; array-like objects aren't iterable unless they have Symbol.iterator.
+// For array-like: use Array.from() (handles array-like) or Array.prototype.slice.call(arrayLike).
 
-// Edge case: filter removes falsy values
-const truthy = [0, 1, '', 'a', null, undefined, NaN, false, true].filter(Boolean)
-// [1, 'a', true]
-```
-::
+// ── Real array-like objects ──
+// `arguments` object (in regular functions):
+function example() {
+    console.log(arguments);  // [Arguments] { '0': 1, '1': 2 } — array-like
+    const args = Array.from(arguments);  // convert to real array
+    console.log(args.map(x => x * 2));
+}
+example(1, 2);
 
-### `reduce` — accumulate into single value
+// NodeList (from DOM):
+// document.querySelectorAll("div")  — array-like, not a real Array
+// const divs = Array.from(document.querySelectorAll("div"));
 
-::code-wrapper{language="javascript"}
-```javascript
-// Sum
-const sum = [1, 2, 3, 4].reduce((acc, x) => acc + x, 0)  // 10
-
-// Group by
-const grouped = users.reduce((acc, user) => {
-  const key = user.role
-  ;(acc[key] ||= []).push(user)
-  return acc
-}, {})
-
-// Flatten
-const flat = [[1, 2], [3, 4], [5]].reduce((acc, arr) => acc.concat(arr), [])
-// [1, 2, 3, 4, 5]
-
-// ⚠️ Always provide initial value — prevents bugs with empty arrays
-[].reduce((acc, x) => acc + x)  // TypeError (no initial value, empty array)
-[].reduce((acc, x) => acc + x, 0)  // 0 (safe)
-```
-::
-
-### `find` / `findIndex` / `findLast`
-
-::code-wrapper{language="javascript"}
-```javascript
-const users = [
-  { id: 1, name: 'Alice' },
-  { id: 2, name: 'Bob' },
-  { id: 3, name: 'Charlie' }
-]
-
-users.find(u => u.id === 2)       // { id: 2, name: 'Bob' }
-users.findIndex(u => u.id === 2)  // 1
-users.findLast(u => u.age > 18)   // last matching (ES2023)
-users.findLastIndex(u => u.age > 18)
-```
-::
-
-### `some` / `every`
-
-::code-wrapper{language="javascript"}
-```javascript
-[1, 2, 3].some(x => x > 2)     // true (at least one)
-[1, 2, 3].every(x => x > 0)    // true (all)
-[1, 2, 3].every(x => x > 1)    // false
-
-// Short-circuit — stops early
-[1, 2, 3].some(x => { console.log(x); return x > 1 })
-// logs: 1, 2 — stops at first true
-```
-::
-
-## Transformation Methods
-
-### `flat` / `flatMap`
-
-::code-wrapper{language="javascript"}
-```javascript
-// flat — flatten nested arrays
-[1, [2, [3, [4]]]].flat()      // [1, 2, [3, [4]]] (default depth 1)
-[1, [2, [3, [4]]]].flat(2)     // [1, 2, 3, [4]]
-[1, [2, [3, [4]]]].flat(Infinity)  // [1, 2, 3, 4]
-
-// flatMap — map then flat(1)
-[1, 2, 3].flatMap(x => [x, x * 2])
-// [1, 2, 2, 4, 3, 6]
-```
-::
-
-### `sort` — ⚠️ mutates and sorts as strings by default
-
-::code-wrapper{language="javascript"}
-```javascript
-// Default sort converts to strings — numeric sort is wrong!
-[10, 2, 1, 21].sort()  // [1, 10, 2, 21] ⚠️ (string comparison)
-
-// Numeric sort
-[10, 2, 1, 21].sort((a, b) => a - b)  // [1, 2, 10, 21]
-[10, 2, 1, 21].sort((a, b) => b - a)  // [21, 10, 2, 1] (descending)
-
-// Sort objects
-users.sort((a, b) => a.name.localeCompare(b.name))
-
-// ⚠️ sort mutates the original — use toSorted for immutable (ES2023)
-const sorted = [3, 1, 2].toSorted((a, b) => a - b)  // [1, 2, 3]
-```
-::
-
-### `reverse` and `toReversed`
-
-::code-wrapper{language="javascript"}
-```javascript
-const arr = [1, 2, 3]
-arr.reverse()     // [3, 2, 1] — mutates!
-arr               // [3, 2, 1]
-
-// Non-mutating (ES2023)
-const original = [1, 2, 3]
-const reversed = original.toReversed()  // [3, 2, 1]
-original  // [1, 2, 3] — unchanged
-```
-::
-
-### `slice` / `splice` / `with`
-
-::code-wrapper{language="javascript"}
-```javascript
-// slice — non-mutating copy of portion
-[1, 2, 3, 4, 5].slice(1, 4)   // [2, 3, 4]
-[1, 2, 3, 4, 5].slice(-2)     // [4, 5]
-
-// splice — mutating insert/remove at index
-const arr = [1, 2, 3]
-arr.splice(1, 1, 'x')  // [1, 'x', 3]
-
-// with — non-mutating element replacement (ES2023)
-const arr2 = [1, 2, 3].with(1, 'x')  // [1, 'x', 3]
-```
-::
-
-## Searching
-
-::code-wrapper{language="javascript"}
-```javascript
-const arr = [1, 2, 3, 2, 1]
-
-arr.indexOf(2)       // 1 (first occurrence)
-arr.lastIndexOf(2)   // 3
-arr.includes(3)      // true
-arr.indexOf('2')     // -1 (strict equality — '2' !== 2)
-
-// ⚠️ includes uses SameValueZero (like Object.is)
-[NaN].includes(NaN)  // true (unlike indexOf)
-[NaN].indexOf(NaN)   // -1
-```
-::
-
-## Joining and Splitting
-
-::code-wrapper{language="javascript"}
-```javascript
-// Join
-[1, 2, 3].join('-')      // "1-2-3"
-[1, 2, 3].join()         // "1,2,3" (default comma)
-['a', 'b'].join('')      // "ab"
-
-// Split (string → array)
-'a,b,c'.split(',')       // ['a', 'b', 'c']
-'hello'.split('')        // ['h','e','l','l','o']
-'one two three'.split(' ') // ['one','two','three']
-```
-::
-
-## Best Practice: Immutable Array Updates
-
-::code-wrapper{language="javascript"}
-```javascript
-// Add — non-mutating
-const addItem = (arr, item) => [...arr, item]
-const prependItem = (arr, item) => [item, ...arr]
-
-// Remove by index — non-mutating
-const removeAt = (arr, index) => [...arr.slice(0, index), ...arr.slice(index + 1)]
-
-// Update by index — non-mutating
-const updateAt = (arr, index, value) => arr.with(index, value)
-// or: arr.map((item, i) => i === index ? value : item)
-
-// Remove by predicate — non-mutating
-const removeWhere = (arr, predicate) => arr.filter(x => !predicate(x))
+// ── Typed arrays: fixed-length, typed numeric arrays (for binary data) ──
+const uint8 = new Uint8Array([255, 256, 257]);  // [255, 0, 1] (overflow: 256→0, 257→1)
+const int32 = new Int32Array([1, 2, 3]);  // 32-bit signed integers
+const float64 = new Float64Array([1.5, 2.5]);  // 64-bit floats
+// Typed arrays:
+//   - Fixed length (can't push/pop)
+//   - All elements are the same type (no mixed types)
+//   - Memory-efficient (no boxing, contiguous memory)
+//   - Used for: binary protocols, canvas, WebGL, file I/O, crypto
+const buffer = new ArrayBuffer(16);  // 16 bytes of raw memory
+const view = new Uint8Array(buffer);  // view the buffer as bytes
+view[0] = 255;
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Use `findIndex` before `splice`** — `const i = arr.findIndex(x => x.id === 5); if (i >= 0) arr.splice(i, 1)` is cleaner than nested loops.
+::code-wrapper{language="javascript"}
+```javascript
+// ── Array.from with a mapping function (map during creation) ──
+Array.from({ length: 5 }, (_, i) => i);  // [0, 1, 2, 3, 4] — range generator
+Array.from({ length: 3 }, () => Math.random());  // [random, random, random]
 
-**`flatMap` removes holes** — `[1, , 3].flatMap(x => x)` returns `[1, 3]` (holes removed), but `[1, , 3].map(x => x)` returns `[1, empty, 3]`. Use `flatMap` to clean sparse arrays.
+// ── Array.from with Set for deduplication ──
+const unique = Array.from(new Set([1, 2, 2, 3, 3, 3]));  // [1, 2, 3]
+// Or: [...new Set([1, 2, 2, 3])] — spread a Set (ES2015+)
 
-**`reduce` for transforming shape** — Not just sums. `users.reduce((acc, u) => { acc[u.id] = u; return acc }, {})` is a map-by-id in one line.
+// ── Finding: find and findIndex / findLast / findLastIndex (ES2023) ──
+[1, 2, 3, 4].find(x => x > 2);          // 3 (first match)
+[1, 2, 3, 4].findIndex(x => x > 2);     // 2 (index of first match)
+[1, 2, 3, 4].findLast(x => x > 2);     // 4 (last match, ES2023)
+[1, 2, 3, 4].findLastIndex(x => x > 2); // 3 (index of last match, ES2023)
 
-**`Array.from` with mapping** — `Array.from({length: 5}, (_, i) => i * 2)` creates `[0, 2, 4, 6, 8]`. Avoid `new Array(5).map()` which skips holes.
+// ── Includes vs indexOf (NaN handling) ──
+[1, 2, NaN].includes(NaN);  // true (includes finds NaN!)
+[1, 2, NaN].indexOf(NaN);   // -1 (indexOf can't find NaN — uses ===)
 
-**Short-circuit with `some`/`every`** — These stop early when condition is met. `array.some(x => expensive(x))` is faster than `.find()` if you only need boolean.
+// ── at() for negative indexing (ES2022) ──
+[1, 2, 3].at(-1);  // 3 (last element — cleaner than arr[arr.length - 1])
+[1, 2, 3].at(-2);  // 2
+
+// ── toSorted / toReversed / toSpliced / with (non-mutating, ES2023) ──
+const arr = [3, 1, 2];
+arr.toSorted((a, b) => a - b);  // [1, 2, 3] — new array, original unchanged
+arr.toReversed();               // [2, 1, 3] — new array
+arr.with(0, 99);                 // [99, 1, 2] — new array with index 0 replaced
+// These are the non-mutating alternatives to sort/reverse/splice/[i]=
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-**Array holes cause `.map()` to skip** — `[1, , 3].map(x => x * 2)` is `[2, empty, 6]`. Holes are not undefined; they're skipped. Create with `Array(5)` and you get holes. Use `Array.from({length: 5})` or `[...Array(5)]` to fill with undefined.
+::code-wrapper{language="javascript"}
+```javascript
+// ── Holes are skipped by map/forEach/filter (unlike undefined) ──
+[1, , 3].map(x => x * 2);     // [2, <empty>, 6] (hole preserved, not processed)
+[1, undefined, 3].map(x => x * 2);  // [2, NaN, 6] (undefined * 2 = NaN)
 
-**`.sort()` mutates and sorts as strings** — `[10, 2, 1].sort()` is `[1, 10, 2]` (string comparison). Missing comparator is a classic bug. Always pass `(a, b) => a - b`.
+// ── .sort() converts to string by default (lexicographic, not numeric) ──
+[10, 2, 1].sort();  // [1, 10, 2] — "10" < "2" (string comparison)
+// Always pass a comparator for numeric sort: .sort((a, b) => a - b)
 
-**`.reduce()` without initial value fails on empty arrays** — `[].reduce((a, x) => a + x)` throws TypeError. Always provide initial value: `[].reduce((a, x) => a + x, 0)` → `0`.
+// ── .sort() MUTATES the original array ──
+const arr = [3, 1, 2];
+const sorted = arr.sort();  // arr is now [1, 2, 3] (mutated!)
+// Use [...arr].sort() for a non-mutating sort (or arr.toSorted() in ES2023)
 
-**`includes` vs `indexOf` with NaN** — `[NaN].includes(NaN)` is true; `[NaN].indexOf(NaN)` is -1. Use `includes` if you need to find NaN.
+// ── .includes() finds NaN, .indexOf() doesn't ──
+[NaN].includes(NaN);  // true (uses SameValueZero algorithm)
+[NaN].indexOf(NaN);   // -1 (uses strict equality ===, NaN !== NaN)
 
-**Spread copies are shallow** — `[...arr]` copies the array, but nested objects are still references. Deep copy with `JSON.parse(JSON.stringify(arr))` (loses functions) or use a library.
+// ── .splice() mutates and returns removed elements ──
+const arr = [1, 2, 3, 4];
+const removed = arr.splice(1, 2, "a", "b");  // removes [2, 3], inserts ["a", "b"]
+console.log(removed);  // [2, 3] (removed elements)
+console.log(arr);     // [1, "a", "b", 4] (mutated)
 
-**`.splice()` is confusing** — `arr.splice(2, 1, 'x')` removes 1 item at index 2 and inserts 'x'. It **mutates** the original. Use `.slice()` for non-mutating extracts.
+// ── Array(n) creates holes, not undefined values ──
+Array(3).map(x => 0);    // [empty × 3] — map skips holes, does nothing!
+Array(3).fill(0).map(x => x + 1);  // [1, 1, 1] — fill first, then map
+```
+::
 
-## 🧠 Spot the Bug
+## 🧠 Quick Quiz
 
-What does this log?
+What does this output?
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const arr = [1, 2, 3]
-const sorted = arr.sort((a, b) => b - a)
-const mapped = arr.map(x => x * 2)
-
-console.log(sorted, mapped)
-console.log(arr)
+const arr = [1, , 3];
+console.log(arr.map(x => x * 2));
+console.log(arr.filter(() => true));
+console.log([...arr]);
+console.log(arr.forEach(() => {}));
+console.log(arr.indexOf(undefined));
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Logs `[3, 2, 1] [6, 4, 2]` then `[3, 2, 1]`. Here's why:
-- `.sort()` **mutates** the original array
-- `arr` is now `[3, 2, 1]`, so `.map()` operates on the sorted array
-- Final `arr` is still `[3, 2, 1]` (mutated)
+```javascript
+[2, <empty>, 6]   // map: skips holes (index 1 is a hole, not visited, preserved in output)
+[1, 3]            // filter: skips holes (only non-hole elements pass through)
+[1, undefined, 3] // spread: converts holes to undefined
+undefined         // forEach: returns undefined (always); visits 1 and 3, skips hole at 1
+-1                // indexOf: undefined is not at any index (the hole is NOT undefined)
+```
 
-**The lesson**: `.sort()` and `.splice()` mutate. Use `.toSorted()` (ES2023) for immutability.
+**The key insight**: holes (empty slots from `[1, , 3]`) are NOT the same as `undefined`. Holes are missing properties — they have no value at all. Array methods like `map`, `forEach`, `filter`, and `reduce` **skip holes** entirely (don't call the callback for that index). But `undefined` is a real value that methods do process.
+
+Spread (`[...arr]`) and `Array.from()` convert holes to `undefined` (they iterate using the array iterator, which yields undefined for holes).
+
+`indexOf(undefined)` returns -1 because the hole has no value — it's not `undefined` in the array, it's a missing property. Use `arr.includes(undefined)` if you want to find holes (it returns true for `[1, , 3]`).
 
 </details>
-
-## Key Takeaways
-
-- `map`/`filter`/`reduce` are the core of functional array processing.
-- `sort()` mutates and sorts as strings by default — always pass a comparator.
-- Use `toSorted`/`toReversed`/`with` (ES2023) for non-mutating operations.
-- `includes` uses `SameValueZero` — correctly finds `NaN`, `indexOf` does not.
-- Always pass an initial value to `reduce` — prevents errors on empty arrays.
-- Holes (`[1, , 3]`) are skipped by `map` but not by `flatMap` — avoid them.

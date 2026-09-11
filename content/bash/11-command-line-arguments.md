@@ -1,277 +1,511 @@
-# 11 — Command-Line Arguments & Parsing
+---
+title: "Bash 11 — Argument Parsing Internals: getopts, Subcommands & CLI Design"
+description: "Deep-dive into Bash argument parsing: positional args, getopts state machine, manual long-option parsing with while/case, subcommand dispatch, stdin detection, and production CLI patterns. Code-first reference for senior engineers."
+---
 
-Bash scripts receive args via `$1`, `$@`, etc. For non-trivial parsing (flags, options), use `getopts` (built-in) or external tools (`getopt`, `argbash`).
+# 11 — Argument Parsing Internals: getopts, Subcommands & CLI Design
 
-## Positional Arguments
-
-::code-wrapper{language="bash"}
-```bash
-#!/usr/bin/env bash
-echo "Script: $0"
-echo "First arg: $1"
-echo "Second arg: $2"
-echo "All args: $@"
-echo "Count: $#"
-
-# Run: ./script.sh foo bar baz
-# Script: ./script.sh
-# First arg: foo
-# Second arg: bar
-# All args: foo bar baz
-# Count: 3
-```
-::
-### Default values
+## Positional Arguments: Internal Mechanics
 
 ::code-wrapper{language="bash"}
 ```bash
-name="${1:-World}"
-count="${2:-1}"
-echo "$name $count"
-```
-::
-### Mandatory args
+# ── Positional parameters: $1, $2, ..., $9, ${10}, ${10}+ ──
+echo "$0"          # script name (or the shell if sourced — use BASH_SOURCE[0] instead)
+echo "$1"          # first arg
+echo "$2"          # second arg
+echo "${10}"       # 10th arg — MUST use braces! ($10 is $1 followed by literal "0")
+echo "$@"          # all args, each separate (USE QUOTED: "$@")
+echo "$*"          # all args joined by IFS into one string
+echo "$#"          # count of args
 
-::code-wrapper{language="bash"}
-```bash
-if [[ $# -lt 1 ]]; then
-	echo "Usage: $0 <name>" >&2
-	exit 1
-fi
-name="$1"
-```
-::
-Or with `${var:?}`:
+# ── shift: remove args from the front ──
+set -- a b c d e   # set positional args (for demo)
+echo "$@"          # a b c d e
+shift              # remove $1 (a), shift rest left
+echo "$@"          # b c d e
+shift 2            # remove $1 and $2 (b, c)
+echo "$@"          # d e
 
-::code-wrapper{language="bash"}
-```bash
-name="${1:?Usage: $0 <name>}"
-```
-::
-### `"$@"` (pass all args)
+# ── Iterating all args ──
+for arg in "$@"; do    # ALWAYS quote "$@" — preserves args with spaces
+    echo "arg: $arg"
+done
 
-::code-wrapper{language="bash"}
-```bash
-process_args() {
-	for arg in "$@"; do
-		echo "Arg: $arg"
-	done
+# ── Passing args to a function ──
+process() {
+    echo "function sees $# args: $@"
 }
-
-process_args "$@"   # pass the script's args to the function
+process "$@"   # pass the script's args to the function (quoted — safe)
 ```
 ::
-Always quote `"$@"` (preserves each arg as a separate item).
 
-## `getopts` (built-in)
-
-`getopts` parses short options (`-a`, `-b value`, `-c`). It's POSIX, built-in, and reliable (unlike external `getopt`):
+## `getopts`: The Built-In Option Parser
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
+# ── getopts parses short options: -v, -o VALUE, -h ──
+# It's a built-in (no subprocess), POSIX, and reliable (unlike external `getopt`).
+
 verbose=false
 output=""
+count=0
 
-while getopts ":vo:" opt; do
-	case "$opt" in
-		v) verbose=true ;;
-		o) output="$OPTARG" ;;
-		\?) echo "Invalid option: -$OPTARG" >&2; exit 1 ;;
-		:) echo "Option -$OPTARG requires an argument." >&2; exit 1 ;;
-	esac
+# ── Syntax: getopts "OPTIONS" var ──
+# Options string: each letter is an option. A letter followed by `:` takes an argument.
+# Leading `:` enables silent error reporting (you handle errors with ? and :).
+while getopts ":hvo:c:" opt; do
+    # :hvo:c: →
+    #   h    → flag (no argument)
+    #   v    → flag (no argument)
+    #   o:   → option with argument (OPTARG)
+    #   c:   → option with argument
+    # Leading : → silent mode (don't print error, set opt to ? or :)
+
+    case "$opt" in
+        h)
+            echo "Usage: $0 [-h] [-v] [-o FILE] [-c N]"; exit 0
+            ;;
+        v) verbose=true ;;
+        o) output="$OPTARG" ;;      # OPTARG: the argument value for -o
+        c) count="$OPTARG" ;;
+        \?)                          # ? — invalid option
+            echo "Invalid option: -$OPTARG" >&2
+            exit 1
+            ;;
+        :)                           # : — missing argument
+            echo "Option -$OPTARG requires an argument." >&2
+            exit 1
+            ;;
+    esac
 done
-shift $((OPTIND - 1))   # remove parsed options, leave positional args
+shift $((OPTIND - 1))   # OPTIND: index of next arg. Shift to remove parsed options.
 
+# After shift, "$@" contains only positional args (not options)
 echo "verbose: $verbose"
 echo "output: $output"
-echo "Positional: $@"
+echo "count: $count"
+echo "positional: $@"
 ```
 ::
-- `getopts "vo:" opt` — `v` is a flag (no arg), `o:` takes an argument (`:` after the letter).
-- The leading `:` in `":vo:"` enables silent error reporting (you handle `?` and `:`).
-- `OPTARG` — the argument value for options that take one.
-- `OPTIND` — the index of the next arg. `shift $((OPTIND - 1))` removes parsed options.
-- `?` — invalid option. `:` — missing argument.
 
-Run it:
+## `getopts` Internals: State Machine
 
 ::code-wrapper{language="bash"}
 ```bash
-./script.sh -v -o output.txt file1 file2
-# verbose: true
-# output: output.txt
-# Positional: file1 file2
+# ── How getopts works internally ──
+# getopts maintains two global variables:
+# OPTIND — index of the next arg to process (starts at 1)
+# OPTARG — the argument value for options that take one (-o value → OPTARG="value")
+
+# ── Each call to getopts processes ONE option ──
+# It looks at $OPTIND in "$@", finds the next -flag, and:
+#   - Sets $opt to the flag letter
+#   - If the flag takes an arg (followed by :), sets $OPTARG to the value
+#   - Increments $OPTIND
+# Returns 0 (success) if an option was found, 1 (failure) at end of options.
+
+# ── -o value vs -ovalue (both work) ──
+./script.sh -o output.txt    # OPTARG="output.txt"
+./script.sh -ooutput.txt     # OPTARG="output.txt" (attached — also works)
+
+# ── Combined short flags ──
+./script.sh -vo output.txt   # -v and -o output.txt (combined: -v is a flag, -o takes arg)
+# getopts processes: v (flag), then o (with arg "output.txt")
+
+# ── -- ends option parsing ──
+./script.sh -v -- -o output.txt
+# -v is parsed as a flag. -- stops option parsing.
+# After shift: "$@" = "-o output.txt" (the -o is a POSITIONAL arg, not an option!)
+
+# ── Options after positional args STOP parsing ──
+./script.sh file.txt -v
+# getopts stops at "file.txt" (first non-option). -v is NOT parsed — it's positional!
+# This is a getopts limitation: options must come BEFORE positional args.
+# Fix: use manual parsing (below) for intermixed args, or document the order.
 ```
 ::
-### `getopts` limitations
 
-- Only short options (`-v`, not `--verbose`).
-- No long-option support.
-- Options must come before positional args (after the first non-option, `getopts` stops).
+## Anti-Pattern: Forgetting `shift` After `getopts`
 
-For long options (`--verbose`), use external tools or manual parsing.
+::code-wrapper{language="bash"}
+```bash
+# ❌ NAIVE — no shift, positional args include the options
+while getopts "vo:" opt; do
+    case "$opt" in
+        v) verbose=true ;;
+        o) output="$OPTARG" ;;
+    esac
+done
+echo "positional: $@"    # -v -o output.txt file1 file2 — still includes options!
 
-## Long Options (manual parsing)
+# ✅ CORRECT — shift after the loop
+while getopts "vo:" opt; do
+    case "$opt" in
+        v) verbose=true ;;
+        o) output="$OPTARG" ;;
+    esac
+done
+shift $((OPTIND - 1))   # remove parsed options, leave positional args
+echo "positional: $@"    # file1 file2 — options stripped
+
+# ── Why OPTIND - 1 ──
+# OPTIND is the index of the NEXT arg to process (after getopts stops).
+# If 3 options were parsed (-v -o out.txt), OPTIND=4.
+# shift $((4-1)) = shift 3 → removes -v, -o, out.txt, leaving positional args.
+```
+::
+
+## Long Options: Manual Parsing
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
+# ── Manual parsing for long options (--verbose, --output FILE) ──
+# More verbose than getopts, but supports --long-option.
+
 verbose=false
 output=""
 input=""
+count=0
 
 while [[ $# -gt 0 ]]; do
-	case "$1" in
-		-v|--verbose) verbose=true; shift ;;
-		-o|--output) output="$2"; shift 2 ;;
-		-i|--input) input="$2"; shift 2 ;;
-		-h|--help) echo "Usage: $0 [-v] [-o FILE] [-i FILE]"; exit 0 ;;
-		-*) echo "Unknown option: $1" >&2; exit 1 ;;
-		*) echo "Positional: $1"; shift ;;
-	esac
+    case "$1" in
+        # ── Flags (no argument) ──
+        -v|--verbose)
+            verbose=true
+            shift
+            ;;
+        -h|--help)
+            usage; exit 0
+            ;;
+
+        # ── Options with argument: --output VALUE ──
+        -o|--output)
+            output="$2"
+            shift 2    # consume --output AND the value
+            ;;
+        -i|--input)
+            input="$2"
+            shift 2
+            ;;
+        -c|--count)
+            count="$2"
+            shift 2
+            ;;
+
+        # ── Options with = syntax: --output=VALUE ──
+        --output=*)
+            output="${1#--output=}"   # strip the --output= prefix
+            shift
+            ;;
+        --input=*)
+            input="${1#--input=}"
+            shift
+            ;;
+
+        # ── End of options ──
+        --)
+            shift      # remove --, stop parsing
+            break
+            ;;
+
+        # ── Unknown option ──
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+
+        # ── Positional argument ──
+        *)
+            positionals+=("$1")
+            shift
+            ;;
+    esac
 done
 
 echo "verbose: $verbose"
 echo "output: $output"
 echo "input: $input"
+echo "count: $count"
+echo "positionals: ${positionals[@]:-}"
 ```
 ::
-Manual parsing is more verbose but supports long options. Use a `while`/`case` loop, `shift` to consume args.
 
-## External `getopt` (not recommended)
-
-The external `getopt` command supports long options, but it's unreliable across systems (GNU vs BSD `getopt` differ). Avoid it — use `getopts` for short options, manual parsing for long.
-
-## `argbash` (code generation)
-
-[argbash](https://argbash.io) generates an arg-parsing script from a spec. Useful for complex CLIs. Install: `brew install argbash`.
-
-## Subcommands
+## Production Pattern: Full CLI with Subcommands
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
-subcommand="${1:-help}"
-shift || true
+set -euo pipefail
+
+readonly VERSION="1.0.0"
+readonly SCRIPT_NAME=$(basename "$0")
+
+# ── Usage ──
+usage() {
+    cat <<EOF
+$SCRIPT_NAME v$VERSION
+
+Usage: $SCRIPT_NAME [OPTIONS] <command> [args...]
+
+Commands:
+  build       Build the project
+  test        Run tests
+  deploy      Deploy to environment
+
+Options:
+  -h, --help     Show this help
+  -v, --verbose  Verbose output
+  --version      Show version
+
+Examples:
+  $SCRIPT_NAME build --output dist/
+  $SCRIPT_NAME test --coverage
+  $SCRIPT_NAME deploy --env prod --dry-run
+EOF
+}
+
+# ── Global options ──
+verbose=false
+
+# ── Parse global options (before subcommand) ──
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)   usage; exit 0 ;;
+        -v|--verbose) verbose=true; shift ;;
+        --version)   echo "$VERSION"; exit 0 ;;
+        -*)          echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        *)           break ;;  # first non-option is the subcommand
+    esac
+done
+
+# ── Subcommand dispatch ──
+subcommand="${1:-}"
+shift || true   # remove subcommand, don't fail if no args
 
 case "$subcommand" in
-	build) echo "Building..." ;;
-	test)  echo "Testing..." ;;
-	deploy) echo "Deploying..." ;;
-	help|*) echo "Usage: $0 {build|test|deploy}"; exit 1 ;;
+    build)  cmd_build "$@" ;;
+    test)   cmd_test "$@" ;;
+    deploy) cmd_deploy "$@" ;;
+    ""|help) usage ;;
+    *)      echo "Unknown command: $subcommand" >&2; usage; exit 1 ;;
 esac
-```
-::
-::code-wrapper{language="bash"}
-```bash
-./script.sh build     # Building...
-./script.sh test      # Testing...
-./script.sh           # Usage: ... (default to help)
-```
-::
-Subcommands (like `git build`, `git test`) — dispatch on `$1`, `shift`, then parse the rest.
 
-## `shift`
+# ── Subcommand implementations ──
+cmd_build() {
+    local output="dist/"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--output) output="$2"; shift 2 ;;
+            --output=*)  output="${1#--output=}"; shift ;;
+            -h|--help)   echo "Usage: $SCRIPT_NAME build [-o DIR]"; return 0 ;;
+            *)           echo "Unknown: $1" >&2; return 1 ;;
+        esac
+    done
+    $verbose && echo "Building to $output..."
+    # ... real build logic ...
+}
 
-::code-wrapper{language="bash"}
-```bash
-shift        # remove $1, shift others ($2 → $1, etc.)
-shift 2      # remove $1 and $2
+cmd_test() {
+    local coverage=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --coverage) coverage=true; shift ;;
+            -h|--help)  echo "Usage: $SCRIPT_NAME test [--coverage]"; return 0 ;;
+            *)          echo "Unknown: $1" >&2; return 1 ;;
+        esac
+    done
+    $verbose && echo "Running tests (coverage: $coverage)..."
+    # ... real test logic ...
+}
+
+cmd_deploy() {
+    local env="staging" dry_run=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -e|--env)     env="$2"; shift 2 ;;
+            --env=*)     env="${1#--env=}"; shift ;;
+            --dry-run)   dry_run=true; shift ;;
+            -h|--help)   echo "Usage: $SCRIPT_NAME deploy [-e ENV] [--dry-run]"; return 0 ;;
+            *)           echo "Unknown: $1" >&2; return 1 ;;
+        esac
+    done
+    $verbose && echo "Deploying to $env (dry-run: $dry_run)..."
+    # ... real deploy logic ...
+}
 ```
 ::
-`shift` removes the first arg, shifting the rest. Used after parsing an option/subcommand.
 
 ## Reading from stdin
 
 ::code-wrapper{language="bash"}
 ```bash
-# Read all stdin
-input=$(cat)
-echo "Got: $input"
-
-# Line by line
-while IFS= read -r line; do
-	echo "Line: $line"
-done
-
-# Check if stdin is a pipe
+# ── Detect if stdin is a pipe (data) or terminal (interactive) ──
 if [[ -t 0 ]]; then
-	echo "No stdin (terminal)"
+    # stdin is a terminal — no piped input
+    echo "No input on stdin. Use: $0 < file.txt  OR  cat file | $0"
+    input=""
 else
-	echo "Got stdin"
+    # stdin is a pipe or file — read it
+    input=$(cat)          # read ALL of stdin
+    # Or line by line:
+    # while IFS= read -r line; do ...; done
 fi
+
+# ── Common pattern: read from file OR stdin ──
+# If a file is given as arg, read from it; otherwise read from stdin.
+if [[ $# -gt 0 ]]; then
+    input_file="$1"
+    [[ -f "$input_file" ]] || { echo "not found: $input_file" >&2; exit 1; }
+    while IFS= read -r line; do
+        process "$line"
+    done < "$input_file"
+else
+    while IFS= read -r line; do
+        process "$line"
+    done
+fi
+
+# ── Check if stdout is a terminal ──
+if [[ -t 1 ]]; then
+    # stdout is a terminal — use colors
+    RED=$'\e[31m'
+    RESET=$'\e[0m'
+else
+    # stdout is piped/redirected — no colors
+    RED=""
+    RESET=""
+fi
+echo "${RED}Error${RESET}: something went wrong"
 ```
 ::
-## 💡 Tips & Tricks
 
-- **Idiom**: use `getopts` for short options — it's built-in, POSIX, reliable (unlike external `getopt`). `getopts "vo:" opt` with `v` (flag) and `o:` (option with arg). Handle `?` (invalid) and `:` (missing arg). `shift $((OPTIND - 1))` after.
-- **Idiom**: use manual `while`/`case` parsing for long options (`--verbose`) — `getopts` doesn't support long options. `while [[ $# -gt 0 ]]; do case "$1" in --verbose) ...;; esac; done`. More verbose but flexible.
-- **Idiom**: use `"$@"` (quoted) to pass all args — preserves each arg as a separate item (even with spaces). `"$@"` in a function call passes the script's args. Never `$@` unquoted (word-splits) or `$*` (joins).
-- **Idiom**: use `${var:-default}` for optional args and `${var:?Usage: ...}` for mandatory — `${1:-World}` (default) and `${1:?Usage: $0 <name>}` (error if missing). Cleaner than `if [[ $# -lt 1 ]]`.
-- **Idiom**: use subcommands for CLIs with multiple operations — `case "$1" in build)...;; test)...;; esac; shift`. Like `git`/`docker`. Dispatch on `$1`, `shift`, parse the rest.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **`getopts` stops at the first non-option**: `./script.sh file -v` — `getopts` stops at `file`, doesn't see `-v`. Options must come before positional args. (Use `getopt` or manual parsing for intermixed args, but both have caveats.)
-- **`getopts` only does short options**: no `--verbose`. Use manual parsing or `argbash` for long options.
-- **`shift` beyond `$#`**: `shift` with no args left is an error (in some shells). Use `shift || true` or check `$#` first.
-- **`$0` isn't always the script name**: if called via a symlink or `source`, `$0` may differ. Use `BASH_SOURCE[0]` for the script's path.
-- **`$@` unquoted word-splits**: `for arg in $@` breaks args with spaces. Always `for arg in "$@"`.
-- **`$10` needs braces**: `$10` is `$1` followed by `0`. Use `${10}` for the 10th arg.
-- **`getopt` (external) is unreliable**: GNU vs BSD `getopt` differ (long options, ordering). Avoid — use `getopts` (built-in) or manual parsing.
-- **`OPTIND` must be reset for multiple `getopts` loops**: `OPTIND=1` before re-parsing. Otherwise, the second `getopts` starts where the first left off.
-- **`case "$1" in --output=*) value="${1#--output=}" ;;`**: for `--output=value` (with `=`), extract the value with `${1#--output=}`. A common pattern for `--flag=value` style.
-- **`[[ -t 0 ]]` checks if stdin is a terminal**: useful to decide whether to read from stdin or use a default. `-t 1` for stdout, `-t 2` for stderr.
-
-## 🧠 Spot the Bug
-
-A developer parses options with `getopts`, but positional args after the options aren't right:
+## Anti-Pattern: `getopt` (External Command)
 
 ::code-wrapper{language="bash"}
 ```bash
-while getopts "vo:" opt; do
-	case "$opt" in
-		v) verbose=true ;;
-		o) output="$OPTARG" ;;
-	esac
-done
+# ❌ AVOID — external getopt is unreliable across systems
+# GNU getopt: supports long options, reorders args
+# BSD getopt: different behavior, no long options
+# The two are INCOMPATIBLE — scripts break across platforms.
 
-echo "Positional: $@"
+getopt -o "vo:" -l "verbose,output:" -- "$@"
+# GNU: works. BSD: might not. Different error handling. Unpredictable.
+
+# ✅ USE getopts (built-in) for short options
+# ✅ USE manual while/case parsing for long options
+# ✅ USE argbash (code generator) for complex CLIs: brew install argbash
 ```
 ::
-Run: `./script.sh -v -o out.txt file1 file2`
-Output: `Positional: -v -o out.txt file1 file2`
 
-What's wrong?
+## 💡 Tips & Tricks
+
+::code-wrapper{language="bash"}
+```bash
+# ── `--flag=value` extraction pattern ──
+case "$1" in
+    --output=*) output="${1#--output=}" ;;  # ${1#--output=} strips the prefix
+    --port=*)   port="${1#--port=}" ;;
+esac
+
+# ── Re-parse with getopts (reset OPTIND) ──
+# If you need to call getopts in a function (after a previous getopts loop):
+parse_options() {
+    OPTIND=1   # MUST reset — getopts uses OPTIND globally
+    while getopts "vo:" opt; do
+        # ...
+    done
+}
+
+# ── Validate numeric args ──
+validate_int() {
+    local var=$1
+    [[ "$var" =~ ^[0-9]+$ ]] || die "$var is not a positive integer"
+}
+count="${1:-}"
+validate_int "$count"
+
+# ── Accept multiple values for one flag (--include *.py --include *.sh) ──
+includes=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --include) includes+=("$2"); shift 2 ;;
+        *)         break ;;
+    esac
+done
+
+# ── Tab completion helper: output --help in a parseable format ──
+# For bash completion, add this to ~/.bashrc:
+# complete -F _my_script myscript
+# _my_script() {
+#     local cur="${COMP_WORDS[COMP_CWORD]}"
+#     COMPREPLY=( $(compgen -W "build test deploy" -- "$cur") )
+# }
+```
+::
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="bash"}
+```bash
+# ── getopts stops at first non-option ──
+# ./script.sh file.txt -v  →  getopts doesn't see -v (stops at file.txt)
+# Options must come BEFORE positional args (or use manual parsing).
+
+# ── getopts only does short options ──
+# No --verbose. Use manual parsing or argbash for long options.
+
+# ── `shift` beyond $# errors ──
+# shift with no args left: "shift: shift count out of range"
+# Guard: [[ $# -gt 0 ]] && shift  OR  shift || true
+
+# ── `$10` is `$1` followed by `0` ──
+echo $10     # "$1" + "0" = "foo0" (if $1 is "foo")
+echo ${10}   # the actual 10th arg
+
+# ── `$0` isn't always the script name ──
+# If called via symlink: $0 is the symlink path (not the real script)
+# If sourced: $0 is the shell (e.g., "bash")
+# Use BASH_SOURCE[0] for the script's actual path.
+
+# ── `--` stops option parsing ──
+# ./script.sh -v -- -file.txt  →  -v is a flag, -file.txt is positional
+# The -- is consumed by getopts, but in manual parsing you need to handle it.
+
+# ── OPTIND is global ──
+# If you call getopts in a function after a previous getopts, OPTIND is stale.
+# Reset: OPTIND=1  (or OPTIND=0 in some versions — but 1 is standard)
+```
+::
+
+## 🧠 Quick Quiz
+
+Why does this fail to parse the `--verbose` flag?
+
+::code-wrapper{language="bash"}
+```bash
+while getopts "v-:" opt; do
+    case "$opt" in
+        v) verbose=true ;;
+        -) echo "long option: $OPTARG" ;;
+    esac
+done
+```
+::
 
 <details>
 <summary>Answer</summary>
 
-The script doesn't `shift` after `getopts`. `getopts` parses the options but doesn't remove them from `$@` — it just updates `OPTIND` (the index of the next arg). Without `shift $((OPTIND - 1))`, `$@` still contains all the original args (options and positional).
+`getopts` does **not** support long options. The `-` in `"v-:"` is treated as a regular short option named `-`, not as a prefix for long options. `getopts` only parses single-character options.
 
-The fix — shift after the `getopts` loop:
+When you run `./script.sh --verbose`, getopts sees `-` as the first character after `--`, and since `-` is in the optstring, it might match it — but `OPTARG` won't contain `verbose` in a useful way. This is a common misconception.
 
-```bash
-while getopts "vo:" opt; do
-	case "$opt" in
-		v) verbose=true ;;
-		o) output="$OPTARG" ;;
-	esac
-done
-shift $((OPTIND - 1))   # remove the parsed options, leave positional args
+**The correct approaches**:
+1. Use **manual `while/case` parsing** for long options (as shown above).
+2. Use **external tools** like `argbash` (code generator) or `getopt` (GNU, not portable).
+3. Use **short options only** with `getopts` and document `--verbose` as not supported.
 
-echo "Positional: $@"
-```
-::
-Now `Positional: file1 file2` (the options `-v -o out.txt` are removed, leaving the positional args).
-
-`OPTIND` is the index of the next unprocessed arg (4 in this case, after `-v -o out.txt`). `shift $((OPTIND - 1))` shifts past the 3 parsed options, leaving `file1 file2`.
-
-**The lesson**: `getopts` parses options but doesn't remove them from `$@` — it updates `OPTIND`. After the loop, `shift $((OPTIND - 1))` removes the parsed options, leaving the positional args. Without it, `$@` still includes the options.
+**The lesson**: `getopts` is for short options only (`-v`, `-o VALUE`). For `--verbose`, use manual `while [[ $# -gt 0 ]]; do case "$1" in ... esac; done` parsing.
 
 </details>
-
-## Summary
-
-You can use positional args (`$1`, `$@`, `$#`), defaults (`${1:-default}`), mandatory checks (`${1:?}`), `getopts` (short options, `OPTARG`, `OPTIND`, `shift` after), manual long-option parsing (`while`/`case`), subcommands (`case "$1"`), `shift`, and read stdin (`$(cat)`, `while read`, `[[ -t 0 ]]`) — with the `shift`-after-`getopts` and `"$@"`-quoted traps internalized. Next: debugging and error handling.

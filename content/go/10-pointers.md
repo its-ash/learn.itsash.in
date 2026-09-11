@@ -1,196 +1,366 @@
+---
+title: "10 — Pointers"
+description: "Escape analysis, stack vs heap allocation, value vs pointer receiver method sets, nil safety patterns, and when pointers help vs hurt performance."
+---
+
 # 10 — Pointers
 
-Go has pointers, but no pointer arithmetic (except `unsafe`) and no manual memory management. Pointers are for sharing (so a function can modify the caller's variable) and avoiding copies.
-
-## Basics
+## Pointer Basics and Auto-Dereferencing
 
 ::code-wrapper{language="go"}
 ```go
-x := 5
-p := &x          // p is *int, points to x
-fmt.Println(*p)  // 5 (dereference)
-*p = 10          // modify x through the pointer
-fmt.Println(x)   // 10
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ &x    │ address of x (creates a *T)                                 │
+// │ *p    │ value at p (dereference)                                    │
+// │ *T    │ pointer-to-T type                                           │
+// │ nil   │ zero value of any pointer type                              │
+// └──────────────────────────────────────────────────────────────────────┘
+//
+// Go pointers are SAFE:
+//   - No pointer arithmetic (except unsafe.Pointer)
+//   - No dangling pointers (GC keeps data alive while referenced)
+//   - The compiler decides stack vs heap (escape analysis)
 
-var pp *int      // nil pointer (zero value of *int)
-// *pp = 5       // panic: nil pointer dereference
-``
-::
+func basics() {
+	x := 5
+	p := &x          // p is *int, points to x (on the stack)
+	fmt.Println(*p)  // 5 (dereference)
+	*p = 10          // modify x through the pointer
+	fmt.Println(x)   // 10
 
-- `&x` — address of `x`.
-- `*p` — value at `p` (dereference).
-- `*int` — pointer to `int`.
-- `nil` — the zero value of a pointer.
+	var pp *int      // nil pointer (zero value of *int)
+	// *pp = 5        // panic: nil pointer dereference (runtime, not compile)
+	if pp != nil {   // ✅ always check before dereferencing nullable pointers
+		_ = *pp
+	}
+}
 
-## Pointers to Structs
-
-::code-wrapper{language="go"}
-```go
+// Struct auto-dereferencing — no -> operator (unlike C):
 type User struct{ Name string }
 
-u := &User{Name: "Alice"}   // *User
-u.Name = "Bob"              // shorthand for (*u).Name — Go auto-dereferences
-fmt.Println(u.Name)         // Bob
+func autoDeref() {
+	u := &User{Name: "Alice"}  // *User
+	u.Name = "Bob"              // ✅ auto-dereference: equivalent to (*u).Name
+	fmt.Println(u.Name)         // Bob
 
-// Go auto-dereferences field/method access on pointers:
-// u.Name == (*u).Name
-// u.Method() == (*u).Method() (if value receiver) or u.Method() (if pointer receiver)
-``
-::
+	// This works for fields AND methods:
+	// u.Method() == (*u).Method() (if value receiver)
+	// u.Method() == u.Method()    (if pointer receiver — already a pointer)
+}
+```
 
-No `->` operator (unlike C) — Go auto-dereferences `.` on pointers.
-
-## Passing Pointers to Functions
-
-A function that receives a pointer can modify the caller's variable:
+## Escape Analysis — Stack vs Heap
 
 ::code-wrapper{language="go"}
 ```go
-func increment(n *int) {
-	*n++
+// The Go compiler performs ESCAPE ANALYSIS to decide stack vs heap:
+//   - If a variable's address doesn't escape the function → stack (free)
+//   - If a variable's address escapes (returned, stored in a global,
+//     passed to a function that stores it) → heap (GC-managed)
+//
+// You DON'T control this — the compiler does. But you can see its decisions:
+
+// Stack-allocated (no escape):
+func stackAlloc() int {
+	x := 42      // stays on the stack — &x doesn't escape
+	return x
 }
 
-x := 5
-increment(&x)
-fmt.Println(x)   // 6
-``
-::
+// Heap-allocated (escapes — address returned):
+func heapAlloc() *int {
+	x := 42
+	return &x    // x escapes to the heap (its address leaves the function)
+}
 
-Without the pointer, `x` would be copied (value semantics) and the caller's `x` unchanged. Use pointers when the function should modify the caller's data, or to avoid copying large structs.
+// The difference matters:
+//   stack: zero GC pressure, instant allocation/deallocation
+//   heap:  GC tracks it, adds pause pressure, allocation overhead
 
-## Returning Pointers
+// View escape decisions:
+//   go build -gcflags='-m' ./...
+//   go build -gcflags='-m -m' ./...  (verbose — explains WHY)
+//
+// Output:
+//   ./main.go:5:2: moved to heap: x    (x escaped because &x was returned)
+//   ./main.go:10:2: x does not escape   (x stays on stack)
+```
 
-Go is safe to return pointers to local variables — the compiler performs **escape analysis** and allocates the variable on the heap if its address escapes:
+### Escape analysis — the interface escape
 
 ::code-wrapper{language="go"}
 ```go
+// ⚠️ Assigning a value to an interface often causes an escape —
+// the interface needs to hold a pointer to the value, so the value
+// moves to the heap.
+
+func interfaceEscape() {
+	x := 42
+	var i any = x  // x escapes to heap — interface stores (type, *x)
+	_ = i
+}
+// go build -gcflags='-m': "x escapes to heap"
+
+// ✅ Avoid the escape for known types:
+func noEscape() {
+	x := 42
+	processInt(x)  // x stays on stack — no interface, no escape
+}
+
+func processInt(n int) { _ = n }
+
+// This is why `fmt.Println(x)` causes x to escape — fmt.Println takes
+// ...any, so every argument is boxed into an interface → heap allocation.
+// In hot paths, avoid fmt; use strconv or direct writes.
+```
+
+## When to Use Pointers — Decision Guide
+
+::code-wrapper{language="go"}
+```go
+// ┌─────────────────────────────────────┬──────────────────────────┐
+// │ Situation                           │ Use                      │
+// │ ────────────────────────────────────│ ───────────────────────── │
+// │ Function modifies caller's data     │ Pointer                  │
+// │ Large struct (>64 bytes)           │ Pointer (avoid copy)     │
+// │ Small struct (≤64 bytes, ≤8 words)  │ Value (copy is cheap)    │
+// │ Need nil as a meaningful value      │ Pointer                  │
+// │ Method mutates the receiver         │ Pointer receiver         │
+// │ Storing in an interface             │ Value (or pointer — see │
+// │                                     │   method set rules)      │
+// │ Map/slice/chan (already reference)  │ Value (pass directly)    │
+// └─────────────────────────────────────┴──────────────────────────┘
+
+// ─── Value: small, read-only ───
+type Point struct{ X, Y float64 }  // 16 bytes — copy is cheap
+
+func distance(p1, p2 Point) float64 {  // values — no aliasing, no GC
+	dx := p1.X - p2.X
+	dy := p1.Y - p2.Y
+	return math.Sqrt(dx*dx + dy*dy)
+}
+
+// ─── Pointer: large struct, mutation ───
+type BigConfig struct {
+	DSN       string
+	Timeouts  map[string]time.Duration
+	Pools     map[string]int
+	Features  []string
+	Middleware []func(http.Handler) http.Handler
+	// ~200+ bytes — copy is expensive
+}
+
+func updateConfig(cfg *BigConfig, key string, val time.Duration) {  // pointer
+	cfg.Timeouts[key] = val  // modifies the caller's config
+}
+
+// ─── Pointer: nil is meaningful ───
+type OptionalUser struct {
+	User *User  // nil = no user, non-nil = user present
+}
+
+func findUser(id int64) *User {  // nil = not found
+	if id <= 0 {
+		return nil
+	}
+	return &User{ID: id}
+}
+```
+
+## Returning Pointers — Safe in Go
+
+::code-wrapper{language="go"}
+```go
+// In C, returning &local is a dangling pointer (local is destroyed on return).
+// In Go, escape analysis moves the local to the heap if its address escapes.
+// The GC keeps it alive as long as the pointer exists. No dangling pointers.
+
 func newUser() *User {
-	u := User{Name: "Alice"}   // local variable
-	return &u                   // safe — u escapes to the heap
+	u := User{Name: "Alice"}  // local — would be stack in C
+	return &u                  // u escapes to heap — GC manages its lifetime
+	// Safe: the compiler sees &u leaves the function, moves u to the heap.
 }
-``
-::
 
-In C, this would be a dangling pointer (the local is destroyed on return). In Go, the GC keeps `u` alive as long as the pointer exists. You don't decide stack vs. heap — the compiler does.
+// This is idiomatic Go — constructors return *T:
+func NewServer(addr string) *Server {
+	return &Server{
+		addr:    addr,
+		timeout: 30 * time.Second,
+	}
+}
 
-## When to Use Pointers
+// ⚠️ Don't over-optimize by returning values to "avoid heap allocation":
+func badNewUser() User {  // returns a value — but if the caller takes &result,
+	return User{Name: "Alice"}  // it escapes anyway. Let the compiler decide.
+}
+```
 
-| Situation | Use |
-|---|---|
-| Function should modify the caller's variable | Pointer |
-| Large struct (avoid copy overhead) | Pointer |
-| Small struct (a few words) | Value (copy is cheap) |
-| Need to share/mutate state | Pointer |
-| Method that mutates the receiver | Pointer receiver (chapter 11) |
-| `nil` is a meaningful value | Pointer (value types can't be nil) |
-
-**Don't over-pointer** — copying small structs (a few words) is cheap and avoids GC pressure (heap allocations). Use pointers deliberately, not reflexively.
-
-## Pointers and Interfaces
-
-A value satisfies an interface whether it's a `T` or a `*T` — but the **method set** differs:
+## Pointers and Interface Method Sets
 
 ::code-wrapper{language="go"}
 ```go
-type Speaker interface{ Speak() }
+// The METHOD SET of a type determines which interfaces it satisfies:
+//   - Value type T:    methods with VALUE receivers only
+//   - Pointer type *T: methods with VALUE AND pointer receivers
 
-type Dog struct{}
-func (d Dog) Speak() {}         // value receiver — method set of Dog
-func (d *Dog) Bark() {}         // pointer receiver — method set of *Dog
+type Speaker interface{ Speak() string }
+type Barker interface{ Bark() string }
 
-var s Speaker
-s = Dog{}      // OK — Dog has Speak (value receiver)
-s = &Dog{}     // OK — *Dog has all methods of Dog (and more)
+type Dog struct{ Name string }
 
-var b interface{ Bark() }
-b = Dog{}      // ERROR — Dog's method set doesn't include Bark (pointer receiver)
-b = &Dog{}     // OK — *Dog has Bark
-``
-::
+func (d Dog) Speak() string  { return d.Name + " speaks" }  // value receiver
+func (d *Dog) Bark() string  { return d.Name + " barks" }   // pointer receiver
 
-A value type's method set is only its value-receiver methods; a pointer type's method set is *all* methods (value and pointer receivers). This is why you can't put a `Dog{}` (value) into an interface requiring a pointer-receiver method.
+func methodSetDemo() {
+	var s Speaker
+	s = Dog{Name: "Rex"}   // ✅ Dog has Speak (value receiver)
+	s = &Dog{Name: "Rex"}  // ✅ *Dog has Speak (promoted from value receiver)
 
-## `new`
+	var b Barker
+	// b = Dog{Name: "Rex"}  // ❌ compile error: Dog's method set lacks Bark (pointer receiver)
+	b = &Dog{Name: "Rex"}  // ✅ *Dog has Bark
+
+	// RULE: if ANY method has a pointer receiver, you MUST use *T to
+	// satisfy an interface that includes that method.
+}
+
+// ─── Consistency rule ───
+// If any method of a type has a pointer receiver, make ALL methods
+// pointer receivers. Mixing causes confusion and is flagged by linters.
+//
+// ❌ ANTI-PATTERN: mixing receivers
+//   func (d Dog) Name() string { ... }      // value receiver
+//   func (d *Dog) SetName(s string) { ... }  // pointer receiver
+//   // Dog{} satisfies Name but not SetName; &Dog{} satisfies both.
+//   // This asymmetry is a common source of interface satisfaction bugs.
+```
+
+## Nil Pointer Safety Patterns
 
 ::code-wrapper{language="go"}
 ```go
-p := new(int)   // *int, pointing to a zero-valued int
+// ─── Nil-safe methods (pointer receiver can handle nil) ───
+type Logger struct{ prefix string }
+
+func (l *Logger) Log(msg string) {
+	if l == nil {  // ✅ check for nil receiver — pointer receivers CAN be nil
+		fmt.Println("[null-logger]", msg)
+		return
+	}
+	fmt.Printf("[%s] %s\n", l.prefix, msg)
+}
+
+func nilSafeDemo() {
+	var l *Logger  // nil
+	l.Log("hello")  // ✅ prints "[null-logger] hello" — no panic
+	// This works because the method checks for nil receiver.
+}
+
+// ─── The nil receiver trap (value receiver) ───
+type BadLogger struct{ prefix string }
+func (b BadLogger) Log(msg string) {  // VALUE receiver
+	// b is a copy — if the receiver is nil, Go tries to dereference
+	// to copy the value → panic
+	fmt.Printf("[%s] %s\n", b.prefix, msg)
+}
+
+func badNilDemo() {
+	var b *BadLogger  // nil
+	// b.Log("hello")  // panic: nil pointer dereference
+	// Go tries to dereference b (nil) to copy BadLogger → panic.
+	_ = b
+}
+
+// ─── Production pattern: nil as "no value" sentinel ───
+type Config struct {
+	Timeout *time.Duration  // nil = no timeout (use default), non-nil = set
+}
+
+func (c *Config) GetTimeout() time.Duration {
+	if c.Timeout == nil {
+		return 30 * time.Second  // default
+	}
+	return *c.Timeout  // explicit value
+}
+
+// This pattern (pointer to a value type) lets you distinguish
+// "not set" (nil) from "set to zero value" (e.g., *Duration = 0).
+```
+
+## `new` vs `&T{}`
+
+::code-wrapper{language="go"}
+```go
+// new(T) — allocates a zero-valued T, returns *T. Rarely used.
+p := new(int)   // *int, *p = 0
 *p = 5
-``
-::
 
-`new(T)` allocates a zero-valued `T` and returns `*T`. Rarely used — `&T{}` (struct) or `&x` (variable) are more common and clearer.
+// &T{} — idiomatic for structs (can initialize fields):
+u := &User{Name: "Alice"}  // *User, fields initialized
+
+// `&T{}` is almost always clearer than `new(T)` — you can set fields
+// in the same expression. Use new only when you need a *T for a
+// non-struct type and don't want a named variable:
+//   p := new(int)  vs  var x int; p := &x  — new is slightly cleaner here.
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use pointer receivers consistently within a type — if any method has a pointer receiver (e.g., it mutates), make *all* methods pointer receivers. Mixing value and pointer receivers causes confusion (the method set differs) and is flagged by `go vet`/`golangci-lint`.
-- **Idiom**: use pointers for large structs (avoid copy overhead) and for mutation; use values for small structs and read-only data. The default is value — Go is value-semantics-first; reach for a pointer when you have a reason (mutation, size, nil-meaning, interface method set).
-- **Idiom**: don't return pointers to small types to "avoid allocation" — escape analysis already keeps small, non-escaping values on the stack. Premature `&` to "optimize" can force an escape (heap allocation) where a value return would've been stack-allocated and free.
-- **Idiom**: use `nil` as a meaningful zero value for pointers — `*User` can be `nil` (no user); `User` (value) can't. When "no value" is a meaningful state (optional fields, absent results), a pointer expresses it; a value type can't.
-- **Performance**: run `go build -gcflags="-m"` to see escape analysis decisions — it prints "moved to heap: x" for escaping variables and "x does not escape" for stack-allocated ones. This tells you whether your "optimization" actually avoided an allocation or forced one.
+- **Performance**: run `go build -gcflags='-m' ./...` to see escape analysis — it tells you which variables escape to the heap. In hot paths, eliminating escapes (keeping values on the stack) is the #1 allocation-reduction technique.
+- **Idiom**: use pointer receivers consistently — if ANY method has a pointer receiver, make ALL methods pointer receivers. Mixing value and pointer receivers causes method-set confusion and is flagged by linters.
+- **Performance**: don't return `*T` to "avoid a copy" for small structs — escape analysis may heap-allocate the pointer, adding GC pressure worse than a value copy. For structs ≤ 64 bytes, value returns are often faster (no allocation, no GC).
+- **Idiom**: use `*T` (pointer to a value type) for optional fields where "not set" (nil) differs from "set to zero" — `*time.Duration` where nil = default, `0` = no timeout. This is the "nullability" pattern for value types.
+- **Safety**: nil pointer dereference is a runtime panic, not a compile error. Always check `if p != nil` before dereferencing nullable pointers. For exported APIs, document nil behavior ("returns nil if not found").
+- **Debug**: `go build -gcflags='-m -m'` shows WHY a variable escapes — "p does not escape because ..." or "leaking param: p". This helps understand which code patterns cause heap allocations.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **No pointer arithmetic**: `p++` (to move to the next int) is illegal (except in `unsafe`). Go pointers are references, not addresses to compute with.
-- **`nil` pointer dereference panics**: `*p` where `p == nil` is a runtime panic (not a compile error). Always check for nil if the pointer might be nil.
-- **Returning a pointer to a local is safe**: escape analysis moves the local to the heap if its address escapes; the GC keeps it alive. No dangling pointers in Go.
-- **`&T{}` vs `new(T)`**: `&User{}` is idiomatic (clear, can initialize fields); `new(User)` is rare (returns `*User` zero value, no initialization). Prefer `&T{}`.
-- **Pointers and interfaces (method set)**: a value type doesn't satisfy an interface that requires pointer-receiver methods. `var i I = T{}` fails if `I` requires a `*T` method. Use `&T{}`.
-- **Pointer to map/slice/chan is usually wrong**: these are already reference types (a slice header, a map pointer). `*map[K]V` is a pointer to a map pointer — almost never what you want. Pass the map directly.
-- **Copy of a struct with a pointer field is a shallow copy**: `a := MyStruct{Items: []int{1,2}}; b := a` — `b.Items` is the same slice header (shared underlying array). Modifying `b.Items[0]` affects `a.Items[0]`. Use `copy`/`slices.Clone` for deep copies.
-- **`*p++` is `(*p)++`**: Go parses `*p++` as `(*p)++` (dereference, then increment the value). No ambiguity like in C.
-- **Passing a large struct by value copies it**: `func f(u User)` copies the whole `User` on every call. For large structs, `func f(u *User)` avoids the copy. For small structs, the copy is cheaper than the indirection.
-- **Pointers to loop variables (pre-1.22)**: `for _, v := range items { save(&v) }` — pre-1.22, all `&v` point to the same `v` (the final value). 1.22+ fixes this. On older Go, copy: `v := v; save(&v)`.
+- **No pointer arithmetic**: `p++` (to move to the next element) is illegal (except `unsafe.Pointer`). Go pointers are references, not computable addresses.
+- **`nil` pointer dereference panics at runtime**: `*p` where `p == nil` is a runtime panic (not a compile error). Check before dereferencing.
+- **Returning `&local` is safe**: escape analysis moves the local to the heap if its address escapes. The GC manages its lifetime. No dangling pointers in Go.
+- **`&T{}` vs `new(T)`**: `&User{Name: "Alice"}` is idiomatic (initializes fields); `new(User)` returns a zero-value `*User` (no initialization). Prefer `&T{}`.
+- **Pointer to map/slice/chan is usually wrong**: these are already reference types (internally pointers). `*map[K]V` is a pointer to a map pointer — double indirection. Pass the map directly.
+- **Copy of a struct with pointer/slice fields is shallow**: `a := S{Items: []int{1,2}}; b := a` — `b.Items` shares the same underlying array. `b.Items[0] = 99` affects `a.Items[0]`. Use `slices.Clone` or `copy` for deep copies.
+- **`*p++` is `(*p)++`**: Go parses `*p++` as dereference-then-increment the value. No C-style ambiguity.
+- **Passing a large struct by value copies it**: `func f(u User)` copies the whole User on every call. For large structs, use `func f(u *User)`. For small structs (≤ 64 bytes), the value copy is cheaper than the pointer indirection.
+- **Pointers to loop variables (pre-1.22)**: `for _, v := range items { save(&v) }` — pre-1.22, all `&v` point to the same `v` (final value). 1.22+ fixes this. Portable fix: `v := v; save(&v)`.
+- **Interface boxing causes escape**: `var i any = x` moves `x` to the heap (the interface needs a pointer to the value). In hot paths, avoid passing values through `any` — use concrete types.
+- **`unsafe.Pointer` bypasses all safety**: `unsafe.Pointer` can convert between pointer types, do arithmetic, and read/write arbitrary memory. Only for CGO, low-level optimization, or `reflect`. Misuse causes crashes, data corruption, and security holes.
 
-## 🧠 Spot the Bug
-
-A developer collects pointers to slice elements and is surprised they all point to the same value:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-items := []int{1, 2, 3}
-var ptrs []*int
-for _, v := range items {
-	ptrs = append(ptrs, &v)   // ❌ all point to the same v
+func f() *int {
+	x := 42
+	return &x
 }
-for _, p := range ptrs {
-	fmt.Println(*p)   // 3 3 3 (on pre-1.22)
+
+func g() int {
+	x := 42
+	return x
 }
-``
+```
+
+Which function's `x` escapes to the heap, and why?
 ::
-
-What's happening?
-
 <details>
 <summary>Answer</summary>
 
-Pre-Go 1.22, `range` uses a **single `v` variable** reused across iterations (not a fresh `v` per iteration). `&v` is the address of that single variable — all three pointers point to the same location, which holds the final value (3) after the loop.
+**`f()`'s `x` escapes to the heap.** `&x` is returned, so `x`'s address leaves the function. Escape analysis detects this and moves `x` to the heap so the GC can manage its lifetime after `f` returns.
 
-Go 1.22+ fixes this: each iteration gets a distinct `v`, so the pointers are different and print 1, 2, 3.
+**`g()`'s `x` stays on the stack.** `x` is returned by value (copied to the caller), and its address never escapes. No heap allocation.
 
-The fix (portable across versions) — create a local copy per iteration:
-
-```go
-for _, v := range items {
-	v := v            // fresh copy per iteration
-	ptrs = append(ptrs, &v)
-}
+You can verify:
+```bash
+go build -gcflags='-m' main.go
+# ./main.go:2:2: moved to heap: x    ← f's x escapes
+# (g's x doesn't appear — it stays on the stack, no message)
 ```
-::
-Or iterate by index and take the address of the slice element (which *is* distinct per element):
 
-```go
-for i := range items {
-	ptrs = append(ptrs, &items[i])
-}
-```
-::
-`&items[i]` points into the slice's backing array — each is a distinct address. But beware: if the slice is reallocated (append exceeds capacity), the pointers dangle (point to the old array). The `v := v` copy is safer.
-
-**The lesson**: pre-1.22, `range` reuses the loop variable; `&v` captures the address of the single variable (all pointers see the final value). Copy `v := v` per iteration, or use `&items[i]` (with care about slice reallocation). Go 1.22+ fixes this.
+The lesson: returning `&x` forces a heap allocation. For small types, returning the value (not the pointer) keeps it on the stack — zero allocation, zero GC pressure. Only return pointers when you need to (large structs, nil-sentinel, mutation).
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now use `&`/`*`, understand auto-dereferencing, pass pointers for mutation/large structs, return pointers safely (escape analysis), choose between value and pointer receivers (and their method sets), and avoid the loop-variable-pointer and nil-dereference traps. Next: methods and receivers.
+→ [11 — Methods & Receivers](/go/11-methods-and-receivers) — value vs pointer receivers, method-set rules, nil receiver methods, and embedding promotion.

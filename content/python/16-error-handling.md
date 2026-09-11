@@ -1,34 +1,97 @@
 # 16 — Error Handling
 
-## The Full `try` Statement
+## Production Exception Hierarchy — Structured Errors for API Boundaries
 
 ::code-wrapper{language="python"}
 ```python
-def parse_config(raw):
+# ── A production exception hierarchy for a service layer ──
+# Design goals:
+#   1. One base exception (ServiceError) for catch-all by callers
+#   2. Category exceptions (AuthError, ValidationError) for domain-specific handling
+#   3. Specific exceptions carry structured data for programmatic response building
+#   4. All exceptions chain from their cause via `raise ... from e`
+
+from typing import Any
+
+class ServiceError(Exception):
+    """Base for all service-layer errors. Catch this for 'anything from our code'."""
+    def __init__(self, message: str, *, code: str = "SERVICE_ERROR"):
+        super().__init__(message)
+        self.code = code   # machine-readable error code for API responses
+
+class ValidationError(ServiceError):
+    """Input validation failure with per-field error details."""
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors   # [{"field": "email", "message": "required"}, ...]
+        message = "; ".join(f"{e['field']}: {e['message']}" for e in errors)
+        super().__init__(message, code="VALIDATION_ERROR")
+
+class AuthError(ServiceError):
+    """Authentication/authorization failure."""
+    pass
+
+class RateLimitError(ServiceError):
+    """Rate limit exceeded — carries retry-after hint."""
+    def __init__(self, retry_after: float):
+        self.retry_after = retry_after
+        super().__init__(f"rate limited, retry after {retry_after}s", code="RATE_LIMITED")
+
+# ── Usage: translating low-level errors into domain-specific ones ──
+def parse_user(raw: dict[str, Any]) -> dict:
+    """Parse and validate user input — raises ValidationError with field details."""
+    errors = []
+
+    if not raw.get("email"):
+        errors.append({"field": "email", "message": "required"})
+    elif "@" not in raw["email"]:
+        errors.append({"field": "email", "message": "invalid format"})
+
+    age = raw.get("age")
+    if age is None:
+        errors.append({"field": "age", "message": "required"})
+    elif not isinstance(age, int):
+        errors.append({"field": "age", "message": "must be integer"})
+    elif age < 0 or age > 150:
+        errors.append({"field": "age", "message": "must be 0-150"})
+
+    if errors:
+        raise ValidationError(errors)   # structured data attached, not just a string
+
+    return raw
+
+# ── Exception chaining: translate a DB error into a domain error ──
+class DatabaseError(ServiceError):
+    pass
+
+def load_user(user_id: int) -> dict:
     try:
-        value = int(raw)
-    except ValueError:
-        print(f"'{raw}' is not a valid integer")
-        return None
-    else:
-        print("Parsing succeeded")     # runs ONLY if no exception was raised
-        return value
-    finally:
-        print("Cleanup runs regardless")   # ALWAYS runs — success, handled exception, or unhandled
+        # simulate a DB call that might fail
+        if user_id < 0:
+            raise KeyError(f"user {user_id} not found")
+        return {"id": user_id, "name": "Ada"}
+    except KeyError as e:
+        # `from e` preserves the original traceback — debuggable, not just "user not found"
+        raise DatabaseError(f"user {user_id} not found") from e
 
-print(parse_config("42"))
-# Parsing succeeded
-# Cleanup runs regardless
-# 42
+# ── API layer: converting exceptions to HTTP responses ──
+def handle_request(raw_input: dict):
+    """Simulated API handler — maps exceptions to structured HTTP-like responses."""
+    try:
+        user = parse_user(raw_input)
+        return {"status": 200, "body": user}
+    except ValidationError as e:
+        return {"status": 422, "body": {"code": e.code, "errors": e.errors}}
+    except ServiceError as e:
+        return {"status": 500, "body": {"code": e.code, "message": str(e)}}
 
-print(parse_config("oops"))
-# 'oops' is not a valid integer
-# Cleanup runs regardless
-# None
+# Test: validation failure with multiple field errors
+result = handle_request({"age": -5})
+print(result)
+# {'status': 422, 'body': {'code': 'VALIDATION_ERROR',
+#   'errors': [{'field': 'email', 'message': 'required'},
+#              {'field': 'age', 'message': 'must be 0-150'}]}}
 ```
 ::
-
-Four clauses, each with a distinct purpose: `try` (code that might fail), `except` (handle specific failures), `else` (runs only on success — keeps the "happy path" separate from error handling), `finally` (runs unconditionally, even if an exception propagates past all `except` clauses or a `return`/`break` exits the block early).
 
 ## Exception Hierarchy and Catching Specifically
 

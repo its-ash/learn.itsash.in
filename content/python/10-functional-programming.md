@@ -1,73 +1,107 @@
 # 10 — Functional Programming
 
-## Functions as First-Class Values
-
-Python supports functional programming as one of several paradigms, not as its sole model. Functions are objects: they can be assigned, stored, passed, and returned like any other value.
+## Production Pipeline — `functools.partial` + `operator` + Composition
 
 ::code-wrapper{language="python"}
 ```python
-def square(x):
-    return x * x
+# ── A data transformation pipeline using functional composition ──
+# Each stage is a curried/partial function — no lambdas, all named, all testable.
 
-operation = square           # assign the function object itself (no parens!)
-print(operation(5))            # 25
-print(operation.__name__)        # "square"
+import functools
+import operator
+from dataclasses import dataclass
 
-functions = [square, abs, str]     # a list of callables
-for f in functions:
-    print(f(-4))
-# 16
-# 4
-# '-4'
-```
-::
+@dataclass
+class Order:
+    id: int
+    items: list[dict]    # each: {"name": str, "price": float, "qty": int}
+    status: str
 
-## `lambda` — Anonymous, Single-Expression Functions
+# ── A complete pipeline: filter → map → reduce, all lazy, all composable ──
+def process_orders(orders: list[Order], target_status: str) -> dict:
+    """Filter by status, compute per-order totals, return summary statistics."""
+    import statistics
 
-::code-wrapper{language="python"}
-```python
-square = lambda x: x ** 2
-add = lambda a, b: a + b
+    # Stage 1: filter — generator expression, lazy
+    matching = (o for o in orders if o.status == target_status)
 
-print(square(5))    # 25
-print(add(2, 3))      # 5
-```
-::
+    # Stage 2: map — compute order total via sum of (price * qty) per item
+    totals = (
+        sum(item["price"] * item["qty"] for item in o.items)
+        for o in matching
+    )
 
-A `lambda` can only contain a single **expression**, not statements — no `if`/`else` statements (only the ternary expression form), no assignments, no loops, no `try`/`except`.
+    # Stage 3: reduce — materialize for multi-pass (mean AND max AND count)
+    totals_list = list(totals)   # must materialize — we need 3 passes (mean, max, len)
 
-::code-wrapper{language="python"}
-```python
-# Ternary expression IS allowed (it's an expression, not a statement)
-classify = lambda n: "even" if n % 2 == 0 else "odd"
-print(classify(4))   # even
+    return {
+        "count": len(totals_list),
+        "mean": statistics.mean(totals_list) if totals_list else 0,
+        "max": max(totals_list) if totals_list else 0,
+        "total": sum(totals_list),
+    }
 
-# This is a SyntaxError — assignment is a statement:
-# broken = lambda x: (y = x + 1)
-
-# This is also invalid — a `for` loop is a statement:
-# broken2 = lambda items: (for i in items: print(i))
-```
-::
-
-### Where lambdas genuinely shine: inline `key=` functions
-
-::code-wrapper{language="python"}
-```python
-people = [
-    {"name": "Ada", "age": 36},
-    {"name": "Alan", "age": 41},
-    {"name": "Grace", "age": 85},
+orders = [
+    Order(1, [{"name": "book", "price": 20.0, "qty": 2}], "shipped"),
+    Order(2, [{"name": "pen", "price": 5.0, "qty": 10}], "pending"),
+    Order(3, [{"name": "laptop", "price": 999.0, "qty": 1}], "shipped"),
 ]
+print(process_orders(orders, "shipped"))
+# {'count': 2, 'mean': 519.5, 'max': 999.0, 'total': 1039.0}
 
-by_age = sorted(people, key=lambda p: p["age"])
-by_name_length = sorted(people, key=lambda p: len(p["name"]))
-print([p["name"] for p in by_age])            # ['Ada', 'Alan', 'Grace']
-print([p["name"] for p in by_name_length])       # ['Ada', 'Alan', 'Grace'] (3,4,5)
+# ── operator module: replace common lambdas with named, C-implemented functions ──
+people = [{"name": "Ada", "age": 36}, {"name": "Grace", "age": 85}]
+
+# ANTI-PATTERN: lambdas for trivial property access — slower, no name in tracebacks
+by_age_lambda = sorted(people, key=lambda p: p["age"])
+
+# CORRECT: operator.itemgetter — C-implemented, named, faster
+by_age = sorted(people, key=operator.itemgetter("age"))
+by_name = sorted(people, key=operator.itemgetter("name"))
+# itemgetter("age") returns a callable equivalent to lambda p: p["age"] but faster
 ```
 ::
 
-**Best practice**: if a lambda needs a name, a comment to explain it, or spans more than one short expression, write a regular `def` function instead — PEP 8 explicitly discourages `f = lambda: ...` assignment because it produces a function with an unhelpful `__name__` (`<lambda>`) in tracebacks and loses the documentation benefits of `def`.
+::code-wrapper{language="python"}
+```python
+# ── Production: lru_cache memory leak on instance methods — the silent killer ──
+# ANTI-PATTERN: @lru_cache on an instance method keeps every instance alive forever
+
+from functools import lru_cache
+import gc
+
+class ExpensiveService:
+    def __init__(self, dataset_id: str):
+        self.dataset_id = dataset_id
+
+    @lru_cache(maxsize=None)   # BUG: caches on (self, *args) — self is part of the key!
+    def compute(self, key: str) -> float:
+        """Expensive computation — but the cache holds a STRONG reference to self."""
+        return hash(f"{self.dataset_id}:{key}") % 1000
+
+# Demonstrate the leak: create and drop instances, observe they're NOT collected
+service = ExpensiveService("ds-1")
+service.compute("x")           # caches result — cache now holds a ref to `service`
+del service                    # drop our reference
+gc.collect()
+# The service object is STILL alive — lru_cache's internal dict holds (service, "x") -> result
+# In a long-running web process creating millions of service objects, this is a memory leak.
+
+# CORRECT: cache a module-level function taking only hashable args, not `self`
+@lru_cache(maxsize=1024)
+def _compute_cached(dataset_id: str, key: str) -> float:
+    """Module-level cache — no instance reference, bounded by maxsize."""
+    return hash(f"{dataset_id}:{key}") % 1000
+
+class ExpensiveServiceFixed:
+    def __init__(self, dataset_id: str):
+        self.dataset_id = dataset_id
+
+    def compute(self, key: str) -> float:
+        return _compute_cached(self.dataset_id, key)   # delegate to module-level cache
+
+# Now instances are freely collectable — the cache only holds (str, str) -> float
+```
 
 ::code-wrapper{language="python"}
 ```python

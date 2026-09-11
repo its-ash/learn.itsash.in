@@ -1,56 +1,121 @@
 # 21 — Concurrency: Threading & Multiprocessing
 
-## The GIL: Python's Global Interpreter Lock
+## The GIL in Practice — When Threading Helps and When It Doesn't
 
 ::code-wrapper{language="python"}
 ```python
-import threading
-import time
+# ── Production: benchmarking I/O-bound vs CPU-bound across threading/multiprocessing ──
+# Demonstrates the GIL's impact with real timing, not theoretical claims.
 
-def cpu_bound_work():
+import threading
+import multiprocessing as mp
+import time
+import requests
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+
+# ── I/O-bound: threading WINS (GIL released during network waits) ──
+def fetch_url(url: str) -> tuple[str, int]:
+    """I/O-bound task — releases GIL during socket recv, allowing true concurrency."""
+    try:
+        resp = requests.get(url, timeout=5)
+        return url, resp.status_code
+    except Exception as e:
+        return url, -1
+
+def io_bound_benchmark(urls: list[str]):
+    # Sequential — one at a time, total = sum of all latencies
+    t0 = time.perf_counter()
+    for url in urls:
+        fetch_url(url)
+    sequential = time.perf_counter() - t0
+
+    # Threaded — overlapping I/O waits, total ≈ slowest single request
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(fetch_url, urls))
+    threaded = time.perf_counter() - t0
+
+    print(f"I/O-bound: sequential={sequential:.2f}s, threaded={threaded:.2f}s")
+    print(f"  speedup: {sequential/threaded:.1f}x — threading helps (GIL released during I/O)")
+
+# ── CPU-bound: multiprocessing WINS (GIL blocks true parallelism in threads) ──
+def cpu_intensive(n: int) -> int:
+    """Pure Python computation — GIL prevents parallel bytecode execution across threads."""
     total = 0
-    for i in range(50_000_000):
-        total += i
+    for i in range(n):
+        total += i * i
     return total
 
-start = time.perf_counter()
-cpu_bound_work()
-cpu_bound_work()
-print(f"Sequential: {time.perf_counter() - start:.2f}s")
+def cpu_bound_benchmark(n: int, workers: int):
+    tasks = [n] * workers
 
-start = time.perf_counter()
-t1 = threading.Thread(target=cpu_bound_work)
-t2 = threading.Thread(target=cpu_bound_work)
-t1.start(); t2.start()
-t1.join(); t2.join()
-print(f"Two threads: {time.perf_counter() - start:.2f}s")   # NOT roughly half — often SLOWER than sequential!
+    # Sequential
+    t0 = time.perf_counter()
+    for task in tasks:
+        cpu_intensive(task)
+    sequential = time.perf_counter() - t0
+
+    # Threaded — NO speedup (GIL serializes bytecode execution)
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(cpu_intensive, tasks))
+    threaded = time.perf_counter() - t0
+
+    # Multiprocessing — TRUE parallelism (separate interpreters, separate GILs)
+    t0 = time.perf_counter()
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(cpu_intensive, tasks))
+    multiprocess = time.perf_counter() - t0
+
+    print(f"CPU-bound: sequential={sequential:.2f}s, threaded={threaded:.2f}s, multiprocess={multiprocess:.2f}s")
+    print(f"  threading speedup: {sequential/threaded:.1f}x (≈1.0 — GIL blocks parallelism)")
+    print(f"  multiprocessing speedup: {sequential/multiprocess:.1f}x (≈workers — true parallelism)")
+
+if __name__ == "__main__":   # REQUIRED for ProcessPoolExecutor (spawn re-imports module)
+    cpu_bound_benchmark(n=5_000_000, workers=4)
 ```
 ::
-
-The **Global Interpreter Lock (GIL)** is a single mutex inside CPython (the reference implementation) that ensures only one thread executes Python bytecode at any instant, no matter how many CPU cores are available or how many threads exist. This is why the two-thread version above is not meaningfully faster than the sequential version for CPU-bound work — the threads take turns holding the GIL, switching every few milliseconds, but never truly run Python code in parallel. The GIL exists because CPython's memory management (reference counting, covered in chapter 12) is not thread-safe without a global lock protecting it.
-
-**Best practice**: for CPU-bound work, `threading` does not provide real parallelism in CPython — use `multiprocessing` instead. For I/O-bound work (network calls, file access, waiting on external resources), `threading` (or `asyncio`, chapter 22) works well, because the GIL is released during I/O waits.
 
 ::code-wrapper{language="python"}
 ```python
+# ── Race condition: demonstrating the lost-update problem ──
+# counter += 1 is NOT atomic — it's LOAD + ADD + STORE, interruptible between any step.
+
 import threading
-import requests
 
-def fetch(url):
-    return requests.get(url).status_code
+counter = 0
+lock = threading.Lock()
 
-# I/O-bound: threads DO help here, because each thread releases the GIL while waiting on the network
-urls = ["https://example.com"] * 10
-threads = [threading.Thread(target=fetch, args=(url,)) for url in urls]
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-# Roughly as fast as the slowest single request, not 10x the total — genuine overlap during I/O waits
+def increment_unsafe(n: int):
+    """RACE CONDITION: counter += 1 compiles to multiple bytecodes, GIL can switch mid-way."""
+    global counter
+    for _ in range(n):
+        counter += 1   # LOAD_FAST counter; LOAD_CONST 1; BINARY_OP +=; STORE_FAST counter
+                       # GIL can release between LOAD and STORE → two threads read same old value
+
+def increment_safe(n: int, lock: threading.Lock):
+    """CORRECT: lock serializes the read-modify-write, no interleaving possible."""
+    global counter
+    for _ in range(n):
+        with lock:           # acquire on entry, release on exit (even on exception)
+            counter += 1     # only one thread can be inside this block at a time
+
+# Demonstrate the race
+counter = 0
+threads = [threading.Thread(target=increment_unsafe, args=(100_000,)) for _ in range(4)]
+for t in threads: t.start()
+for t in threads: t.join()
+print(f"Unsafe (expected 400000): {counter}")   # e.g. 387,341 — lost updates!
+
+# Demonstrate the fix
+counter = 0
+lock = threading.Lock()
+threads = [threading.Thread(target=increment_safe, args=(100_000, lock)) for _ in range(4)]
+for t in threads: t.start()
+for t in threads: t.join()
+print(f"Safe (expected 400000):   {counter}")   # 400000 — always correct
 ```
 ::
-
-> Python 3.13 introduced an experimental **free-threaded** build (`--disable-gil`) that removes the GIL entirely, enabling true multi-core parallelism for threads. As of this writing it's opt-in and not yet the default — the GIL's behavior described here is standard CPython.
 
 ## `threading` — Shared Memory, Explicit Locks
 

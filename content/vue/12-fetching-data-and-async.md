@@ -1,450 +1,473 @@
+---
+title: Vue 3 Engineering Reference — Fetching Data & Async
+description: Race condition prevention with AbortController, request deduplication, SWR pattern, pagination cursor management, optimistic updates, and Suspense-based async orchestration.
+---
+
 # 12 — Fetching Data & Async
 
-## The Baseline Pattern: Loading, Error, Data
+## useFetch — Production Race Condition Handler
 
-Every real data-fetching component needs to represent (at least) three states, not just "the data" — a fetch that hasn't resolved yet, one that failed, and one that succeeded:
+::code-wrapper{language="typescript" filename="useFetch.ts"}
+```typescript
+import { ref, watchEffect, toValue, type MaybeRefOrGetter, type Ref } from 'vue'
 
-::code-wrapper{language="vue" filename="ProductList.vue"}
-```vue
-<script setup>
-import { ref, onMounted } from 'vue'
-
-const products = ref([])
-const isLoading = ref(true)
-const error = ref(null)
-
-async function loadProducts() {
-  isLoading.value = true
-  error.value = null
-  try {
-    const res = await fetch('/api/products')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    products.value = await res.json()
-  } catch (err) {
-    error.value = err
-  } finally {
-    isLoading.value = false
-  }
+interface FetchOptions {
+  immediate?: boolean
+  refetch?: boolean  // re-fetch when source changes
+  transform?: (data: any) => any
 }
 
-onMounted(loadProducts)
+// ── Race condition prevention via AbortController ──
+// Every time the URL changes, the previous fetch is aborted.
+// Only the latest request's response is committed to state.
+export function useFetch<T>(
+  url: MaybeRefOrGetter<string>,
+  options: FetchOptions = {}
+) {
+  const data: Ref<T | null> = ref(null)
+  const error: Ref<Error | null> = ref(null)
+  const loading = ref(false)
+  const statusCode = ref<number | null>(null)
+
+  let abortController: AbortController | null = null
+
+  async function execute() {
+    const targetUrl = toValue(url)
+    if (!targetUrl) return
+
+    // ── Abort any in-flight request before starting a new one ──
+    abortController?.abort()
+    abortController = new AbortController()
+
+    loading.value = true
+    error.value = null
+
+    try {
+      const res = await fetch(targetUrl, { signal: abortController.signal })
+      statusCode.value = res.status
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      let json = await res.json()
+      if (options.transform) json = options.transform(json)
+      data.value = json as T
+    } catch (e) {
+      // ── AbortError is expected — don't set it as an error ──
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      error.value = e as Error
+    } finally {
+      loading.value = false
+    }
+  }
+
+  if (options.refetch !== false) {
+    // ── watchEffect auto-tracks toValue(url) — re-fetches on URL change ──
+    watchEffect(execute)
+  } else if (options.immediate) {
+    execute()  // one-time fetch, no re-fetch on change
+  }
+
+  return { data, error, loading, statusCode, refresh: execute }
+}
+```
+::
+
+## Request Deduplication — Coalescing Concurrent Fetches
+
+::code-wrapper{language="typescript" filename="useDedupFetch.ts"}
+```typescript
+import { ref, type Ref } from 'vue'
+
+// ── Deduplication: if a request to the same URL is in flight,
+//    reuse its promise instead of firing a second request. ──
+// Critical for components that mount simultaneously and fetch the same data.
+
+const cache = new Map<string, Promise<any>>()
+
+export function useDedupFetch<T>(url: string): {
+  data: Ref<T | null>
+  loading: Ref<boolean>
+  error: Ref<Error | null>
+} {
+  const data = ref<T | null>(null) as Ref<T | null>
+  const loading = ref(true)
+  const error = ref<Error | null>(null)
+
+  async function load() {
+    // ── Check cache: is a request for this URL already in flight? ──
+    if (cache.has(url)) {
+      try {
+        data.value = await cache.get(url)!
+        return
+      } catch (e) {
+        error.value = e as Error
+        return
+      } finally {
+        loading.value = false
+      }
+    }
+
+    // ── Start a new request and cache the PROMISE (not the result) ──
+    const promise = fetch(url).then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    })
+
+    cache.set(url, promise)  // other concurrent callers will await this same promise
+
+    try {
+      data.value = await promise
+    } catch (e) {
+      error.value = e as Error
+    } finally {
+      loading.value = false
+      cache.delete(url)  // clear cache entry after resolution
+    }
+  }
+
+  load()
+  return { data, loading, error }
+}
+```
+::
+
+## SWR (Stale-While-Revalidate) Pattern
+
+::code-wrapper{language="typescript" filename="useSWR.ts"}
+```typescript
+import { ref, watchEffect, toValue, type MaybeRefOrGetter, type Ref } from 'vue'
+
+// ── SWR: show cached (stale) data immediately, revalidate in background ──
+// Provides instant UI render from cache while fetching fresh data.
+
+const cache = new Map<string, { data: any; timestamp: number }>()
+
+export function useSWR<T>(
+  key: MaybeRefOrGetter<string>,
+  fetcher: (url: string) => Promise<T>,
+  ttl = 60_000  // cache validity: 60 seconds
+): { data: Ref<T | null>; loading: Ref<boolean>; error: Ref<Error | null> } {
+  const data: Ref<T | null> = ref(null) as Ref<T | null>
+  const loading = ref(true)
+  const error = ref<Error | null>(null)
+
+  watchEffect(async () => {
+    const url = toValue(key)
+    if (!url) return
+
+    const cached = cache.get(url)
+
+    // ── Phase 1: serve stale data immediately (instant render) ──
+    if (cached) {
+      data.value = cached.data
+      loading.value = false
+
+      // If cache is fresh, no revalidation needed
+      if (Date.now() - cached.timestamp < ttl) return
+    }
+
+    // ── Phase 2: revalidate in background (fresh fetch) ──
+    try {
+      const fresh = await fetcher(url)
+      data.value = fresh
+      cache.set(url, { data: fresh, timestamp: Date.now() })
+    } catch (e) {
+      // If we have stale data, keep it — don't overwrite with error
+      if (!cached) error.value = e as Error
+    } finally {
+      loading.value = false
+    }
+  })
+
+  return { data, loading, error }
+}
+```
+::
+
+## Pagination — Cursor-Based with Accumulated Results
+
+::code-wrapper{language="typescript" filename="usePaginatedFetch.ts"}
+```typescript
+import { ref, computed, type Ref } from 'vue'
+
+interface PageResult<T> {
+  items: T[]
+  nextCursor: string | null
+  hasMore: boolean
+}
+
+// ── Cursor pagination: appends new pages to existing results ──
+// Better than offset pagination: stable under inserts/deletes.
+export function usePaginatedFetch<T>(
+  baseUrl: string,
+  pageSize = 20
+) {
+  const items: Ref<T[]> = ref([]) as Ref<T[]>
+  const cursor = ref<string | null>(null)
+  const loading = ref(false)
+  const hasMore = ref(true)
+  const error = ref<Error | null>(null)
+
+  // ── Computed: total count is derived from items array length ──
+  const total = computed(() => items.value.length)
+
+  async function loadNext() {
+    if (loading.value || !hasMore.value) return
+
+    loading.value = true
+    error.value = null
+
+    try {
+      const params = new URLSearchParams({ limit: String(pageSize) })
+      if (cursor.value) params.set('cursor', cursor.value)
+
+      const res = await fetch(`${baseUrl}?${params}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+      const page: PageResult<T> = await res.json()
+
+      // ── Append, don't replace — preserves previously loaded items ──
+      items.value.push(...page.items)
+      cursor.value = page.nextCursor
+      hasMore.value = page.hasMore
+    } catch (e) {
+      error.value = e as Error
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function reset() {
+    items.value = []
+    cursor.value = null
+    hasMore.value = true
+    error.value = null
+  }
+
+  return { items, loading, hasMore, total, error, loadNext, reset }
+}
+```
+::
+
+## Optimistic Updates — Rollback on Failure
+
+::code-wrapper{language="typescript" filename="optimistic-update.ts"}
+```typescript
+import { ref, type Ref } from 'vue'
+
+// ── Optimistic update: update UI before server confirms ──
+// Rollback on failure — user sees instant response, no waiting.
+export function useOptimisticUpdate<T extends { id: string }>(
+  items: Ref<T[]>,
+  updateFn: (item: T) => Promise<T>
+) {
+  const error: Ref<string | null> = ref(null)
+
+  async function update(item: T, patch: Partial<T>) {
+    error.value = null
+
+    // ── Save original for potential rollback ──
+    const original = items.value.find(i => i.id === item.id)
+    if (!original) return
+
+    // ── Phase 1: apply patch optimistically (instant UI) ──
+    const optimistic = { ...original, ...patch }
+    items.value = items.value.map(i => i.id === item.id ? optimistic : i)
+
+    try {
+      // ── Phase 2: send to server, wait for confirmation ──
+      const confirmed = await updateFn(optimistic)
+      // Replace with server-confirmed version (may differ from optimistic)
+      items.value = items.value.map(i => i.id === confirmed.id ? confirmed : i)
+    } catch (e) {
+      // ── Phase 3: rollback on failure ──
+      items.value = items.value.map(i => i.id === original.id ? original : i)
+      error.value = (e as Error).message
+    }
+  }
+
+  return { update, error }
+}
+
+// ── Usage: ──────────────────────────────────────────────
+// const { update, error } = useOptimisticUpdate(todos, api.updateTodo)
+// await update(todo, { completed: true })  // UI flips instantly, rolls back on error
+```
+::
+
+## Suspense — Async Component Orchestration
+
+::code-wrapper{language="vue" filename="SuspensePattern.vue"}
+```vue
+<script setup>
+import { defineAsyncComponent, Suspense, ref, onErrorCaptured } from 'vue'
+
+// ── Suspense: declarative async component loading ──
+// Parent shows fallback while child's async setup() resolves.
+const AsyncDashboard = defineAsyncComponent(() => import('./Dashboard.vue'))
+
+const error = ref(null)
+
+// ── onErrorCaptured: catches errors from async setup in children ──
+onErrorCaptured((err) => {
+  error.value = err
+  return false  // stop propagation
+})
 </script>
 
 <template>
-  <p v-if="isLoading">Loading products…</p>
-  <p v-else-if="error" class="error">Failed to load products: {{ error.message }}</p>
-  <ul v-else-if="products.length">
-    <li v-for="p in products" :key="p.id">{{ p.name }} — ${{ p.price }}</li>
-  </ul>
-  <p v-else>No products found.</p>
+  <!-- ── Suspense boundary: fallback slot while async children load ── -->
+  <Suspense>
+    <template #default>
+      <AsyncDashboard />
+    </template>
+    <template #fallback>
+      <div class="loading-skeleton">Loading dashboard…</div>
+    </template>
+  </Suspense>
+
+  <!-- ── Error state (Suspense doesn't handle errors, parent does) ── -->
+  <div v-if="error" class="error">
+    Failed to load: {{ error.message }}
+    <button @click="error = null">Retry</button>
+  </div>
 </template>
 ```
-::
 
-The **empty-but-successful** state (`products.length === 0` after a successful fetch) is a fourth, easily forgotten case — distinct from both loading and error, and worth its own message rather than silently rendering nothing, which reads to a user as a bug rather than "there's genuinely nothing here."
-
-## Using `axios` Instead of `fetch`
-
-::code-wrapper{language="bash"}
-```bash
-npm install axios
-```
-::
-
-::code-wrapper{language="javascript" filename="api/client.js"}
-```javascript
-import axios from 'axios'
-
-export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 10000
-})
-
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
-
-apiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token')
-      window.location.href = '/login'
-    }
-    return Promise.reject(error)
-  }
-)
-```
-::
-
-::code-wrapper{language="vue" filename="ProductList.vue"}
-```vue
-<script setup>
-import { ref, onMounted } from 'vue'
-import { apiClient } from '@/api/client'
-
-const products = ref([])
-const isLoading = ref(true)
-const error = ref(null)
-
-onMounted(async () => {
-  try {
-    // axios throws on non-2xx by default and parses JSON automatically —
-    // unlike fetch, which requires manually checking res.ok
-    const { data } = await apiClient.get('/products')
-    products.value = data
-  } catch (err) {
-    error.value = err
-  } finally {
-    isLoading.value = false
-  }
-})
-</script>
-```
-::
-
-A shared, pre-configured client (base URL, auth header injection, centralized 401 handling) avoids repeating that setup in every component that makes a request — a real production pattern, not just convenience.
-
-## Extracting a Reusable `useAsyncData` Composable
-
-::code-wrapper{language="javascript" filename="composables/useAsyncData.js"}
-```javascript
-import { ref, watchEffect, toValue } from 'vue'
-
-export function useAsyncData(fetcher, source = null) {
-  const data = ref(null)
-  const error = ref(null)
-  const isLoading = ref(false)
-
-  async function execute() {
-    isLoading.value = true
-    error.value = null
-    const controller = new AbortController()
-
-    try {
-      data.value = await fetcher(controller.signal, toValue(source))
-    } catch (err) {
-      if (err.name !== 'AbortError') error.value = err
-    } finally {
-      isLoading.value = false
-    }
-
-    return () => controller.abort()
-  }
-
-  if (source !== null) {
-    watchEffect((onCleanup) => {
-      let cancel
-      execute().then((c) => { cancel = c })
-      onCleanup(() => cancel?.())
-    })
-  }
-
-  return { data, error, isLoading, execute }
-}
-```
-::
-
-::code-wrapper{language="vue" filename="UserProfile.vue"}
+::code-wrapper{language="vue" filename="DashboardChild.vue"}
 ```vue
 <script setup>
 import { ref } from 'vue'
-import { useAsyncData } from '@/composables/useAsyncData'
 
-const userId = ref(1)
+// ── Top-level await makes this component async ──
+// Must be inside a <Suspense> boundary or it throws.
+const data = ref(null)
 
-const { data: user, error, isLoading } = useAsyncData(
-  async (signal, id) => {
-    const res = await fetch(`/api/users/${id}`, { signal })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
-  },
-  userId
-)
-</script>
-```
-::
-
-## Race Conditions — the Central Async Pitfall
-
-A fast-typing search box is the classic case: request A (for "vu") is sent, then request B (for "vue") is sent shortly after, but the network resolves them out of order — A's response lands *after* B's, overwriting the correct result with a stale one.
-
-::code-wrapper{language="vue" filename="SearchBox.vue"}
-```vue
-<script setup>
-import { ref, watch } from 'vue'
-
-const query = ref('')
-const results = ref([])
-
-// WRONG — no defense against out-of-order responses
-watch(query, async (q) => {
-  if (!q) { results.value = []; return }
-  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
-  results.value = await res.json()   // may overwrite a NEWER result with a stale one
-})
-</script>
-```
-::
-
-### Fix 1: `AbortController` (preferred — actually cancels the stale request)
-
-::code-wrapper{language="vue" filename="SearchBox.vue"}
-```vue
-<script setup>
-import { ref, watch } from 'vue'
-
-const query = ref('')
-const results = ref([])
-let controller = null
-
-watch(query, async (q) => {
-  controller?.abort()          // cancel whatever request is still in flight
-  if (!q) { results.value = []; return }
-
-  controller = new AbortController()
-  try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
-    results.value = await res.json()
-  } catch (err) {
-    if (err.name !== 'AbortError') throw err
-  }
-})
-</script>
-```
-::
-
-### Fix 2: Stale-response guard (when the API can't be cancelled)
-
-::code-wrapper{language="vue" filename="SearchBox.vue"}
-```vue
-<script setup>
-import { ref, watch } from 'vue'
-
-const query = ref('')
-const results = ref([])
-
-watch(query, async (q) => {
-  if (!q) { results.value = []; return }
-  const requestQuery = q   // snapshot the query THIS request was made for
-  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
-  const data = await res.json()
-
-  // only apply the result if the query hasn't changed since this request started
-  if (requestQuery === query.value) {
-    results.value = data
-  }
-})
-</script>
-```
-::
-
-`AbortController` is strictly better when the backend supports it — it also saves the wasted bandwidth/server work of a request nobody needs the answer to anymore — but the guard pattern is a reasonable fallback for APIs (or third-party SDKs) that give you no cancellation hook at all.
-
-## Async `setup()` and `<script setup>` with `top-level await`
-
-`<script setup>` supports top-level `await` directly — the compiler automatically turns the component into an async `setup()` internally, which requires the component to be rendered inside a `<Suspense>` boundary (chapter 16):
-
-::code-wrapper{language="vue" filename="UserProfile.vue"}
-```vue
-<script setup>
-// top-level await — this component's setup pauses here until the fetch resolves
-const res = await fetch('/api/users/me')
-const user = await res.json()
+// Suspense waits for this promise to resolve before rendering the component.
+const res = await fetch('/api/dashboard-data')
+data.value = await res.json()
 </script>
 
 <template>
-  <p>{{ user.name }}</p>
+  <div>{{ data }}</div>
 </template>
-```
-::
-
-::code-wrapper{language="vue" filename="App.vue"}
-```vue
-<template>
-  <Suspense>
-    <template #default>
-      <UserProfile />
-    </template>
-    <template #fallback>
-      <p>Loading profile…</p>
-    </template>
-  </Suspense>
-</template>
-```
-::
-
-This is elegant for a single, unconditional, must-succeed-before-rendering fetch, but it has real limitations worth knowing before reaching for it over the `ref`-based pattern: there's no per-component way to show a partial UI while some (but not all) data loads, error handling has to happen either inside an `onErrorCaptured` boundary or a `try`/`catch` around the `await` itself (an uncaught rejection inside async setup surfaces as an unhandled error to the whole `Suspense` tree), and it composes awkwardly with a search-box-style scenario needing cancellation/re-fetching — the `ref` + `watch`/composable pattern remains the more flexible default for anything beyond "fetch once, then render."
-
-## Parallel vs Sequential Fetching
-
-::code-wrapper{language="javascript"}
-```javascript
-// WRONG (slow) — each await blocks the next request from even starting,
-// even though these three requests don't depend on each other
-async function loadDashboardSequential() {
-  const user = await fetch('/api/user').then(r => r.json())
-  const orders = await fetch('/api/orders').then(r => r.json())
-  const notifications = await fetch('/api/notifications').then(r => r.json())
-  return { user, orders, notifications }
-}
-
-// RIGHT — all three requests fire immediately, total time ≈ the SLOWEST one,
-// not the SUM of all three
-async function loadDashboardParallel() {
-  const [user, orders, notifications] = await Promise.all([
-    fetch('/api/user').then(r => r.json()),
-    fetch('/api/orders').then(r => r.json()),
-    fetch('/api/notifications').then(r => r.json())
-  ])
-  return { user, orders, notifications }
-}
-```
-::
-
-`Promise.all` rejects as soon as any one promise rejects, which can be too aggressive when partial data is still useful (e.g., showing orders even if notifications failed) — `Promise.allSettled` is the right tool when independent failures shouldn't take down the whole dashboard:
-
-::code-wrapper{language="javascript"}
-```javascript
-async function loadDashboardResilient() {
-  const [userResult, ordersResult, notificationsResult] = await Promise.allSettled([
-    fetch('/api/user').then(r => r.json()),
-    fetch('/api/orders').then(r => r.json()),
-    fetch('/api/notifications').then(r => r.json())
-  ])
-
-  return {
-    user: userResult.status === 'fulfilled' ? userResult.value : null,
-    orders: ordersResult.status === 'fulfilled' ? ordersResult.value : [],
-    notifications: notificationsResult.status === 'fulfilled' ? notificationsResult.value : []
-  }
-}
-```
-::
-
-## Retrying Failed Requests
-
-::code-wrapper{language="javascript" filename="composables/useRetryFetch.js"}
-```javascript
-export async function fetchWithRetry(url, options = {}, retries = 3, delayMs = 500) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url, options)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return res
-    } catch (err) {
-      if (attempt === retries) throw err
-      // exponential backoff — avoids hammering a struggling server
-      await new Promise((resolve) => setTimeout(resolve, delayMs * 2 ** attempt))
-    }
-  }
-}
-```
-::
-
-## Options API Equivalent
-
-::code-wrapper{language="vue"}
-```vue
-<script>
-export default {
-  data() {
-    return { products: [], isLoading: true, error: null }
-  },
-  async created() {
-    try {
-      const res = await fetch('/api/products')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      this.products = await res.json()
-    } catch (err) {
-      this.error = err
-    } finally {
-      this.isLoading = false
-    }
-  }
-}
-</script>
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Model async state as three (really four, counting "successful but empty") explicit states rather than inferring status from `data.value === null` — an explicit `isLoading`/`error` pair is unambiguous, whereas `null` can mean "not fetched yet," "fetch failed," or "fetch succeeded with no data," depending on context.
-- **Performance** — Default to `Promise.all` for independent requests a component needs simultaneously — sequential `await`s for unrelated data is one of the most common, easiest-to-fix performance mistakes in real Vue codebases.
-- **Debug** — Always check `err.name !== 'AbortError'` before treating a caught fetch error as a real failure — an intentionally cancelled request throws too, and treating that as a user-facing error produces a confusing flash of an error message for something the user didn't do wrong.
-- **Idiom** — Centralize `fetch`/`axios` configuration (base URL, auth headers, 401 handling) in one client module rather than repeating headers and error handling in every component — chapter 22 revisits this same client as the natural place to enforce security-relevant request/response handling too.
-- **Idiom** — Reach for `<Suspense>` and top-level `await` only for simple, must-complete-before-render fetches; prefer the `ref`/composable pattern for anything needing cancellation, retry, partial rendering, or fine-grained error UI per section of the page.
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. Polling: setInterval inside watch + cleanup ──
+watchEffect((onCleanup) => {
+  const id = setInterval(() => fetchData(), 5000)
+  onCleanup(() => clearInterval(id))
+})
+
+// ── 2. Request cancellation on unmount: AbortController + onScopeDispose ──
+const controller = new AbortController()
+fetch(url, { signal: controller.signal })
+onScopeDispose(() => controller.abort())  // cancels pending fetch on unmount
+
+// ── 3. Exponential backoff retry ──
+async function fetchWithRetry(url: string, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try { return await fetch(url) }
+    catch (e) {
+      if (i === maxRetries - 1) throw e
+      await new Promise(r => setTimeout(r, 2 ** i * 1000))  // 1s, 2s, 4s
+    }
+  }
+}
+
+// ── 4. Prefetch on hover ──
+function prefetch() {
+  const link = document.createElement('link')
+  link.rel = 'prefetch'
+  link.href = '/api/next-page-data'
+  document.head.appendChild(link)
+}
+// <RouterLink @mouseover="prefetch" to="/next">Next</RouterLink>
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`fetch` does not reject on HTTP error statuses** — A 404 or 500 response resolves successfully as far as `fetch`'s promise is concerned; only a network-level failure (DNS, CORS, connection refused) rejects. Always check `res.ok` (or `res.status`) explicitly and throw yourself — `axios`, by contrast, does reject on non-2xx by default, which is a genuine behavioral difference between the two, not just a style preference.
-- **A race condition doesn't need a slow network to reproduce** — Two requests fired close together can resolve out of order due to ordinary variance in server response time, caching, or connection reuse — it's not an exotic edge case reserved for flaky networks, it will eventually happen on any sufficiently-used search-as-you-type or filter-on-keystroke feature without a defense.
-- **`Promise.all` fails all-or-nothing — one rejected promise discards every other result, even ones that already resolved successfully** — Code that needs "best effort, show what succeeded" behavior must use `Promise.allSettled` and manually check `.status` on each result; reaching for `Promise.all` when partial failure should be tolerated silently blanks out data that was actually available.
-- **Top-level `await` in `<script setup>` requires a `<Suspense>` ancestor, and forgetting one fails silently in some setups or throws a warning in others depending on Vue version** — A component using top-level `await` but rendered outside `<Suspense>` doesn't necessarily give an obvious runtime error pointing at the real cause — always pair the two intentionally, and never add top-level `await` to a component without checking how (and whether) its parent wraps it.
-- **An `AbortError` thrown from an aborted `fetch` still runs your `finally` block** — Code assuming `finally` only runs on "real" completion (success or genuine failure) will still see `isLoading.value = false` execute when a request is deliberately cancelled — usually the desired behavior, but worth being intentional about if the calling code distinguishes "cancelled" from "finished" states elsewhere.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Stale closure in async callbacks ──
+// watchEffect(() => { fetchData().then(data => items.value = data) })
+// If items is refactored, the closure captures the old reference.
+// Fix: use refs, not local variables, for values that survive async.
+
+// ── 2. Race condition without AbortController ──
+// Fast typing → fetch("a") starts → fetch("ab") starts
+// fetch("ab") resolves first, fetch("a") resolves last → stale data overwrites.
+// Always abort previous request on new trigger.
+
+// ── 3. Suspense doesn't retry on error ──
+// If async setup throws, Suspense shows nothing (error must be caught by parent).
+// Use onErrorCaptured + v-if error state to show retry button.
+
+// ── 4. Pagination reset on URL change ──
+// If the base URL changes (filter applied), cursor must reset to null.
+// Otherwise, the cursor from the old query is sent to the new endpoint.
+
+// ── 5. Optimistic update without rollback = permanent inconsistency ──
+// If the server fails and you don't rollback, UI shows state the server rejected.
+// Always save original state before optimistic mutation.
+
+// ── 6. JSON parse error isn't a network error ──
+// fetch() resolves even on 404/500 — check res.ok before parsing.
+// res.json() throws on non-JSON body (HTML error page) — wrap in try/catch.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A component fetches a list of comments for the currently viewed post. Switching quickly between posts occasionally shows the wrong post's comments.
+A search component shows results from a previous query after the user types a new one.
 
-::code-wrapper{language="vue" filename="PostComments.vue"}
-```vue
-<script setup>
+::code-wrapper{language="typescript" filename="AsyncBug.ts"}
+```typescript
 import { ref, watch } from 'vue'
 
-const props = defineProps({ postId: Number })
-const comments = ref([])
+const query = ref('')
+const results = ref([])
 
-watch(() => props.postId, async (id) => {
-  const res = await fetch(`/api/posts/${id}/comments`)
-  comments.value = await res.json()
-}, { immediate: true })
-</script>
-
-<template>
-  <ul>
-    <li v-for="c in comments" :key="c.id">{{ c.text }}</li>
-  </ul>
-</template>
+watch(query, async (q) => {
+  const res = await fetch(`/api/search?q=${q}`)
+  results.value = await res.json()  // ← stale response can overwrite fresh data
+})
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-This is the same race condition as the search-box example, just triggered by prop changes instead of typing. When `postId` changes quickly (e.g., a user clicks through several posts in a list before the first fetch finishes), multiple `fetch` calls are in flight simultaneously with no coordination between them. If the response for an *earlier* `postId` happens to resolve *after* the response for the current one — entirely possible depending on payload size or server load — `comments.value` gets overwritten with the wrong post's comments, and nothing in the code corrects it afterward.
+No abort/cancellation — if `fetch("a")` resolves after `fetch("ab")`, the stale "a" results overwrite the correct "ab" results.
 
-::code-wrapper{language="vue" filename="PostComments.vue"}
-```vue
-<script setup>
+**Fix** — abort the previous request on each new query:
+
+::code-wrapper{language="typescript" filename="AsyncFixed.ts"}
+```typescript
 import { ref, watch } from 'vue'
 
-const props = defineProps({ postId: Number })
-const comments = ref([])
+const query = ref('')
+const results = ref([])
 
-watch(() => props.postId, async (id) => {
-  const requestId = id
-  const res = await fetch(`/api/posts/${id}/comments`)
-  const data = await res.json()
-  if (requestId === props.postId) {
-    comments.value = data
+watch(query, async (q, _old, onCleanup) => {
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())  // cancel previous fetch
+
+  try {
+    const res = await fetch(`/api/search?q=${q}`, { signal: controller.signal })
+    results.value = await res.json()
+  } catch (e) {
+    if (e.name === 'AbortError') return  // expected — stale request canceled
+    throw e
   }
-}, { immediate: true })
-</script>
+})
 ```
 ::
 
-**The lesson**: any `watch`-driven or event-driven fetch that can be re-triggered before the previous call resolves needs a race-condition defense — an `AbortController` or a snapshot-and-compare guard — the trigger being a prop, a route param, or user typing doesn't change the underlying problem.
+**The lesson**: async watchers must register cleanup to cancel stale work. Without it, out-of-order network responses cause data races — the last-resolved (not the last-requested) response wins.
 
 </details>
-
-## Key Takeaways
-
-- Model fetches with explicit `isLoading`/`error`/`data` state, and don't forget the fourth "successful but empty" case in the template.
-- `fetch` never rejects on HTTP error statuses — always check `res.ok` and throw manually; `axios` rejects on non-2xx by default.
-- Race conditions are the central async pitfall — defend with `AbortController` (preferred, actually cancels work) or a snapshot-and-compare guard when cancellation isn't available.
-- Use `Promise.all` for independent parallel requests to avoid needlessly serializing unrelated fetches; use `Promise.allSettled` when partial failure should still render partial data.
-- Top-level `await` in `<script setup>` requires a `<Suspense>` ancestor and suits simple must-complete-before-render fetches better than cancellable, retryable, or partially-rendered ones.
-- Centralize HTTP client setup (base URL, auth headers, global error handling) in one module rather than repeating it per component.

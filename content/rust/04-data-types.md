@@ -1,230 +1,297 @@
 # 04 — Data Types
 
-## Scalar Types
+Every type here has a memory layout with consequences for cache behavior, struct size, FFI compatibility, and where silent data loss hides. Treat types as layout facts measurable with `std::mem::size_of`, not syntax to memorize.
 
-### Integers
+## Under-the-Hood Mechanics
 
-| Type | Bits | Signed/Unsigned |
+### Integer layout and the overflow contract
+
+| Type | Bits | Notes |
 |---|---|---|
-| `i8` `u8` | 8 | signed/unsigned |
-| `i16` `u16` | 16 | |
-| `i32` `u32` | 32 | (default integer) |
-| `i64` `u64` | 64 | |
-| `i128` `u128` | 128 | |
-| `isize` `usize` | ptr-width (platform) | index/sizes |
+| `i8`/`u8` … `i128`/`u128` | 8–128 | two's-complement signed, plain binary unsigned |
+| `isize`/`usize` | pointer-width | **platform-dependent**: 32 bits on `wasm32`, 64 on most servers |
 
 ::code-wrapper{language="rust"}
 ```rust
-let a: i32 = -5;
-let b: u8 = 255;
-let hex = 0xff;
-let oct = 0o17;
-let bin = 0b1010;
-let byte = b'A';        // u8 from byte literal -> 65
-let big = 1_000_000;    // underscores for readability
+fn main() {
+    let (val, ovf) = 255u8.overflowing_add(1); // (0, true)
+    let safe = 255u8.checked_add(1);          // None
+    let sat = 255u8.saturating_add(1);        // 255
+    let wrap = 255u8.wrapping_add(1);         // 0
+    println!("{val} {ovf} {safe:?} {sat} {wrap}");
+}
 ```
 ::
-
-#### Integer Overflow
-
-- In **debug** builds: overflow panics.
-- In **release** builds: wraps silently (two's complement).
-- Explicit methods: `wrapping_add`, `checked_add` (returns `Option`), `overflowing_add` (returns `(value, overflowed)`), `saturating_add`.
 
 ::code-wrapper{language="rust"}
 ```rust
-let (val, ovf) = 255u8.overflowing_add(1); // (0, true)
-let safe = 255u8.checked_add(1);          // None
-let sat = 255u8.saturating_add(1);        // 255
-let wrap = 255u8.wrapping_add(1);         // 0
+fn main() {
+    let x: u8 = 200;
+    let y: u8 = 100;
+    // let z = x + y;      // debug: PANICS "attempt to add with overflow"
+    // release build:      SILENTLY wraps to 44 — same source, different behavior by profile
+}
 ```
 ::
 
-### Floats
-
-`f32`, `f64` (default). IEEE 754. No `f16`/`f128` in std.
+### Floats are IEEE 754, and `PartialOrd` (not `Ord`) is a direct consequence
 
 ::code-wrapper{language="rust"}
 ```rust
-let f = 2.0;        // f64
-let g: f32 = 3.0;
-let inf = f64::INFINITY;
-let nan = f64::NAN;
-nan == nan          // false! NaN never equals itself
-nan.is_nan()        // true
+fn main() {
+    let nan = f64::NAN;
+    assert_eq!(nan == nan, false);              // NaN != NaN — IEEE 754, not a Rust choice
+    assert_eq!(-0.0_f64 == 0.0_f64, true);       // -0.0 == 0.0
+    assert_eq!(nan.partial_cmp(&nan), None);     // unordered — why floats impl PartialOrd, not Ord
+
+    let mut v = vec![3.0, f64::NAN, 1.0];
+    v.sort_by(f64::total_cmp);                    // total_cmp: arbitrary-but-total order, NaN included
+    println!("{v:?}");
+}
 ```
 ::
 
-Floats implement `PartialOrd` (not `Ord`) because NaN has no total ordering. `f64::NAN.partial_cmp(&f64::NAN)` returns `None`. Sorting floats requires `sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))` or `total_cmp` (1.62+, gives total ordering).
-
-### Booleans
-
-`bool`, values `true`/`false`, one byte. Cast with `as` to integer: `true as u8 == 1`. Booleans are *not* integers (no implicit conversion in conditions or arithmetic).
-
-### Characters (`char`)
-
-`char` is a **4-byte Unicode scalar value** (not UTF-8 bytes, not a byte):
+### `char` is 4 bytes, always — a Unicode fact, not a Rust choice
 
 ::code-wrapper{language="rust"}
 ```rust
-let c = 'z';
-let emoji = '🦀';
-let heart = '\u{2764}';
+fn main() {
+    let c = 'z';
+    let emoji = '🦀';
+    assert_eq!(std::mem::size_of::<char>(), 4);        // ALWAYS 4 bytes, even for 'z'
+
+    let ascii = "hello";                                // 1 byte/char on the wire (&str, UTF-8)
+    let chars: Vec<char> = ascii.chars().collect();      // 4 bytes/char once collected — 4x memory
+    assert_eq!(ascii.len(), 5);
+    assert_eq!(std::mem::size_of_val(chars.as_slice()), 20);
+
+    // s[0] doesn't compile — byte offsets don't correspond to char boundaries in multi-byte UTF-8.
+    let s = "héllo";
+    // let first = s[0];      // ERROR: `String`/`str` cannot be indexed by an integer
+    let first = s.chars().next().unwrap();
+    println!("{c} {emoji} {first}");
+}
 ```
 ::
 
-- `'A'` vs `b'A'`: the first is `char` (4 bytes), the second is `u8`.
-- Surrogates (D800–DFFF) are not valid `char`s.
-- Iterating `&str` yields `char`s (decodes UTF-8); indexing `s[0]` panics (UTF-8 bytes don't align with chars).
-
-## Compound Types
-
-### Tuples
-
-Fixed-length, heterogeneous:
+### Compound layout: tuples, arrays, and the niche/padding story
 
 ::code-wrapper{language="rust"}
 ```rust
-let t: (i32, f64, &str) = (1, 2.0, "three");
-let (a, b, c) = t;          // destructuring
-let first = t.0;
-let unit: () = ();           // unit type, zero-sized
+fn main() {
+    let t: (i32, f64, &str) = (1, 2.0, "three");   // repr(Rust): compiler may REORDER fields
+    let arr: [i32; 3] = [1, 2, 3];                  // homogeneous, contiguous, zero per-element overhead
+
+    assert_eq!(std::mem::size_of::<()>(), 0);            // unit — zero-sized
+    assert_eq!(std::mem::size_of::<[i32; 3]>(), 12);      // no padding, no overhead
+    assert_eq!(arr.len(), 3);                              // compile-time constant, part of the TYPE
+}
 ```
 ::
-
-- Single-element tuple: `(x,)`.
-- The empty tuple `()` is the unit type (represents "no meaningful value", e.g., `main`'s return type).
-- `0`-tuple `()` is inhabited by exactly one value `()`. Useful as a `HashMap` value when you want a set.
-
-### Arrays
-
-Fixed length, same type, stack-allocated:
 
 ::code-wrapper{language="rust"}
 ```rust
-let arr: [i32; 3] = [1, 2, 3];
-let zeros = [0; 100];        // 100 zeros
-let first = arr[0];
-let slice = &arr[1..3];
+#[repr(C)]                       // field order GUARANTEED to match source — required for FFI
+struct FfiPoint { x: i32, y: i32 }
+
+struct RustPoint { x: i32, y: i32 } // repr(Rust): compiler free to reorder — never assume layout
 ```
 ::
 
-- Length is part of the type: `[i32; 3]` != `[i32; 4]`.
-- Out-of-bounds indexing **panics** at runtime with bounds checking.
-- `arr.len()` is a compile-time constant for arrays.
-- Arrays implement `IntoIterator` since edition 2021 (by value).
-
-### Slices (`&[T]`, `&mut [T]`)
-
-Dynamically-sized view into a contiguous sequence (covered in the Slices chapter). The fat-pointer representation: (pointer, length).
-
-## Strings (preview)
-
-- `&str` — borrowed string slice, UTF-8, immutable view, fat pointer (ptr+len).
-- `String` — owned, growable UTF-8 string (heap).
-- `&[u8]` vs `&str`: bytes vs decoded text.
+### The never type `!` and coercion
 
 ::code-wrapper{language="rust"}
 ```rust
-let s: &str = "hello";
-let owned: String = String::from("hello");
-let bytes: &[u8] = b"hello";        // &[u8; 5] / &[u8]
+fn main() {
+    let opt: Option<i32> = Some(5);
+    let x: i32 = match opt {
+        Some(v) => v,
+        None => panic!("missing"),   // `!` coerces to i32 — this branch never actually produces a value
+    };
+    println!("{x}");
+}
 ```
 ::
 
-## Function Types
+## Cost, Performance, and Trade-Offs
+
+Type alias: zero cost, zero safety. Newtype: zero cost, full safety.
 
 ::code-wrapper{language="rust"}
 ```rust
-fn add(a: i32, b: i32) -> i32 { a + b }
-let f: fn(i32, i32) -> i32 = add;
+type Kilometers = i32;
+type Miles = i32;
+
+fn distance_km(d: Kilometers) -> Kilometers { d }
+
+fn main() {
+    let miles: Miles = 10;
+    println!("{}", distance_km(miles)); // compiles! Kilometers and Miles are BOTH just i32 — no protection
+}
 ```
 ::
-
-Function pointers (`fn(...) -> ...`) are zero-sized, `Copy`, and implement `Fn`. Closures have unnameable types (see Closures chapter).
-
-## Never Type (`!`)
-
-`!` is the never type (diverges). Functions like `panic!`, `loop {}`, `std::process::exit` return `!`. It coerces to any type:
-
-::code-wrapper{language="rust"}
-```rust
-let x: i32 = match opt {
-    Some(v) => v,
-    None => panic!("missing"),   // ! coerces to i32
-};
-```
-::
-
-## Type Aliases
-
-### Why this exists
-
-A type alias lets you give a shorter, more meaningful name to an existing type without creating a new type. The alias is **erased at compile time** — `Kilometers` and `i32` are the *same* type to the compiler, so they can be freely mixed (which means an alias gives you readability but **no type safety**: you can pass `Kilometers` where `i32` is expected and vice versa, and a `Miles` alias is indistinguishable from `Kilometers`).
-
-You reach for aliases when a type signature is *verbose* or *meaningful*: shortening `Box<dyn Fn(i32, String) -> Result<Vec<u8>, io::Error>>` to a name, or documenting that a function's `i32` parameter represents kilometers. For *type safety* (preventing `Miles` and `Kilometers` from being confused), use a **newtype** instead.
-
-::code-wrapper{language="rust"}
-```rust
-type Kilometers = i32;            // just a name — fully interchangeable with i32
-type IntPair = (i32, i32);
-type Handler = Box<dyn Fn(i32, String) -> Result<Vec<u8>, std::io::Error>>;
-```
-::
-
-Aliases are purely nominal — no new type, no methods, just a shorthand. Use a newtype when you need the compiler to treat two semantically different values as distinct.
-
-## Newtype Pattern (real distinct type)
 
 ::code-wrapper{language="rust"}
 ```rust
 struct Kilometers(i32);
 struct Miles(i32);
-// Kilometers and Miles are different types — no accidental mixing
+
+fn distance_km(d: Kilometers) -> Kilometers { d }
+
+fn main() {
+    let miles = Miles(10);
+    // println!("{:?}", distance_km(miles).0); // COMPILE ERROR: expected Kilometers, found Miles
+    // Same layout as i32 at runtime (niche-filling for single-field repr(Rust) wrappers) — free.
+}
 ```
 ::
 
-This is the idiomatic way to prevent unit confusion.
-
-## Casting (`as`)
-
-`as` is a coarse numeric conversion (truncates, may wrap):
+`char` vs `u8` at scale; `as` casts are free but not safe; ZSTs are genuinely free:
 
 ::code-wrapper{language="rust"}
 ```rust
-let a = 1_000_000_000u32 as u8;     // truncates -> 192 (low byte)
-let f = 3.9_f32 as i32;             // truncates toward zero -> 3
-let b = true as u8;                 // 1
-let p = 42 as *const i32;
+fn main() {
+    let big = 1_000_000_000u32;
+    let truncated = big as u8;      // silent truncation to the low byte — no warning, no panic, ever
+    println!("{truncated}");         // prints 0
+
+    let checked = u8::try_from(big); // Err — explicit, handleable failure instead
+    println!("{checked:?}");
+
+    struct Marker;                   // zero-sized type
+    assert_eq!(std::mem::size_of::<Marker>(), 0);
+    let v: Vec<()> = vec![(); 1_000_000]; // zero allocation for element storage
+}
 ```
 ::
 
-Use `From`/`Into`/`TryFrom`/`TryInto` for safe, explicit conversions.
+## Production Failure Modes & Anti-Patterns
+
+**Anti-pattern: silent truncation via `as` on a value crossing a trust boundary.**
+
+::code-wrapper{language="rust"}
+```rust
+fn set_port(raw: u32) -> u16 {
+    raw as u16   // 70000 as u16 -> 4464, silently wrong, no error
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn set_port(raw: u32) -> Result<u16, std::num::TryFromIntError> {
+    u16::try_from(raw)   // Err if raw > u16::MAX — caller must handle it
+}
+```
+::
+
+**Anti-pattern: assuming `usize` is always 64-bit.**
+
+::code-wrapper{language="rust"}
+```rust
+fn pack_id(high: u32, low: u32) -> usize {
+    ((high as usize) << 32) | (low as usize)   // works on x86_64, breaks/truncates on wasm32
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn pack_id(high: u32, low: u32) -> u64 {
+    ((high as u64) << 32) | (low as u64)   // explicit width, portable across every target
+}
+```
+::
+
+## Architectural Application
+
+Newtypes at every domain boundary where two same-typed primitives could be confused:
+
+::code-wrapper{language="rust"}
+```rust
+struct UserId(u64);
+struct OrderId(u64);
+
+fn charge(user: UserId, order: OrderId) { /* ... */ }
+
+fn main() {
+    let u = UserId(1);
+    let o = OrderId(2);
+    charge(u, o);
+    // charge(o, u);   // COMPILE ERROR — caught for zero runtime cost, impossible with two plain u64s
+}
+```
+::
+
+Choose overflow semantics per domain, deliberately:
+
+::code-wrapper{language="rust"}
+```rust
+fn ledger_add(balance_cents: i64, delta: i64) -> Result<i64, &'static str> {
+    balance_cents.checked_add(delta).ok_or("overflow in financial calculation")
+    // Money math: checked_* + propagate an error. Silent wraparound here is a bad incident.
+}
+
+fn ring_buffer_index(i: usize, capacity: usize) -> usize {
+    i.wrapping_rem(capacity)   // ring buffer: wraparound IS the desired behavior
+}
+```
+::
+
+`#[repr(C)]` as the boundary marker for anything outside pure in-process Rust:
+
+::code-wrapper{language="rust"}
+```rust
+#[repr(C)]
+struct WireMessage { kind: u8, length: u32, payload_ptr: *const u8 }
+// Any FFI boundary, wire protocol, or memory-mapped format MUST use this — never default repr(Rust).
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `dbg!(x)` prints a value's type-relevant `Debug` output alongside file/line — pair it with `std::any::type_name::<T>()` in generic code when you need to confirm exactly which concrete type got inferred.
-- **Idiom**: use `checked_*`/`saturating_*`/`wrapping_*` arithmetic methods explicitly wherever overflow is a real possibility (parsing untrusted input, accumulating user-supplied counts) — don't rely on debug-mode panics to catch it, since release builds silently wrap instead.
-- **Performance**: prefer `copied()` over `cloned()` for iterators over `&T` where `T: Copy` — functionally identical for `Copy` types, but `copied()` fails to compile if `T` ever stops being `Copy`, catching an accidental future deep-clone at the type level.
-- **Idiom**: reach for the newtype pattern (`struct Meters(f64)`) the moment two values of the same primitive type could be accidentally swapped at a call site (e.g., `fn distance(from: f64, to: f64)`) — it costs nothing at runtime and turns a whole category of mixing bugs into compile errors.
-- **Debug**: `f64::to_bits()`/`from_bits()` let you inspect or construct the exact IEEE 754 bit pattern of a float — useful for debugging "why doesn't this float equal that float" issues that stem from precision, not logic.
-- **Clippy**: `clippy::cast_possible_truncation`, `clippy::cast_sign_loss`, and `clippy::cast_precision_loss` (part of `clippy::pedantic`) flag risky `as` casts individually — enable them when auditing numeric code for correctness rather than relying on `as`'s silent behavior.
+::code-wrapper{language="rust"}
+```rust
+fn print_type<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>());   // confirm exactly which concrete type got inferred
+}
+
+fn main() {
+    let f: f64 = 0.1 + 0.2;
+    println!("{:x}", f.to_bits());   // exact IEEE 754 bit pattern — debug "why doesn't this float equal that"
+}
+```
+::
+
+- **Performance**: prefer `.copied()` over `.cloned()` on `&T` iterators where `T: Copy` — fails to compile if `T` stops being `Copy`, catching an accidental deep-clone at the type level.
+- **Idiom**: reach for newtype the instant two same-typed parameters could be swapped by a caller.
+- **Clippy**: `clippy::cast_possible_truncation`, `cast_sign_loss`, `cast_precision_loss` flag risky `as` casts.
+- **Portability**: never serialize `usize`/`isize` directly — convert to `u64`/`i64` at the boundary.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Default int**: `let x = 1;` → `i32`. In a `match` arm that returns an integer, the inferred type can leak across arms.
-- **Default float**: `let x = 1.0;` → `f64`.
-- **Char to int**: `'A' as u32` → 65 (Unicode code point). `u32` to `char` needs `char::from_u32` (returns `Option`, since not all u32 are valid chars).
-- **`Vec` of arrays**: `vec![[0; 3]; 4]` works; `vec![[1,2,3]; 4]` requires `Copy` (arrays of `Copy` are `Copy`).
-- **Zero-sized types (ZSTs)**: `()`, `struct Empty;`, `struct Empty;` occupy 0 bytes; `Vec<()>` is effectively a counter.
-- **`isize`/`usize`** change with platform — don't rely on width in serialized data; use `i64`/`u64` explicitly.
-- **Integer literals overflow in source**: `let x: u8 = 255;` is fine, but `let x: u8 = 256;` is a compile error.
-- **`char` size**: always 4 bytes even for ASCII; for ASCII use `u8` if memory matters.
-- **`as` with `f64::NAN as i32`** → 0 (platform-defined, not reliable).
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let cp = 'A' as u32;                 // 65 — direct, infallible
+    let back = char::from_u32(65);       // Some('A') — returns Option, since not every u32 is valid
+    let invalid = char::from_u32(0xD800); // None — surrogate range excluded
+    println!("{cp} {back:?} {invalid:?}");
+
+    // let x: u8 = 256;   // COMPILE-TIME error: literal doesn't fit — different from runtime overflow
+
+    let arr = [1, 2, 3];
+    let dup = vec![arr; 4];               // OK: [i32; 3] is Copy
+    // let s = [String::new(), String::new()];
+    // let dup2 = vec![s; 4];             // COMPILE ERROR: [String; 2] is not Copy
+
+    let set: std::collections::HashMap<&str, ()> = [("a", ()), ("b", ())].into();
+    // HashMap<K, ()> — legitimate zero-overhead "set" pattern, unit occupies zero bytes
+}
+```
+::
 
 ## 🧠 Spot the Bug
-
-What does this print in a release build, and why might it be completely different in debug?
 
 ::code-wrapper{language="rust"}
 ```rust
@@ -243,27 +310,34 @@ fn main() {
 ```
 ::
 
+What does this print in release, and why might debug behave entirely differently?
+
 <details>
 <summary>Answer</summary>
 
-In a **debug** build, this panics: `attempt to add with overflow`. In a **release** build, it silently prints `94` (the wrapped result of `(200 + 100 + 50) % 256`).
+::code-wrapper{language="rust"}
+```rust
+// debug:   panics "attempt to add with overflow" — 200 + 100 = 300 overflows u8 on the FIRST addition
+// release: wraps silently, prints 94  — (200 + 100 + 50) % 256, no check at all
+```
+::
 
-`200 + 100 = 300`, which overflows `u8`'s range (0–255) on the very first addition. Rust's `+` operator has different behavior depending on build profile specifically for this case: debug builds insert overflow checks that panic immediately (`overflow-checks = true` by default in the dev profile), while release builds compile the same `+=` to a two's-complement wraparound with no check at all (`overflow-checks = false` by default in the release profile) — this is a deliberate performance/safety tradeoff, not an inconsistency, but it means the *exact same source code* produces a hard crash in one build mode and a silently wrong numeric answer in the other. A function like `checksum` that looks correct and passes casual testing in `cargo run` (debug, which would actually panic and get noticed) can ship a silent miscalculation in `cargo run --release` if the overflow case wasn't covered by a test that runs in both modes.
-
-The fix is to be explicit about the desired overflow behavior rather than relying on ambient build-profile behavior:
+`checksum` can pass every `cargo test`/`cargo run` (debug — would panic loudly) while shipping a silently wrong result the first time it runs under `cargo run --release`, if no test happened to also run against the release profile.
 
 ::code-wrapper{language="rust"}
 ```rust
 fn checksum(values: &[u8]) -> u8 {
-    values.iter().fold(0u8, |acc, &v| acc.wrapping_add(v))
+    values.iter().fold(0u8, |acc, &v| acc.wrapping_add(v))   // explicit, profile-independent
 }
 ```
 ::
 
-**The lesson**: integer overflow panics in debug builds but silently wraps in release builds — code that "worked" during development can compute a different, wrong answer in production unless overflow-prone arithmetic uses explicit `wrapping_*`/`checked_*`/`saturating_*` methods.
+**The lesson**: any arithmetic where overflow is a real possibility needs explicit `wrapping_*`/`checked_*`/`saturating_*`, not reliance on whichever build profile happens to be running.
 
 </details>
 
 ## Summary
 
-You know the primitives, integers/overflow, floats/NaN, tuples, arrays, and the distinction between `char` and bytes. Next: functions.
+Scalar and compound types have precise, inspectable memory layouts (`size_of` is your ground truth); overflow and casting are profile-dependent or silently lossy by design, making explicit `checked_*`/`TryFrom` conversions a correctness requirement at any trust or platform boundary; newtypes turn primitive-confusion bugs into compile errors for free.
+
+Next: Functions — how these types flow through function boundaries, get monomorphized under generics, and interact with divergence (`!`) at call sites.

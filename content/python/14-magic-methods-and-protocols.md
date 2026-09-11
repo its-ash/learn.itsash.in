@@ -1,28 +1,113 @@
 # 14 — Magic Methods & Protocols
 
-## `__repr__` vs `__str__`
+## Production-Grade Numeric Class — Full Operator Protocol
 
 ::code-wrapper{language="python"}
 ```python
-class Money:
-    def __init__(self, cents):
-        self.cents = cents
+# ── A production Vector class implementing the full numeric protocol ──
+# Demonstrates __repr__, __eq__, __hash__, __add__, __radd__, __mul__,
+# __rmul__, __neg__, __abs__, __bool__, and iteration — the complete set
+# needed for a value type to behave like a first-class numeric citizen.
 
-    def __repr__(self):
-        return f"Money(cents={self.cents})"     # unambiguous, developer-facing — should be eval-able if possible
+import math
+from functools import total_ordering
 
-    def __str__(self):
-        return f"${self.cents / 100:.2f}"           # readable, user-facing
+class Vector:
+    """2D vector with full operator support, hashing, and iteration."""
 
-m = Money(1050)
-print(repr(m))    # Money(cents=1050)
-print(str(m))       # $10.50
-print(m)              # $10.50 — print() uses __str__
-print([m])              # [Money(cents=1050)] — containers ALWAYS use __repr__, never __str__
+    __slots__ = ("_x", "_y")   # no __dict__ — saves ~40% memory per instance
+
+    def __init__(self, x: float, y: float):
+        self._x = float(x)
+        self._y = float(y)
+
+    # ── Representation: __repr__ for debugging, __str__ for display ──
+    def __repr__(self) -> str:
+        # Should be unambiguous — ideally eval-able: Vector(repr(v)) == v
+        return f"Vector({self._x!r}, {self._y!r})"
+
+    def __str__(self) -> str:
+        return f"({self._x:.2f}, {self._y:.2f})"
+
+    # ── Property access: read-only via slots, no setter needed ──
+    @property
+    def x(self) -> float:
+        return self._x
+
+    @property
+    def y(self) -> float:
+        return self._y
+
+    # ── Equality and hashing: MUST be consistent (a == b ⟹ hash(a) == hash(b)) ──
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Vector):
+            return NotImplemented   # NOT False — lets Python try other.__eq__(self)
+        return self._x == other._x and self._y == other._y
+
+    def __hash__(self) -> int:
+        # Hash MUST use the same fields as __eq__ — if x/y change, hash must change
+        # Since __slots__ + no setter = immutable, this is safe
+        return hash((self._x, self._y))
+
+    # ── Arithmetic: __add__ + __radd__ for commutative addition ──
+    def __add__(self, other: "Vector") -> "Vector":
+        if not isinstance(other, Vector):
+            return NotImplemented   # lets Python try other.__radd__(self)
+        return Vector(self._x + other._x, self._y + other._y)
+
+    def __radd__(self, other: "Vector") -> "Vector":
+        # Called when `other + self` fails (other doesn't know about Vector)
+        # For commutative ops, just delegate to __add__
+        return self.__add__(other)
+
+    # ── Scalar multiplication: __mul__ (vec * scalar) + __rmul__ (scalar * vec) ──
+    def __mul__(self, scalar: float) -> "Vector":
+        if not isinstance(scalar, (int, float)):
+            return NotImplemented
+        return Vector(self._x * scalar, self._y * scalar)
+
+    def __rmul__(self, scalar: float) -> "Vector":
+        return self.__mul__(scalar)   # scalar * vec == vec * scalar
+
+    def __neg__(self) -> "Vector":
+        return Vector(-self._x, -self._y)
+
+    # ── Built-in function integration ──
+    def __abs__(self) -> float:
+        return math.hypot(self._x, self._y)   # math.hypot avoids overflow for large values
+
+    def __bool__(self) -> bool:
+        return bool(self._x) or bool(self._y)  # zero vector is falsy
+
+    def __iter__(self):
+        # Enables unpacking: x, y = vector
+        yield self._x
+        yield self._y
+
+    def __len__(self) -> int:
+        return 2   # dimensionality — enables len(vec)
+
+# ── Usage: the Vector now behaves like a built-in numeric type ──
+v1 = Vector(3, 4)
+v2 = Vector(1, 2)
+
+print(v1 + v2)         # Vector(4.0, 6.0) — __add__
+print(v1 * 2)          # Vector(6.0, 8.0) — __mul__
+print(2 * v1)          # Vector(6.0, 8.0) — __rmul__ (int.__mul__ fails, falls back)
+print(-v1)             # Vector(-3.0, -4.0) — __neg__
+print(abs(v1))         # 5.0 — __abs__ via math.hypot
+print(bool(Vector(0, 0)))  # False — zero vector is falsy
+print(v1 == Vector(3, 4))  # True — __eq__
+
+# Hashable → usable as dict keys and set members
+points = {v1: "origin-ref", v2: "other"}
+print(points[Vector(3, 4)])  # "origin-ref" — found via __hash__ + __eq__
+
+# Iterable → unpacking works
+x, y = v1
+print(x, y)   # 3.0 4.0
 ```
 ::
-
-**Best practice**: always define `__repr__`; only define `__str__` if a distinct, prettier user-facing form is genuinely useful. If `__str__` is absent, `str(obj)` falls back to `__repr__` automatically — but the reverse is never true, which is why `__repr__` is the one you can't skip.
 
 ## Equality and Hashing: `__eq__` and `__hash__`
 

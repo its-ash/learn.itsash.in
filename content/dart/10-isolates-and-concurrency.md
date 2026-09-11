@@ -1,266 +1,407 @@
-# 10 — Isolates & Concurrency
+---
+title: "Dart — Isolates, Actor Model & Zero-Copy Transfer"
+description: "Deep-dive into Dart's isolate-based concurrency model, Isolate.run patterns, bidirectional message passing, TransferableTypedData zero-copy, worker pool architecture, and web platform limitations. Code-first engineering reference."
+---
 
-Dart is single-threaded. For CPU-heavy work (parsing, compression, image processing), use **isolates** — separate threads with their own memory heap.
+# Dart — Isolates, Actor Model & Zero-Copy Transfer
 
-## Why Isolates, not Threads?
-
-Dart has no shared-memory threads (no `Thread` with locks). Instead, **isolates** are independent workers:
-- Each isolate has its own memory heap (no shared mutable state).
-- Communication is via message passing (ports).
-- No data races (no shared memory to race on).
-
-This is the actor model — isolates can't access each other's memory, only send messages.
-
-## `Isolate.run` (Dart 2.19+, recommended)
-
-`Isolate.run` runs a function in a new isolate and returns the result:
+## The Actor Model — No Shared Memory
 
 ::code-wrapper{language="dart"}
 ```dart
-Future<int> heavyComputation() async {
-	return Isolate.run(() {
-		var sum = 0;
-		for (var i = 0; i < 1000000000; i++) sum += i;
-		return sum;
-	});
+// Dart has NO shared-memory threads. Isolates are independent workers:
+// - Each isolate has its own memory heap (no shared mutable state).
+// - Communication is via message passing (ports).
+// - No data races — no locks, no mutexes, no atomics.
+//
+// This is the Erlang/Akka actor model, not the Java/C++ threading model.
+
+// ── Isolate.run: one-shot computation in a separate isolate ──
+// Spawns an isolate, runs the function, sends the result back, kills the isolate.
+// The closure and its captured values are DEEP-COPIED to the new isolate.
+
+Future<int> heavySum() async {
+  return Isolate.run(() {
+    // This runs on a separate OS thread with its own heap.
+    // No access to the main isolate's memory — everything is copied.
+    var sum = 0;
+    for (var i = 0; i < 1000000000; i++) sum += i;
+    return sum;  // result is deep-copied back to the main isolate
+  });
 }
 
-void main() async {
-	var result = await heavyComputation();
-	print(result);
+// Capturing values — they're COPIED (deep copy), not shared:
+Future<void> processFile(String path) async {
+  final result = await Isolate.run(() {
+    // `path` was copied — modifying it here doesn't affect the original.
+    final content = File(path).readAsStringSync();
+    return content.toUpperCase();
+  });
+  print(result);
 }
 ```
 ::
-The function runs in a separate isolate (on another thread/core), not blocking the main isolate. The result is sent back. Simple for one-shot computations.
 
-### Arguments
-
-::code-wrapper{language="dart"}
-```dart
-final result = await Isolate.run(() => processFile(filePath));
-```
-::
-The function closure can capture variables (they're copied to the new isolate — deep copy, since no shared memory).
-
-## `compute` (Flutter)
-
-Flutter provides `compute` (a wrapper around `Isolate.run`):
-
-::code-wrapper{language="dart"}
-```dart
-final result = await compute(heavyFunction, input);
-```
-::
-`compute(fn, input)` runs `fn(input)` in a separate isolate. Use in Flutter for offloading heavy work from the UI thread.
-
-## `Isolate.spawn` (low-level)
-
-For long-running isolates (event-driven, bidirectional communication):
+## `Isolate.run` vs `Isolate.spawn`
 
 ::code-wrapper{language="dart"}
 ```dart
 import 'dart:isolate';
 
-void worker(SendPort sendPort) {
-	sendPort.send('Worker started');
-	// ... do work, send messages back
+// ── Isolate.run: one-shot, fire-and-forget, returns a Future. ──
+// Best for: one-off CPU-heavy work (JSON parsing, compression, sorting).
+// The isolate is automatically killed after the function returns.
+
+Future<Map<String, dynamic>> parseHugeJson(String json) async {
+  return Isolate.run(() => jsonDecode(json) as Map<String, dynamic>);
 }
 
-void main() async {
-	final receivePort = ReceivePort();
-	await Isolate.spawn(worker, receivePort.sendPort);
+// ── Isolate.spawn: long-running, bidirectional communication. ──
+// Best for: worker pools, event-driven workers, persistent background tasks.
+// You manage the lifecycle (spawn, communicate, kill).
 
-	receivePort.listen((message) {
-		print('Main received: $message');
-	});
-}
-```
-::
-- `ReceivePort` — receives messages in this isolate.
-- `SendPort` — sends messages to another isolate (passed via `spawn`).
-- `Isolate.spawn(entry, message)` — starts an isolate, calls `entry(message)`.
+void workerEntryPoint(SendPort mainSendPort) {
+  // Set up a receive port for messages from the main isolate.
+  final receivePort = ReceivePort();
+  mainSendPort.send(receivePort.sendPort);  // send our port back
 
-### Bidirectional communication
-
-::code-wrapper{language="dart"}
-```dart
-void worker(SendPort mainSendPort) {
-	final receivePort = ReceivePort();
-	mainSendPort.send(receivePort.sendPort);   // send our port to main
-
-	receivePort.listen((message) {
-		mainSendPort.send('Processed: $message');
-	});
+  receivePort.listen((message) {
+    // Process messages from the main isolate.
+    final result = _process(message);
+    mainSendPort.send(result);  // send result back
+  });
 }
 
-void main() async {
-	final mainReceivePort = ReceivePort();
-	await Isolate.spawn(worker, mainReceivePort.sendPort);
+Future<void> main() async {
+  final mainReceivePort = ReceivePort();
+  await Isolate.spawn(workerEntryPoint, mainReceivePort.sendPort);
 
-	final workerSendPort = await mainReceivePort.first as SendPort;
+  // Get the worker's send port (first message from the worker).
+  final workerSendPort = await mainReceivePort.first as SendPort;
 
-	final responsePort = ReceivePort();
-	workerSendPort.send('hello');
-	// ... use responsePort for replies
+  // Now we can send messages to the worker:
+  final responsePort = ReceivePort();
+  workerSendPort.send('task-1');
+  // ... manage communication
 }
 ```
 ::
-This is more verbose — use `Isolate.run` for one-shot work.
 
-## What Can Be Sent Between Isolates?
-
-Messages are **copied** (deep copy, since no shared memory). Most objects can be sent:
-- Primitives (`int`, `double`, `String`, `bool`, `null`).
-- `List`, `Map`, `Set` (of sendable values).
-- `SendPort`/`ReceivePort`.
-- Functions (closures) — the function and its captured variables (must be sendable).
-- Custom objects (with some caveats — closures, `SendPort`s, and transferable data).
-
-**Can't be sent**:
-- Objects with native resources (file handles, sockets).
-- Some platform-specific objects.
-
-## Transferable TypedData (zero-copy)
-
-For large `TypedData` (e.g., `Uint8List`), use `TransferableTypedData` for zero-copy transfer (instead of a deep copy):
+## Bidirectional Communication — Production Pattern
 
 ::code-wrapper{language="dart"}
 ```dart
-final transferable = TransferableTypedData.fromList([largeUint8List]);
-sendPort.send(transferable);
-// Receiver:
-final data = transferable.materialize();
-```
-::
-This avoids copying large byte buffers — much faster for big data.
+import 'dart:isolate';
+import 'dart:async';
 
-## When to Use Isolates
+// A reusable worker that accepts tasks and returns results.
+class IsolateWorker {
+  late final Isolate _isolate;
+  late final SendPort _sendPort;
+  final _receivePort = ReceivePort();
+  final _pending = <int, Completer>{};
+  int _taskId = 0;
 
-- **CPU-heavy work** (>16ms — would drop a frame): parsing large JSON, compression, image processing, sorting/searching large datasets.
-- **Don't use for I/O**: `Future`/`await` is sufficient for I/O (the event loop handles concurrency). Isolates are for CPU work.
-- **Don't use for small tasks**: spawning an isolate has overhead (~50ms). For tiny tasks, the overhead exceeds the benefit.
+  Future<void> start() async {
+    final ready = ReceivePort();
+    _isolate = await Isolate.spawn(
+      _entry,
+      (ready.sendPort, _receivePort.sendPort),
+      debugName: 'isolate-worker',
+    );
+    _sendPort = await ready.first as SendPort;
 
-## Error Handling
+    // Route responses to the correct completer.
+    _receivePort.listen((message) {
+      if (message is _Response) {
+        final completer = _pending.remove(message.taskId);
+        if (message.error != null) {
+          completer?.completeError(message.error!);
+        } else {
+          completer?.complete(message.result);
+        }
+      }
+    });
+  }
 
-::code-wrapper{language="dart"}
-```dart
-try {
-	final result = await Isolate.run(() {
-		throw Exception('Worker error');
-	});
-} on Exception catch (e) {
-	print('Caught: $e');   // errors propagate back
+  Future<T> execute<T>(String task, dynamic payload) {
+    final id = _taskId++;
+    final completer = Completer<T>();
+    _pending[id] = completer;
+    _sendPort.send(_Request(id, task, payload));
+    return completer.future;
+  }
+
+  void dispose() {
+    _isolate.kill(priority: Isolate.immediate);
+    _receivePort.close();
+  }
+
+  static void _entry((SendPort, SendPort) ports) {
+    final (readyPort, mainPort) = ports;
+    final receivePort = ReceivePort();
+    readyPort.send(receivePort.sendPort);
+
+    receivePort.listen((message) {
+      if (message is _Request) {
+        try {
+          final result = _dispatchTask(message.task, message.payload);
+          mainPort.send(_Response(message.taskId, result, null));
+        } catch (e) {
+          mainPort.send(_Response(message.taskId, null, e.toString()));
+        }
+      }
+    });
+  }
+
+  static dynamic _dispatchTask(String task, dynamic payload) {
+    return switch (task) {
+      'sort' => (payload as List).cast<int>()..sort(),
+      'parse' => jsonDecode(payload as String),
+      'hash' => payload.hashCode,  // placeholder for real work
+      _ => throw UnimplementedError('Unknown task: $task'),
+    };
+  }
+}
+
+class _Request {
+  final int taskId;
+  final String task;
+  final dynamic payload;
+  const _Request(this.taskId, this.task, this.payload);
+}
+
+class _Response {
+  final int taskId;
+  final dynamic result;
+  final String? error;
+  const _Response(this.taskId, this.result, this.error);
 }
 ```
 ::
-Errors in `Isolate.run` propagate to the caller. For `Isolate.spawn`, set up error handling via the `onError` port or `errorsAreFatal` parameter.
 
-## `Isolate.current`
+## TransferableTypedData — Zero-Copy Transfer
 
 ::code-wrapper{language="dart"}
 ```dart
-final id = Isolate.current.debugName;
-print('Running in $id');
+import 'dart:isolate';
+import 'dart:typed_data';
+
+// By default, messages between isolates are DEEP-COPIED (full serialization).
+// For large byte buffers (Uint8List), this is O(n) in memory and time.
+// TransferableTypedData transfers ownership — zero copy, O(1).
+
+// ❌ Anti-pattern: sending a large Uint8List directly — it's deep-copied.
+Future<Uint8List> processImageBad(Uint8List pixels) async {
+  return Isolate.run(() {
+    // `pixels` was deep-copied to this isolate — 2x memory usage.
+    return _transformPixels(pixels);
+  });
+}
+
+// ✓ Correct: TransferableTypedData — zero-copy transfer.
+Future<Uint8List> processImageGood(Uint8List pixels) async {
+  // Wrap for transfer to the isolate:
+  final transferable = TransferableTypedData.fromList([pixels]);
+  final result = await Isolate.run(() {
+    // Materialize in the worker — the data is moved, not copied.
+    final data = transferable.materialize().asUint8List();
+    return _transformPixels(data);
+  });
+  // The result is copied back (small result, acceptable).
+  // For large results, wrap in TransferableTypedData again.
+  return result;
+}
+
+Uint8List _transformPixels(Uint8List pixels) {
+  // ... image processing
+  return pixels;
+}
 ```
 ::
-Each isolate has a debug name (for debugging/profiling).
 
-## Limitations
-
-- **Web**: isolates don't exist on the web (Dart compiles to JS, which is single-threaded with Web Workers as a partial analog). `Isolate.run` throws on web, or falls back to running on the main thread (depending on the setup).
-- **Spawn overhead**: ~50ms to spawn an isolate. For many small tasks, a worker pool is better (spawn once, send many messages).
-- **No shared memory**: isolates can't share mutable state. All communication is message passing (copied). This is a feature (no races) but requires a different design.
-
-## Worker Pools
-
-For many tasks, spawn a few isolates once and reuse them:
+## Worker Pool — Reusing Isolates
 
 ::code-wrapper{language="dart"}
 ```dart
+import 'dart:isolate';
+import 'dart:async';
+
+// Spawning an isolate costs ~50ms. For many small tasks, spawn once and reuse.
 class WorkerPool {
-	final List<Isolate> _workers = [];
-	final List<SendPort> _ports = [];
+  final int _size;
+  final List<_Worker> _workers = [];
+  final _idle = <_Worker>[];
+  final _queue = <_Task>[];
 
-	Future<void> spawn(int count) async {
-		for (var i = 0; i < count; i++) {
-			final receivePort = ReceivePort();
-			final isolate = await Isolate.spawn(_workerEntry, receivePort.sendPort);
-			_workers.add(isolate);
-			_ports.add(await receivePort.first as SendPort);
-		}
-	}
-	// ... send tasks to workers, collect results
+  WorkerPool(this._size);
+
+  Future<void> start() async {
+    for (var i = 0; i < _size; i++) {
+      final worker = await _Worker.spawn('worker-$i');
+      _workers.add(worker);
+      _idle.add(worker);
+    }
+    _processQueue();
+  }
+
+  Future<T> submit<T>(dynamic Function() task) {
+    final completer = Completer<T>();
+    _queue.add(_Task(task, completer));
+    _processQueue();
+    return completer.future;
+  }
+
+  void _processQueue() {
+    while (_idle.isNotEmpty && _queue.isNotEmpty) {
+      final worker = _idle.removeLast();
+      final task = _queue.removeAt(0);
+      worker.execute(task).then((_) => _idle.add(worker));
+    }
+  }
+
+  void dispose() {
+    for (var w in _workers) w.dispose();
+  }
+}
+
+class _Task {
+  final dynamic Function() fn;
+  final Completer completer;
+  _Task(this.fn, this.completer);
+}
+
+class _Worker {
+  final Isolate isolate;
+  final SendPort sendPort;
+  final ReceivePort receivePort;
+
+  _Worker(this.isolate, this.sendPort, this.receivePort);
+
+  static Future<_Worker> spawn(String debugName) async {
+    final receivePort = ReceivePort();
+    final isolate = await Isolate.spawn(
+      _entry,
+      receivePort.sendPort,
+      debugName: debugName,
+    );
+    final sendPort = await receivePort.first as SendPort;
+    return _Worker(isolate, sendPort, receivePort);
+  }
+
+  Future<dynamic> execute(_Task task) async {
+    sendPort.send(task.fn);
+    final result = await receivePort.first;
+    task.completer.complete(result);
+    return result;
+  }
+
+  void dispose() {
+    isolate.kill();
+    receivePort.close();
+  }
+
+  static void _entry(SendPort mainPort) {
+    final receivePort = ReceivePort();
+    mainPort.send(receivePort.sendPort);
+    receivePort.listen((fn) {
+      final result = (fn as dynamic Function())();
+      mainPort.send(result);
+    });
+  }
 }
 ```
 ::
-Or use a package like `worker_manager` or `pool` for managed worker pools.
+
+## When to Use Isolates (and When Not To)
+
+::code-wrapper{language="dart"}
+```dart
+// ── USE isolates for: CPU-heavy work that blocks the event loop ──
+// If a computation takes >16ms (one frame at 60fps), it drops frames.
+// Parsing large JSON, compression, image processing, sorting large datasets.
+
+// ✓ CPU-heavy: parse a 10MB JSON string.
+final data = await Isolate.run(() => jsonDecode(hugeJsonString));
+
+// ✓ CPU-heavy: compress an image.
+final compressed = await Isolate.run(() => compressImage(rawPixels));
+
+// ── DON'T use isolates for: I/O-bound work ──
+// I/O (file, network, timers) is async — the event loop handles concurrency.
+// Offloading I/O to an isolate adds ~50ms spawn overhead + copy overhead.
+
+// ❌ I/O-bound: reading a file (async, event loop handles it).
+final content = await File(path).readAsString();  // ✓ on main isolate
+
+// ❌ I/O-bound: HTTP request (async, event loop handles it).
+final response = await http.get(Uri.parse(url));  // ✓ on main isolate
+
+// ── Rule of thumb: ──
+// - If it's CPU-bound and takes >16ms → Isolate.run.
+// - If it's I/O-bound → await on the main isolate (event loop handles it).
+// - If it's many small CPU tasks → worker pool (reuse isolates).
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `Isolate.run` (or `compute` in Flutter) for one-shot CPU-heavy work — `await Isolate.run(() => heavyTask())` offloads to a separate isolate, not blocking the main/UI thread. Simpler than `Isolate.spawn` for one-shot work.
-- **Idiom**: don't use isolates for I/O — `Future`/`await` is sufficient (the event loop handles I/O concurrency). Isolates are for *CPU-heavy* work (parsing, compression, image processing). Using isolates for I/O adds overhead without benefit.
-- **Idiom**: use `TransferableTypedData` for large byte buffers — it transfers (zero-copy) instead of copying. For a large `Uint8List` between isolates, this is much faster than the default deep copy.
-- **Idiom**: use a worker pool for many small tasks — spawning an isolate has ~50ms overhead. For many tasks, spawn a few isolates once and reuse them (send messages). Use `worker_manager` or `pool` packages for managed pools.
-- **Idiom**: keep isolate functions top-level or static — closures sent to isolates must be sendable. Top-level functions and static methods are safely sendable. Avoid sending closures that capture non-sendable objects.
+- **Performance**: `TransferableTypedData` for large byte buffers between isolates — zero-copy transfer (O(1)) instead of deep copy (O(n)). Use for images, audio buffers, large arrays. The original buffer is invalidated after transfer.
+- **Idiom**: `Isolate.run` for one-shot CPU-heavy work — `await Isolate.run(() => heavyTask())` offloads to a separate isolate. Simpler than `Isolate.spawn` for fire-and-forget. The isolate is auto-killed after the function returns.
+- **Idiom**: worker pool for many small tasks — spawning an isolate costs ~50ms. For many tasks, spawn N isolates once and reuse (send messages). Use `package:worker_manager` or build a pool.
+- **Idiom**: keep isolate entry functions top-level or static — closures sent to isolates must be sendable (copied). Top-level functions and static methods are safely sendable. Avoid capturing non-sendable objects.
+- **Idiom**: `debugName` for isolates — `Isolate.spawn(entry, msg, debugName: 'image-worker')` names the isolate for DevTools. Helps identify isolates in the profiler/debugger.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Spawn overhead (~50ms)**: for small tasks, the overhead exceeds the benefit. Use a worker pool (spawn once, reuse) for many small tasks.
-- **Messages are deep-copied**: sending a large object to an isolate copies it (memory + time). Use `TransferableTypedData` for large byte buffers (zero-copy).
+- **Spawn overhead (~50ms)**: for small tasks, the overhead exceeds the benefit. Use a worker pool (spawn once, reuse) for many small tasks. `Isolate.run` is for one-shot heavy work.
+- **Messages are deep-copied**: sending a large object to an isolate copies it (memory + time). Use `TransferableTypedData` for large byte buffers (zero-copy). After transfer, the original is invalidated.
 - **Isolates don't share memory**: no shared mutable state. All communication is message passing. This is a feature (no races) but requires a different design (pass data, not share).
-- **Web doesn't support isolates**: Dart on the web (JS) is single-threaded. `Isolate.run` may throw or run on the main thread. Don't rely on isolates for web builds — use Web Workers (via JS interop) if needed.
+- **Web doesn't support isolates**: `Isolate.run` throws or runs on the main thread on web. The web is single-threaded. Use Web Workers (via JS interop) for parallelism on web.
 - **Closures must capture sendable values**: a function sent to an isolate can capture variables, but they must be sendable (copied). Capturing a non-sendable object (e.g., a file handle) fails.
 - **Errors propagate from `Isolate.run`**: a thrown error in `Isolate.run` is caught by the `await`er. For `Isolate.spawn`, handle errors via `onError` port or `errorsAreFatal`.
-- **Isolates are not threads**: they're independent workers with their own heap. No locks, no shared memory. The actor model — message passing only.
-- **`ReceivePort` must be closed**: a `ReceivePort` keeps the isolate alive. Close it (`receivePort.close()`) when done, or the isolate won't exit.
-- **`Isolate.kill()`**: forcibly kills an isolate. Use for cleanup, but it doesn't run finalizers. Prefer graceful shutdown (send a "stop" message, close ports).
-- **Named isolates**: `Isolate.spawn(entry, msg, debugName: 'worker-1')` names the isolate for debugging/profiling. Helps identify in DevTools.
+- **`ReceivePort` must be closed**: a `ReceivePort` keeps the isolate alive. Close it (`receivePort.close()`) when done, or the isolate won't exit (resource leak).
+- **`Isolate.kill()` doesn't run finalizers**: forcibly kills the isolate. Use for cleanup, but prefer graceful shutdown (send a "stop" message, close ports) for clean resource release.
+- **`Isolate.run` copies the closure and captures**: the function and its captured variables are deep-copied to the new isolate. Mutations in the isolate don't affect the original.
+- **No `dart:mirrors` in isolates (AOT)**: runtime reflection is unsupported in AOT-compiled isolates. Use code generation instead.
 
 ## 🧠 Spot the Bug
 
-A developer offloads file I/O to an isolate, but it's slower than doing it on the main thread:
+A developer offloads file reading to an isolate, but it's slower than reading on the main thread:
 
 ::code-wrapper{language="dart"}
 ```dart
 Future<String> readFile(String path) async {
-	return Isolate.run(() => File(path).readAsString());
+  return Isolate.run(() => File(path).readAsStringSync());
 }
 ```
 ::
 
-What's wrong?
+Why is this slower?
 
 <details>
 <summary>Answer</summary>
 
-File I/O is **I/O-bound**, not CPU-bound. `File.readAsString()` is async — it yields to the event loop while waiting for the disk. Offloading it to an isolate adds ~50ms spawn overhead (and a message copy for the result) without benefit — the main isolate could have awaited the I/O directly, with the event loop handling concurrency.
+File reading is **I/O-bound**, not CPU-bound. `File.readAsStringSync()` blocks the thread waiting for the disk — but `File.readAsString()` (async) yields to the event loop while waiting, allowing other work to proceed.
 
-The fix — do I/O on the main isolate with `await`:
+Offloading I/O to an isolate adds:
+1. **~50ms spawn overhead** (creating the isolate).
+2. **Message copy overhead** (the result string is deep-copied back to the main isolate).
+3. **No concurrency benefit** — the main isolate could have awaited the I/O directly.
+
+The fix — do async I/O on the main isolate:
 
 ```dart
 Future<String> readFile(String path) async {
-	return File(path).readAsString();   // already async, event loop handles it
+  return File(path).readAsString();  // async, event loop handles concurrency
 }
 ```
-::
-Isolates are for **CPU-heavy work** (parsing, compression, image processing) that would block the main isolate's event loop. For I/O (file, network, timers), `Future`/`await` is sufficient — the event loop handles concurrency while the I/O is in progress.
 
-Use isolates when:
+Use isolates for **CPU-heavy** work (parsing, compression, image processing) that blocks the event loop. For I/O, `await` on the main isolate — the event loop handles concurrency while the I/O is in progress.
+
 ```dart
-// CPU-heavy: parsing a huge JSON string
+// ✓ Correct isolate use — CPU-heavy JSON parsing:
 final data = await Isolate.run(() => jsonDecode(hugeJsonString));
 ```
-::
-Don't use isolates when:
-```dart
-// I/O-bound: reading a file (async, event loop handles it)
-final content = await File(path).readAsString();
-```
-::
-**The lesson**: isolates are for CPU-heavy work (blocks the event loop), not I/O (which is async and handled by the event loop). Offloading I/O to an isolate adds spawn overhead + copy overhead without benefit.
 
 </details>
-
-## Summary
-
-You understand isolates (no shared memory, message passing), `Isolate.run` (one-shot CPU work), `compute` (Flutter wrapper), `Isolate.spawn` + `ReceivePort`/`SendPort` (long-running, bidirectional), sendable messages (deep-copied, `TransferableTypedData` for zero-copy), when to use isolates (CPU-heavy, not I/O), worker pools, error handling, and web limitations — with the I/O-doesn't-need-isolates and spawn-overhead traps avoided. Next: error handling and exceptions.

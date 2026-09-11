@@ -1,288 +1,337 @@
-# 03 — Operators & Expressions
+---
+title: "Dart — Operators, Promotion Rules & Expression Semantics"
+description: "Deep-dive into Dart's operator semantics, null-aware operator chains, type promotion rules across closures and async gaps, cascade mechanics, and overflow behavior. Code-first engineering reference."
+---
 
-Dart's operators are C-family — arithmetic, comparison, logical, bitwise, assignment, null-aware, and type test.
+# Dart — Operators, Promotion Rules & Expression Semantics
 
-## Arithmetic
+## Null-Aware Operator Chains — Production Patterns
 
 ::code-wrapper{language="dart"}
 ```dart
-5 + 2    // 7
-5 - 2    // 3
-5 * 2    // 10
-5 / 2    // 2.5 (always double)
-5 ~/ 2   // 2 (integer division, truncated)
-5 % 2    // 1 (modulo)
-5 == 2   // false
-5 != 2   // true
+// Deep null navigation — each `?.` short-circuits the rest of the chain.
+// If any link is null, the entire expression evaluates to null (no method call).
+String? city = user?.address?.city?.toUpperCase();
+// Equivalent verbose form:
+// String? city = (user != null && user.address != null && user.address.city != null)
+//     ? user.address.city.toUpperCase() : null;
+
+// ??= for lazy cache initialization — right side evaluated ONLY on cache miss:
+final cache = <String, expensive>{};
+T compute<T>(String key, T Function() loader) =>
+    cache.putIfAbsent(key, loader) as T;  // putIfAbsent: loader runs only if key missing
+
+// ?? for defaults — right side evaluated only if left is null:
+String displayName = user?.name ?? 'Anonymous';
+int pageSize = settings?.pageSize ?? 20;
+
+// Combining: null-safe read with default and transformation:
+String label = (user?.nickname ?? user?.name ?? 'Unknown').toUpperCase();
 ```
 ::
-`/` always returns `double` (even for `int` inputs). `~/` is integer division (returns `int`, truncated toward zero). `%` is modulo. `-5 ~/ 2 = -2` (truncates toward zero, not floor).
 
-### Increment/decrement
-
-::code-wrapper{language="dart"}
-```dart
-var x = 5;
-x++;     // 6 (postfix)
-++x;     // 7 (prefix)
-x--;     // 6
---x;     // 5
-```
-::
-Postfix returns the old value, prefix returns the new. `var y = x++` — `y` is the old `x`, then `x` increments.
-
-### Overflow
-
-Dart `int` is 64-bit (native). Arithmetic wraps on overflow (two's complement) — no exception. On the web, `int` is a JS number (double), so large integers lose precision above 2^53.
-
-## Comparison
+### `!` — The Null Assertion Trap
 
 ::code-wrapper{language="dart"}
 ```dart
-5 == 5       // true
-5 != 3       // true
-5 < 3        // false
-5 > 3        // true
-5 <= 5       // true
-5 >= 6       // false
-```
-::
-`==` compares by value for most types. For lists/maps, `==` compares by identity (use `listEquals`/`DeepCollectionEquality` for value comparison). Override `==` and `hashCode` in your classes for value equality.
+// ❌ Anti-pattern: using `!` to "silence" the null-safety compiler.
+String? getInput() => maybeNull() ? 'hello' : null;
 
-## Logical
+void bad() {
+  String name = getInput()!;  // compiles, but throws TypeError at runtime if null
+  print(name.length);
+}
 
-::code-wrapper{language="dart"}
-```dart
-true && false   // false
-true || false   // true
-!true           // false
-```
-::
-Short-circuit: `&&` stops if the left is false; `||` stops if the left is true.
+// ✓ Correct: handle null explicitly — never use `!` on untrusted sources.
+void good() {
+  final name = getInput();
+  if (name != null) {
+    print(name.length);  // type promotion: name is String here (no `!` needed)
+  } else {
+    print('No input');
+  }
+}
 
-## Bitwise
+// Acceptable `!` use: framework invariants where the framework guarantees non-null.
+// Example: Flutter widget parameters after initState.
+class MyWidget extends StatefulWidget {
+  const MyWidget({super.key, required this.tag});
+  final String tag;
+  @override
+  State<MyWidget> createState() => _MyWidgetState();
+}
 
-::code-wrapper{language="dart"}
-```dart
-5 & 3    // 1 (AND)
-5 | 3    // 7 (OR)
-5 ^ 3    // 6 (XOR)
-~5       // -6 (NOT)
-5 << 2   // 20 (left shift)
-5 >> 1   // 2 (right shift, arithmetic)
-```
-::
-Bitwise operators work on `int`. `~` is bitwise NOT (flips all bits). `>>` is arithmetic (sign-extending) on signed integers.
+class _MyWidgetState extends State<MyWidget> {
+  late StreamSubscription _sub;  // `late` is safer than `!` for "assigned in initState"
 
-## Assignment
+  @override
+  void initState() {
+    super.initState();
+    _sub = someStream.listen((event) {
+      print('${widget.tag}: $event');  // `widget` is always non-null in State
+    });
+  }
 
-::code-wrapper{language="dart"}
-```dart
-var x = 5;
-x += 3;   // 8
-x -= 2;   // 6
-x *= 2;   // 12
-x ~/= 5;  // 2 (integer division assignment)
-x %= 2;   // 0
-```
-::
-Compound assignment for all arithmetic/bitwise operators: `+=`, `-=`, `*=`, `/=`, `~/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`.
-
-## Null-Aware Operators
-
-Dart has several operators for null safety:
-
-### `??` (if-null)
-
-::code-wrapper{language="dart"}
-```dart
-String? name;
-String display = name ?? 'Anonymous';   // 'Anonymous' (name is null)
-```
-::
-Returns the left if non-null, else the right. The right is evaluated only if the left is null.
-
-### `??=` (null-aware assignment)
-
-::code-wrapper{language="dart"}
-```dart
-String? name;
-name ??= 'Alice';   // name is now 'Alice' (was null)
-name ??= 'Bob';     // name is still 'Alice' (already non-null)
-```
-::
-Assigns only if the variable is null.
-
-### `?.` (null-aware access)
-
-::code-wrapper{language="dart"}
-```dart
-String? name;
-int? length = name?.length;   // null (name is null, no method call)
-name?.toUpperCase();          // no-op (null)
-```
-::
-Calls the method/accesses the property only if the object is non-null; returns `null` otherwise. Promotes the result to nullable.
-
-### `!` (null assertion)
-
-::code-wrapper{language="dart"}
-```dart
-String? name = getInput();
-print(name!.length);   // asserts name is non-null (throws if null)
-```
-::
-`!` tells the compiler "I know this isn't null" — it promotes the type to non-nullable. Throws `TypeError` at runtime if it *is* null. Use sparingly (it defeats null safety); prefer `??` or null checks.
-
-### `?..` (null-aware cascade)
-
-::code-wrapper{language="dart"}
-```dart
-StringBuilder? builder;
-builder?..add('a')..add('b');   // cascades only if builder is non-null
-```
-::
-## Type Test
-
-::code-wrapper{language="dart"}
-```dart
-var x = 10;
-x is int         // true
-x is! String     // true (is! = "is not")
-x as int         // cast (throws if not an int)
-```
-::
-`is` checks the type (and promotes in `if`). `as` casts (throws `TypeError` if invalid). Prefer `is` over `as` — `is` is safe, `as` can throw.
-
-### Type promotion
-
-::code-wrapper{language="dart"}
-```dart
-Object x = 'hello';
-if (x is String) {
-	print(x.length);   // ✓ x is promoted to String inside the if
+  @override
+  void dispose() {
+    _sub.cancel();  // always assigned before dispose if initState ran
+    super.dispose();
+  }
 }
 ```
 ::
-`is` in an `if` promotes the type within the block — no explicit cast needed.
 
-## Conditional (`?:`)
+## Type Promotion — The Closure & Field Trap
 
 ::code-wrapper{language="dart"}
 ```dart
-var status = age >= 18 ? 'adult' : 'minor';
+// Type promotion works for LOCAL variables only — not fields, not across closures,
+// not across `await` gaps. This is the #1 source of "why is the compiler mad at me."
+
+// ✓ Local variable: promotion works inside `if (x != null)`.
+void localPromotion() {
+  String? name = getInput();
+  if (name != null) {
+    print(name.length);  // promoted to String — no `!` needed
+  }
+}
+
+// ❌ Class field: promotion does NOT work — the field is shared mutable state.
+class Service {
+  String? _cached;
+
+  void use() {
+    if (_cached != null) {
+      // print(_cached.length);  // ✗ compile error: _cached is still String?
+      // The compiler can't promote because between the check and the use,
+      // another method or callback could set _cached = null.
+    }
+  }
+}
+
+// ✓ Fix for fields: copy to a local, then promote the local.
+class ServiceFixed {
+  String? _cached;
+
+  void use() {
+    final cached = _cached;  // local copy — immutable snapshot
+    if (cached != null) {
+      print(cached.length);  // ✓ promoted to String — local can't be mutated externally
+    }
+  }
+}
+
+// ❌ Across closures: promotion doesn't cross function boundaries.
+void closureTrap() {
+  String? name = getInput();
+  if (name != null) {
+    final callback = () {
+      // print(name.length);  // ✗ not promoted inside the closure
+      // The closure could execute later, after `name` was set to null.
+    };
+    callback();
+  }
+}
+
+// ✓ Fix: capture in a final local before the closure.
+void closureFixed() {
+  final name = getInput();
+  if (name != null) {
+    final captured = name;  // final local — immutable, promotion-safe
+    final callback = () {
+      print(captured.length);  // ✓ captured is non-nullable String
+    };
+    callback();
+  }
+}
+
+// ❌ Across `await`: promotion is invalidated after an await gap.
+Future<void> awaitGap() async {
+  String? name = getInput();
+  if (name != null) {
+    await Future.delayed(Duration.zero);  // yields to event loop
+    // print(name.length);  // ✗ not promoted after await
+    // Another async task could have set name = null during the await.
+  }
+}
+
+// ✓ Fix: capture before await.
+Future<void> awaitFixed() async {
+  final name = getInput();
+  if (name != null) {
+    final captured = name;  // snapshot before yielding
+    await Future.delayed(Duration.zero);
+    print(captured.length);  // ✓ captured is non-nullable
+  }
+}
 ```
 ::
-Ternary: `condition ? then : else`.
 
-## Cascade (`..`)
-
-::code-wrapper{language="dart"}
-```dart
-var paint = Paint()
-	..color = Colors.red
-	..strokeWidth = 2.0
-	..style = PaintingStyle.fill;
-```
-::
-`..` returns the object (not the result of the method), enabling chaining setters on the same instance. Equivalent to:
+## Cascade (`..`) — Fluent Configuration
 
 ::code-wrapper{language="dart"}
 ```dart
+// `..` returns the LEFT-HAND object (not the method result), enabling fluent chains.
+// Contrast with `.` which returns the method's return value.
+
+// ❌ Without cascade — verbose, repeated variable name:
 var paint = Paint();
 paint.color = Colors.red;
 paint.strokeWidth = 2.0;
 paint.style = PaintingStyle.fill;
+
+// ✓ With cascade — one expression, fluent configuration:
+var paint = Paint()
+  ..color = Colors.red
+  ..strokeWidth = 2.0
+  ..style = PaintingStyle.fill;
+
+// Cascade with methods that return void — the cascade still returns the object:
+var list = <int>[]
+  ..add(1)
+  ..add(2)
+  ..add(3);  // list is [1, 2, 3] — add() returns void, but cascade returns list
+
+// ❌ Anti-pattern: confusing cascade with method chaining.
+// list.add(1).add(2)  // ✗ add() returns void, can't chain with `.`
+
+// Null-aware cascade (`?..`) — cascades only if non-null:
+Paint? maybePaint;
+maybePaint?..color = Colors.red..strokeWidth = 2.0;
+// If maybePaint is null, the entire cascade is a no-op (no null error).
 ```
 ::
-## Spread (`...`)
 
-In collection literals (chapter 09):
+## Equality & Identity — Collection Semantics
 
 ::code-wrapper{language="dart"}
 ```dart
-var a = [1, 2, 3];
-var b = [0, ...a, 4];   // [0, 1, 2, 3, 4]
-var c = [0, ...?a, 4];  // null-aware spread (if a is null, skips)
+// `==` for built-in collections is IDENTITY (same instance), not value equality.
+print([1, 2] == [1, 2]);  // false — different instances
+print({'a': 1} == {'a': 1});  // false
+print({1, 2} == {1, 2});  // false
+
+// ❌ Anti-pattern: using `==` to compare collections.
+bool isSame(List<int> a, List<int> b) => a == b;  // almost always false
+
+// ✓ Correct: use listEquals (Flutter) or DeepCollectionEquality (collection package).
+import 'package:flutter/foundation.dart';
+print(listEquals([1, 2], [1, 2]));  // true
+
+import 'package:collection/collection.dart';
+const eq = DeepCollectionEquality();
+print(eq.equals([1, 2], [1, 2]));  // true
+print(eq.equals({'a': 1}, {'a': 1}));  // true
+
+// For your own classes, override == and hashCode together (consistency required):
+class Point {
+  final double x, y;
+  const Point(this.x, this.y);
+
+  @override
+  bool operator ==(Object other) =>
+      other is Point && x == other.x && y == other.y;
+
+  @override
+  int get hashCode => Object.hash(x, y);  // consistent with ==
+}
+// Equal objects MUST have equal hashes (HashMap/Set contract).
 ```
 ::
-## Operator Precedence
 
-High to low:
-1. `!` `~` `++` `--` (unary)
-2. `*` `/` `%` `~/`
-3. `+` `-`
-4. `<<` `>>` `>>>`
-5. `&` `^` `|`
-6. `<` `>` `<=` `>=` `instanceof` `is` `as`
-7. `==` `!=`
-8. `&&`
-9. `||`
-10. `??`
-11. `?:` (ternary)
-12. `=` `+=` etc. (assignment)
-13. `..` (cascade)
+## Overflow & Bitwise — Native vs Web
 
-Use parentheses for clarity when in doubt.
+::code-wrapper{language="dart"}
+```dart
+// Native (VM/AOT): int is 64-bit signed, overflow wraps silently (two's complement).
+// No exception, no warning — the value just wraps.
+int max = 9223372036854775807;  // 2^63 - 1
+print(max + 1);  // -9223372036854775808 (wrapped to min int64)
+
+// Web: int is a JS double — no wrap, but precision loss above 2^53.
+print(1 << 62);  // native: 4611686018427387904 | web: 4611686018427388000 (rounded)
+
+// Bitwise operators on int:
+print(0b1100 & 0b1010);  // 8  (1000 — AND)
+print(0b1100 | 0b1010);  // 14 (1110 — OR)
+print(0b1100 ^ 0b1010);  // 6  (0110 — XOR)
+print(~0b1100);          // -13 (bitwise NOT — two's complement)
+print(1 << 60);          // native: 1152921504606846976 | web: 1152921504606847000
+
+// >>>= (unsigned right shift) — Dart 3+ for logical shift (fills with zeros):
+int v = -1;  // all bits set (0xFFFFFFFFFFFFFFFF on 64-bit)
+print(v >> 1);   // -1 (arithmetic shift — sign bit preserved)
+print(v >>> 1);  // 9223372036854775807 (logical shift — zeros fill from left)
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `~/` for integer division (not `/` then `toInt()`) — `7 ~/ 2 = 3` directly, clearer and faster than `(7 / 2).toInt()`.
-- **Idiom**: use `??` (if-null) and `??=` (null-aware assignment) for defaults — `name ?? 'Anonymous'` and `cache[key] ??= compute(key)`. They handle null cleanly without verbose `if` checks.
-- **Idiom**: use `?.` (null-aware access) for optional method calls — `obj?.method()` returns `null` if `obj` is null (no method call). Chains well: `user?.address?.city`.
-- **Idiom**: prefer `is` over `as` for type checks — `if (x is String) { x.length }` promotes the type safely (no throw). `x as String` throws if `x` isn't a String. Use `as` only when you're certain.
-- **Idiom**: use `..` (cascade) for fluent object configuration — `Paint()..color = red..strokeWidth = 2` sets multiple properties in one expression, cleaner than separate statements.
+- **Idiom**: `??=` for lazy memoization — `cache[key] ??= compute(key)` runs `compute` only on a cache miss. The right side is evaluated only if the left is null. Zero-overhead if cached.
+- **Idiom**: `?.` chains for deep null navigation — `user?.address?.city` short-circuits at the first null, no nested `if` checks. Returns nullable type; follow with `?? default`.
+- **Performance**: `~/` for integer division is a single VM op — `(a / b).toInt()` does float division then truncation (two ops, potential precision loss on web). Prefer `~/%` for integer math.
+- **Idiom**: cascade (`..`) for fluent object setup — `Paint()..color = red..strokeWidth = 2` is one expression. Use for configuring objects with many setters (Paint, TextStyle, TextEditingController).
+- **Debug**: `identical(a, b)` checks reference equality (same object in memory). `a == b` checks value equality (calls `operator ==`). Use `identical` to verify `const` canonicalization; use `==` for domain equality.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`/` always returns `double`**: `4 / 2 = 2.0` (not `2`). Use `~/` for integer division (`4 ~/ 2 = 2`).
-- **`~/` truncates toward zero**: `-5 ~/ 2 = -2` (not -3). `~/%` follows the sign of the dividend.
-- **`%` follows the sign of the dividend**: `-5 % 2 = -1` (in Dart). Not the mathematical modulo (which would be 1).
-- **`==` for collections is identity**: `[1,2] == [1,2]` is `false` (different instances). Use `listEquals` (from `package:flutter/foundation.dart`) or `DeepCollectionEquality()` for value equality.
-- **`!` (null assertion) throws at runtime**: `null!` throws `TypeError`. It defeats null safety — use only when you're certain, and prefer null-safe patterns (`??`, `?.`, `if (x != null)`).
-- **`as` throws on invalid cast**: `(5 as String)` throws `TypeError`. Use `is` first or `as` only when certain.
-- **Type promotion doesn't work across closures**: `if (x is String) { () => x.length; }` — inside the closure, `x` isn't promoted (the closure could run later, after `x` changed). Assign to a local first.
-- **`??=` evaluates the right side only if the left is null**: `cache[key] ??= compute(key)` — `compute` runs only on a cache miss. Efficient for memoization.
-- **`..` (cascade) returns the object, not the method result**: `list..add(1)` returns `list` (not `void` from `add`). Don't confuse with method chaining (`add` returns `void`).
-- **Integer overflow wraps silently**: no exception. `9223372036854775807 + 1` wraps to `-9223372036854775808` (on native). On web, large `int`s lose precision (JS number).
+- **`/` always returns `double`**: `4 / 2` is `2.0` (double), not `2` (int). Use `~/` for integer division. Assigning `int x = 4 / 2` is a compile error (type mismatch).
+- **`%` follows the dividend's sign**: `-7 % 3 = -1` (Dart/C/Java), not `2` (Python/mathematical modulo). Use `((a % n) + n) % n` for non-negative modulo.
+- **`is` promotes, `as` throws**: `if (x is String) { x.length }` promotes safely. `x as String` throws `TypeError` if `x` isn't a String. Use `is` for checks, `as` only when certain.
+- **Type promotion doesn't apply to fields**: `if (this.x != null) { x.length }` — `x` is still nullable. Copy to a local: `final x = this.x; if (x != null) { x.length; }`.
+- **Promotion is invalidated after `await`**: a nullable local checked before `await` is not promoted after. Snapshot it: `final captured = x; if (captured != null) { await ...; captured.length; }`.
+- **`==` for collections is identity**: `[1,2] == [1,2]` is `false`. Use `listEquals`, `DeepCollectionEquality`, or records (which have structural equality).
+- **`!` throws `TypeError` at runtime**: `null!` crashes. It defeats null safety — use only on framework invariants. Prefer `if (x != null)`, `??`, or `?.`.
+- **Integer overflow wraps silently on native**: `9223372036854775807 + 1` wraps to `minInt64`. No exception. Use `BigInt` for overflow-safe arithmetic.
+- **`int` on web loses precision above 2^53**: `int.parse('9007199254740993')` gives `9007199254740992` on web (double rounding). Use `BigInt` for exact large integers.
+- **`~` (bitwise NOT) on a positive int gives a negative int**: `~5 = -6` (two's complement). `~0 = -1`. This is standard two's complement behavior, not a bug.
 
 ## 🧠 Spot the Bug
 
-A developer divides two integers and expects an integer result, but gets a `double`:
+A developer checks a nullable field for null, then uses it inside a closure, but the compiler rejects it:
 
 ::code-wrapper{language="dart"}
 ```dart
-int total = 10;
-int count = 3;
-int average = total / count;
+class Cache {
+  String? _value;
+
+  void process() {
+    if (_value != null) {
+      Future(() {
+        print(_value.length);  // ✗ compile error: _value is String?
+      });
+    }
+  }
+}
 ```
 ::
 
-What's wrong?
+Two problems — what are they?
 
 <details>
 <summary>Answer</summary>
 
-`/` always returns `double` in Dart (even for `int` operands). `10 / 3 = 3.333...` (a `double`). Assigning a `double` to an `int` (`int average = ...`) is a type error.
+1. **Fields don't promote**: `if (_value != null)` does not promote `_value` to `String` because it's a class field — the compiler can't guarantee it won't be mutated between the check and the use.
 
-The fix — use `~/` (integer division) for an `int` result:
+2. **Closure + async gap**: even if promotion worked for fields, it doesn't cross into the `Future(() { ... })` closure. The closure executes asynchronously, and `_value` could be null by then.
 
-```dart
-int total = 10;
-int count = 3;
-int average = total ~/ count;   // 3 (int)
-```
-::
-Or if you want the `double` average:
+The fix — snapshot to a final local, then use the local inside the closure:
 
 ```dart
-double average = total / count;   // 3.333...
+class Cache {
+  String? _value;
+
+  void process() {
+    final value = _value;  // immutable local snapshot
+    if (value != null) {
+      Future(() {
+        print(value.length);  // ✓ value is promoted to String (final local, no async mutation)
+      });
+    }
+  }
+}
 ```
-::
-**The lesson**: Dart's `/` always returns `double` (unlike some languages where `int / int = int`). Use `~/` for integer division (`int ~/ int = int`, truncated). This is a common surprise for developers from Python 2, Java, or C (where `int / int = int`).
+
+The local `value` is `final` — it can't be reassigned, so the promotion holds inside the closure. The snapshot captures the value at check time, making it immune to concurrent mutation of `_value`.
 
 </details>
-
-## Summary
-
-You know Dart's arithmetic (`+`, `-`, `*`, `/` (double), `~/` (int), `%`), comparison, logical, bitwise, assignment, null-aware (`??`, `??=`, `?.`, `!`, `?..`), type test (`is`, `is!`, `as`, type promotion), conditional (`?:`), cascade (`..`), and spread (`...`) operators — with the `/`-returns-double and `!`-throws traps avoided. Next: control flow.

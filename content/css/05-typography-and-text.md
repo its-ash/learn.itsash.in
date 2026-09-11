@@ -1,229 +1,193 @@
-# 05 — Typography & Text
+---
+title: "05 — Typography Engine: Font Loading, Variable Fonts & Text Overflow"
+description: "Font-display strategies, variable font axes, line-height unitless math, single and multi-line truncation, and white-space/word-break edge cases. Code-first reference for production typography systems."
+---
 
-Typography is most of web design. This chapter covers fonts, sizes, spacing, and text properties.
+# 05 — Typography Engine: Font Loading, Variable Fonts & Text Overflow
 
-## Font Properties
+Typography is 80% of web UI. The engine handles it through: font matching (fallback stack), font loading (FOIT/FOUT), text layout (line boxes, wrapping, truncation), and OpenType features (variable font axes). Every "my text overlaps" or "my font flashes" bug is in one of these stages.
+
+## Font Stack — the fallback chain
 
 ::code-wrapper{language="css"}
 ```css
-p {
-	font-family: "Helvetica Neue", Arial, sans-serif;
-	font-size: 1rem;
-	font-weight: 400;          /* 100-900, or normal/bold */
-	font-style: normal;        /* normal/italic/oblique */
-	line-height: 1.5;          /* unitless — relative to font-size */
-	letter-spacing: 0.02em;    /* tracking */
-	word-spacing: 0.1em;
-	font-variant: small-caps;
-	font-stretch: condensed;   /* if the font supports it */
+:root {
+  /* System stack: 0KB download, native OS UI font. The production default. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* The engine tries each in order. The LAST must be a generic family (guaranteed to exist).
+     Quote multi-word names. Generic: serif | sans-serif | monospace | cursive | fantasy | system-ui. */
 }
 ```
 ::
-### `font-family` and fallbacks
 
-::code-wrapper{language="css"}
-```css
-font-family: "Helvetica Neue", Arial, sans-serif;
-```
-::
-The browser tries each font in order, falling back to the next if unavailable. The last should be a generic family (`serif`, `sans-serif`, `monospace`, `cursive`, `fantasy`, `system-ui`) — guaranteed to work. Quote multi-word names (`"Helvetica Neue"`).
-
-### System font stack
-
-::code-wrapper{language="css"}
-```css
-font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-```
-::
-Uses the OS's native UI font — no download, native feel. Good default for most sites.
-
-### `@font-face` (custom fonts)
+## `@font-face` — loading strategy with `font-display`
 
 ::code-wrapper{language="css"}
 ```css
 @font-face {
-	font-family: "MyFont";
-	src: url("myfont.woff2") format("woff2"),
-	     url("myfont.woff") format("woff");
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;   /* show fallback while loading, swap when ready */
+  font-family: "Inter";
+  src: url("inter.woff2") format("woff2-variations"),  /* variable font: best compression + all weights in one file */
+       url("inter-static.woff2") format("woff2");        /* fallback: static weight */
+  font-weight: 100 900;       /* RANGE — declares this face covers all weights (variable font) */
+  font-style: normal;
+  font-display: swap;         /* show fallback IMMEDIATELY, swap when loaded → no invisible text (FOIT) */
+  /* font-display values:
+     auto    = browser decides (usually swap)
+     block   = invisible up to 3s, then swap (FOIT for 3s — bad)
+     swap    = fallback immediately, swap when ready (FOUT — recommended for body text)
+     fallback = 100ms invisible, 3s swap window, may not load at all (good for decorative)
+     optional = 100ms invisible, no swap — if it doesn't load fast, never shows (zero layout shift) */
+  unicode-range: U+0000-00FF;  /* only load Latin glyphs → smaller download for CJK pages */
 }
-
-body { font-family: "MyFont", sans-serif; }
 ```
 ::
-`font-display: swap` shows the fallback font immediately and swaps when the web font loads (avoiding invisible text). Use `woff2` (best compression); `woff` as fallback. Avoid `ttf`/`otf` (larger).
 
-### Font weights and variable fonts
+### Anti-pattern: blocking font load with invisible text
 
-Standard weights: 100 (thin), 300 (light), 400 (regular), 500 (medium), 600 (semibold), 700 (bold), 900 (black). A font may only have a few — `font-weight: 600` with a font that only has 400 and 700 will round to 700.
+::code-wrapper{language="css"}
+```css
+/* ❌ font-display: block (or no font-display on some browsers) → invisible text for up to 3s
+   while the font loads. Users see a blank page. Bounce. */
+@font-face { font-family: "BrandFont"; src: url("brand.woff2"); }
+```
+::
 
-**Variable fonts** have a continuous weight range:
+::code-wrapper{language="css"}
+```css
+/* ✓ font-display: swap → fallback text shows instantly, font swaps when ready.
+   Pair with <link rel="preload"> for the critical font to minimize the swap window. */
+@font-face { font-family: "BrandFont"; src: url("brand.woff2") format("woff2"); font-display: swap; }
+```
+::
+
+::code-wrapper{language="html"}
+```html
+<!-- Preload the critical font → starts downloading before CSS parses -->
+<link rel="preload" href="/fonts/brand.woff2" as="font" type="font/woff2" crossorigin>
+```
+::
+
+## Variable Fonts — continuous weight axes
 
 ::code-wrapper{language="css"}
 ```css
 @font-face {
-	font-family: "Inter";
-	src: url("inter.woff2") format("woff2-variations");
-	font-weight: 100 900;   /* range */
+  font-family: "Inter";
+  src: url("inter.woff2") format("woff2-variations");
+  font-weight: 100 900;  /* declares the weight RANGE. Without this, font-weight:450 won't work. */
+  font-stretch: 75% 125%; /* width axis (condensed ↔ expanded) */
 }
-
-p { font-weight: 450; }   /* any value in the range */
+.heading { font-weight: 580; }  /* any value in the range — no separate font file per weight */
+.body { font-weight: 430; font-stretch: 100%; }
+/* One file = all weights. Saves KB vs loading 400/500/600/700 separately. */
 ```
 ::
-## Font Size
+
+## `line-height` — why unitless is the only correct choice
 
 ::code-wrapper{language="css"}
 ```css
-font-size: 1rem;       /* relative to root — preferred */
-font-size: 16px;       /* absolute — doesn't respect user's setting */
-font-size: 1.2em;      /* relative to parent — compounds */
-font-size: clamp(1rem, 2vw + 0.5rem, 1.5rem);  /* fluid */
+body { line-height: 1.5; }  /* unitless: 1.5 × EACH element's font-size, computed per-element */
+/* h1 with font-size: 3rem (48px) → line-height: 72px (1.5 × 48). Correct. */
 ```
 ::
-Default root size is 16px in most browsers. `1rem` = 16px (unless the user changed their setting, which `rem` respects).
 
-## Line Height
+### Anti-pattern: line-height with a unit causes overlap
 
 ::code-wrapper{language="css"}
 ```css
-line-height: 1.5;       /* unitless — 1.5× the font-size (preferred) */
-line-height: 24px;      /* fixed — doesn't scale with font-size */
-line-height: 1.5em;     /* relative to the element's font-size */
+/* ❌ px/em line-height is a FIXED value inherited as-is → doesn't scale with child font-size */
+body { line-height: 24px; font-size: 16px; }
+h1 { font-size: 3rem; }  /* inherits 24px line-height on 48px text → lines OVERLAP (24 < 48) */
 ```
 ::
-**Use unitless** — `1.5` (not `1.5em` or `24px`). Unitless scales with each element's font-size; `em`/`px` don't adapt to child font-sizes. 1.5 is a good default for body text; 1.2-1.3 for headings.
-
-## Text Properties
 
 ::code-wrapper{language="css"}
 ```css
-p {
-	text-align: left;          /* left/right/center/justify */
-	text-decoration: underline; /* underline/overline/line-through/none */
-	text-transform: uppercase;  /* uppercase/lowercase/capitalize/none */
-	text-indent: 2em;           /* indent the first line */
-	text-shadow: 1px 1px 2px gray;
-	white-space: normal;        /* nowrap/pre/pre-wrap/pre-line */
-	text-overflow: ellipsis;    /* with overflow: hidden + white-space: nowrap */
-	overflow-wrap: break-word;  /* break long words */
-	word-break: break-word;     /* break anywhere (CJK) */
-	hyphens: auto;              /* hyphenate (needs lang attribute) */
-}
+/* ✓ unitless line-height is computed per-element → scales with each child's font-size */
+body { line-height: 1.5; }
+h1 { font-size: 3rem; }  /* line-height: 72px (1.5 × 48). No overlap. */
 ```
 ::
-### Truncating text (ellipsis)
+
+## Text Truncation — single and multi-line
 
 ::code-wrapper{language="css"}
 ```css
+/* Single-line ellipsis: the trio. All three required. */
 .truncate {
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+  white-space: nowrap;        /* prevent wrapping */
+  overflow: hidden;           /* clip what doesn't fit */
+  text-overflow: ellipsis;    /* show … at the clip point */
+}
+
+/* Multi-line clamp: -webkit-box is still the standard (line-clamp property is landing but partial) */
+.clamp-3 {
+  display: -webkit-box;            /* deprecated but the only way line-clamp works */
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;           /* show 3 lines, then … */
+  overflow: hidden;
 }
 ```
 ::
-Three properties together — no wrap, clip overflow, show `…`. Works on single-line text.
 
-### Multi-line truncation
+## `white-space` — the wrapping control matrix
+
+::code-wrapper{language="text"}
+```text
+Value      Spaces    Newlines   Wrapping    Use case
+normal     collapse  collapse   wrap        default body text
+nowrap     collapse  collapse   NO wrap     horizontal scroller items, truncation
+pre        preserve  preserve   NO wrap     <pre>-like code display
+pre-wrap   preserve  preserve   wrap        code with long lines that should wrap
+pre-line   collapse  preserve   wrap        user input with explicit line breaks
+```
+::
+
+## Word breaking — `overflow-wrap` vs `word-break`
 
 ::code-wrapper{language="css"}
 ```css
-.clamp {
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 3;
-	overflow: hidden;
-}
+/* overflow-wrap: break-word → breaks ONLY when a word would overflow. Gentle, preferred. */
+.url { overflow-wrap: break-word; }  /* long URL breaks only if it can't fit */
+
+/* word-break: break-all → breaks ANYWHERE, even mid-word. Aggressive, hurts CJK readability. */
+.cjk { word-break: break-all; }  /* don't use for Latin text — splits words mid-character */
+
+/* hyphens: auto → browser hyphenates using dictionary. Needs lang attribute. */
+[lang="en"] p { hyphens: auto; -webkit-hyphens: auto; }  /* requires <html lang="en"> */
 ```
 ::
-`line-clamp: 3` shows 3 lines then `…`. Modern browsers support `line-clamp` without the `-webkit-` prefix in most cases, but keep it for compatibility.
-
-## `white-space`
-
-| Value | Spaces/tabs | Newlines | Wrapping |
-|---|---|---|---|
-| `normal` | collapse | collapse | wrap |
-| `nowrap` | collapse | collapse | no wrap |
-| `pre` | preserve | preserve | no wrap |
-| `pre-wrap` | preserve | preserve | wrap |
-| `pre-line` | collapse | preserve | wrap |
-
-`pre` is like `<pre>` — preserves all whitespace. `pre-wrap` preserves but wraps. `nowrap` prevents wrapping (use for horizontal scrollers or truncation).
-
-## Text Alignment and Justify
-
-::code-wrapper{language="css"}
-```css
-text-align: justify;   /* stretch lines to full width */
-```
-::
-`justify` can create "rivers" of whitespace, especially with short words. Use `text-align: left` for body text (better readability); `justify` only for print-like layouts. `text-align-last: center` controls the last line of justified text.
-
-## Vertical Alignment
-
-::code-wrapper{language="css"}
-```css
-vertical-align: middle;   /* in table cells or inline elements */
-vertical-align: top;
-vertical-align: baseline; /* default */
-```
-::
-`vertical-align` only applies to inline elements (and table cells) — it doesn't vertically center block elements. For block centering, use flexbox (`align-items: center`) or grid.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `line-height: 1.5` (unitless) for body text — unitless scales with each element's font-size (a heading with `line-height: 1.5` gets 1.5× its own font-size, not the body's). `1.5em` or `24px` don't adapt to child font-sizes. 1.5 is a good default; 1.2-1.3 for headings.
-- **Idiom**: use `font-display: swap` in `@font-face` — it shows the fallback font immediately and swaps when the web font loads, avoiding invisible text (FOIT) and the "content jump" when the font arrives. Use `woff2` (best compression).
-- **Idiom**: use `system-ui, -apple-system, sans-serif` as a default font stack — it uses the OS's native UI font (no download, native feel, instant). Add a web font via `@font-face` only when you need a specific brand font.
-- **Idiom**: for single-line truncation, the trio is `white-space: nowrap; overflow: hidden; text-overflow: ellipsis;` — all three are needed (no wrap, clip, show `…`). For multi-line, `display: -webkit-box; -webkit-line-clamp: N; -webkit-box-orient: vertical; overflow: hidden;`.
-- **Idiom**: use `rem` for font-sizes — `rem` respects the user's browser font-size setting (accessibility), while `px` doesn't. `1rem` = the root font-size (16px by default). Use `clamp(1rem, ..., 1.25rem)` for fluid responsive text.
+- **Idiom**: `font-display: optional` for non-critical fonts → zero layout shift (if it doesn't load in ~100ms, the browser never swaps). Use for decorative/brand fonts where FOUT is worse than never loading.
+- **Idiom**: `unicode-range` to subset `@font-face` → a CJK page only loads the Latin face for Latin text, not the full CJK font. Dramatic KB savings.
+- **Idiom**: variable fonts (one file, all weights) replace 4–6 static font files. Declare `font-weight: 100 900` in `@font-face` or arbitrary weights won't work.
+- **Idiom**: `text-wrap: balance` for headings (evens line lengths, no manual `<br>`) and `text-wrap: pretty` for paragraphs (avoids single-word last line). Free typography polish, no JS.
+- **Idiom**: `font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem)` — fluid body type bounded by rem → respects user font-size setting, no media queries.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`em` for font-size compounds**: `1.2em` inside a `1.2em` is 1.44× root. Use `rem`.
-- **`line-height` with a unit doesn't adapt**: `line-height: 24px` on a heading with `font-size: 2rem` (32px) gives 24px line-height (smaller than the text — overlap). Use unitless `1.5`.
-- **`text-align: justify` creates whitespace rivers**: especially with short words or narrow columns. Prefer `left` for screen readability; `justify` for print.
-- **`vertical-align` doesn't center block elements**: it's for inline/table-cell. Use flexbox (`align-items: center`) for block centering.
-- **Web fonts can cause layout shift (FOUT/FOIT)**: the text is invisible or shifts when the font loads. `font-display: swap` shows fallback immediately; `size-adjust`/`ascent-override` in `@font-face` can reduce the shift.
-- **`@font-face` `src` order matters**: list `woff2` first (best compression), then `woff`. The browser picks the first it supports.
-- **`white-space: nowrap` can overflow**: text doesn't wrap, so long text overflows the container. Combine with `overflow: hidden` + `text-overflow: ellipsis` for truncation.
-- **`hyphens: auto` needs `lang` attribute**: `<html lang="en">` — without it, the browser doesn't know how to hyphenate. Safari needs `-webkit-hyphens: auto`.
-- **`word-break: break-all` vs `overflow-wrap: break-word`**: `break-all` breaks anywhere (even mid-word, aggressive); `break-word` breaks only when a word would overflow (gentler, preferred).
-- **Variable fonts need `font-weight` range in `@font-face`**: `font-weight: 100 900;` declares the range. Without it, `font-weight: 450` may not work (the browser doesn't know the font supports it).
+- **`@font-face` `src` order matters**: list `woff2` first (best compression), then `woff`. The browser picks the first format it supports.
+- **`line-height` with `em`/`px` inherits as a computed value**: `line-height: 1.5em` on body computes to `24px` (at 16px font) and inherits as `24px` — same trap as `px`. Unitless is the only safe choice.
+- **`vertical-align` only works on inline/table-cell elements**: it does NOT vertically center block elements. Use flexbox `align-items: center` for block centering.
+- **`text-align: justify` creates whitespace "rivers"**: especially with short words or narrow columns. Prefer `left` for screen readability; `justify` for print.
+- **Variable fonts need the axis range declared**: `font-weight: 100 900;` in `@font-face`. Without it, `font-weight: 450` may not work (the browser doesn't know the font supports that weight).
+- **`hyphens: auto` requires the `lang` attribute**: `<html lang="en">` — without it, the browser can't look up hyphenation rules. Safari needs `-webkit-hyphens`.
 
 ## 🧠 Spot the Bug
-
-A developer sets `line-height: 20px` on body text, but headings overlap:
 
 ::code-wrapper{language="css"}
 ```css
 body { line-height: 20px; font-size: 16px; }
-h1 { font-size: 3rem; }   /* inherits line-height: 20px */
+h1 { font-size: 3rem; }
 ```
 ::
-
-What's wrong?
 
 <details>
 <summary>Answer</summary>
 
-`line-height: 20px` is inherited by `h1`, but `h1`'s font-size is `3rem` (48px). A 20px line-height on 48px text is smaller than the text itself — the lines overlap (the text is taller than the line box).
-
-The fix — use a unitless `line-height`, which scales with each element's font-size:
-
-```css
-body { line-height: 1.5; font-size: 1rem; }
-h1 { font-size: 3rem; }   /* line-height is 1.5 × 48px = 72px — no overlap */
-```
-::
-Unitless `line-height` is computed per-element (1.5 × the element's font-size), so `h1` gets 72px and body text gets 24px — both proportional. A fixed `20px` or `1.5em` (computed on the parent) would both cause the overlap.
-
-**The lesson**: `line-height` with a unit (`px`/`em`) is a fixed value that's inherited as-is — it doesn't scale with the child's font-size. Unitless `line-height` scales per-element. Always use unitless for `line-height`.
+`line-height: 20px` is inherited by `h1` as a fixed 20px value. `h1`'s font-size is `3rem` (48px). A 20px line-height on 48px text is smaller than the text → lines overlap (the text is taller than the line box). Fix: `line-height: 1.5` (unitless) — computed per-element: `h1` gets 72px (1.5 × 48), body gets 24px (1.5 × 16). Both proportional. A unit (`px` or `em`) is a fixed inherited value that doesn't scale with the child's font-size.
 
 </details>
-
-## Summary
-
-You can now set font-family (with fallbacks and `@font-face`/`font-display: swap`), font-size (`rem` preferred), font-weight, line-height (unitless), letter/word-spacing, text alignment/decoration/transform, truncation (single and multi-line), `white-space`, and word-breaking — while avoiding the `line-height`-with-unit and `em`-compounding traps. Next: display and positioning.

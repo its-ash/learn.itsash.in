@@ -1,263 +1,351 @@
+---
+title: "22 — I/O, Files & the io Package"
+description: "Reader/Writer composition, io.Copy mechanics, bufio streaming, file handling patterns, and zero-copy transfer with io.CopyN/LimitReader."
+---
+
 # 22 — I/O, Files & the io Package
 
-Go's I/O is built around two interfaces: `io.Reader` and `io.Writer`. Almost every I/O type (files, network, buffers, compression) implements them, making streams composable.
+Go's I/O is built around two small interfaces — `io.Reader` and `io.Writer` — that compose into pipelines for files, networks, compression, and encoding.
 
-## `io.Reader` and `io.Writer`
+## The Two Core Interfaces
 
 ::code-wrapper{language="go"}
 ```go
-type Reader interface {
-	Read(p []byte) (n int, err error)
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ io.Reader                                                             │
+// │   Read(p []byte) (n int, err error)                                   │
+// │   Fills p up to len(p) bytes. Returns n=bytes read, err=io.EOF at end│
+// │   ⚠️ May return n < len(p) and err=nil — that's OK, call Read again  │
+// │   ⚠️ Never assume Read fills the buffer — always use the returned n   │
+// └──────────────────────────────────────────────────────────────────────┘
+
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ io.Writer                                                             │
+// │   Write(p []byte) (n int, err error)                                 │
+// │   Writes p. Returns n=bytes written, err if not all written.         │
+// │   ⚠️ If n < len(p) and err=nil, it's a short write — caller retries  │
+// └──────────────────────────────────────────────────────────────────────┘
+
+// Implementations: *os.File, *bytes.Buffer, *strings.Builder, net.Conn,
+//   *gzip.Reader/Writer, *http.Response.Body, *json.Encoder, etc.
+
+// ─── Custom Reader (a rate-limited reader) ───
+type rateLimitReader struct {
+	r       io.Reader
+	limit   int  // bytes per second
+	tokens  int
+	ticker  *time.Ticker
 }
 
-type Writer interface {
-	Write(p []byte) (n int, err error)
+func (r *rateLimitReader) Read(p []byte) (int, error) {
+	// Wait for tokens, then read up to the available amount
+	<-r.ticker.C  // one token per tick
+	max := min(len(p), r.limit)
+	return r.r.Read(p[:max])
 }
-``
-::
+```
 
-- `Read` fills `p` up to `len(p)` bytes, returns the number read and `error` (`io.EOF` when done).
-- `Write` writes `p`, returns the number written and `error`.
-
-Implementations: `*os.File`, `*bytes.Buffer`, `*strings.Builder`, `net.Conn`, `*gzip.Reader`, `*http.ResponseWriter`, etc.
-
-## `io.Copy` — the Workhorse
+## `io.Copy` — The Zero-Copy Transfer
 
 ::code-wrapper{language="go"}
 ```go
-// Copy all data from src to dst
-n, err := io.Copy(dst, src)
-``
-::
+// io.Copy reads from src and writes to dst until EOF, using a 32KB buffer.
+// It's the standard way to transfer data without manual buffering.
 
-`io.Copy` reads from a `Reader` and writes to a `Writer` until `io.EOF`, using a small buffer internally. It's the standard way to transfer data (file-to-file, file-to-network, etc.) without manual buffering.
+func copyFile(src, dst string) (int64, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return 0, fmt.Errorf("open src: %w", err)
+	}
+	defer in.Close()
 
-## Files (`os` package)
+	out, err := os.Create(dst)
+	if err != nil {
+		return 0, fmt.Errorf("create dst: %w", err)
+	}
+	defer out.Close()
+
+	n, err := io.Copy(out, in)  // returns bytes copied
+	if err != nil {
+		return 0, fmt.Errorf("copy: %w", err)
+	}
+
+	// ⚠️ defer out.Close() error is lost — call Sync explicitly:
+	if err := out.Sync(); err != nil {  // flush to disk
+		return 0, fmt.Errorf("sync: %w", err)
+	}
+	return n, nil
+}
+
+// ─── io.CopyN — copy exactly N bytes ───
+n, err := io.CopyN(dst, src, 1024)  // copies exactly 1024 bytes (or fewer if EOF)
+
+// ─── io.LimitReader — wrap to limit reads ───
+limited := io.LimitReader(src, 1024)  // reads at most 1024 bytes from src
+io.Copy(dst, limited)  // copies at most 1024 bytes
+```
+
+## `bufio` — Buffered Scanning
 
 ::code-wrapper{language="go"}
 ```go
-// Open for reading
-f, err := os.Open("file.txt")
-if err != nil {
+// bufio.Scanner — line-by-line reading (most common pattern):
+func readLines(path string) error {
+	f, err := os.Open(path)
+	if err != nil { return err }
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {  // reads one line at a time
+		line := scanner.Text()
+		fmt.Println(line)
+	}
+
+	// ⚠️ Always check scanner.Err() after the loop:
+	return scanner.Err()  // returns io.EOF normally, or an error
+}
+
+// ─── Scanner buffer size — the 64KB limit trap ───
+func readLongLines(path string) error {
+	f, _ := os.Open(path)
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)  // 1MB max line
+	// Default max line is 64KB — lines longer than that cause scanner.Err()
+	// to return bufio.ErrTooLong. Increase the buffer for long lines.
+
+	for scanner.Scan() {
+		// process line
+	}
+	return scanner.Err()
+}
+
+// ─── bufio.Reader — lower-level, more control ───
+func readWithReader(path string) error {
+	f, _ := os.Open(path)
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadString('\n')  // reads up to and including '\n'
+		if err != nil {
+			if err == io.EOF && line != "" {
+				process(line)  // last line without newline
+			}
+			break
+		}
+		process(line)
+	}
+	return nil
+}
+```
+
+## File Operations
+
+::code-wrapper{language="go"}
+```go
+func fileOps() {
+	// Read all (Go 1.16+ — replaces ioutil.ReadFile):
+	data, err := os.ReadFile("config.yaml")
+	if err != nil { /* file doesn't exist, permission denied, etc. */ }
+
+	// Write all (Go 1.16+):
+	err = os.WriteFile("output.txt", []byte("hello"), 0644)
+	// 0644 = user: rw, group: r, other: r
+
+	// Open for reading:
+	f, _ := os.Open("file.txt")
+	defer f.Close()
+
+	// Create/open for writing (truncates if exists):
+	f, _ = os.Create("new.txt")
+	defer f.Close()
+
+	// Open with explicit flags:
+	f, _ = os.OpenFile("log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	defer f.Close()
+	f.WriteString("appended line\n")
+
+	// ─── File flags ───
+	// os.O_RDONLY   read only
+	// os.O_WRONLY   write only
+	// os.O_RDWR     read/write
+	// os.O_CREATE   create if not exists
+	// os.O_TRUNC    truncate to 0 on open
+	// os.O_APPEND   append to end (no overwrite)
+	// os.O_EXCL     fail if file exists (with O_CREATE)
+	// os.O_SYNC     synchronous I/O (no buffering, for durability)
+}
+
+// ─── The defer-close error trap ───
+func writeFile(path string, data []byte) error {
+	f, err := os.Create(path)
+	if err != nil { return err }
+	defer f.Close()  // ⚠️ Close() error is DISCARDED by defer
+
+	if _, err := f.Write(data); err != nil {
+		return err  // f.Close() runs in defer, but error is lost
+	}
+
+	// ✅ For write durability, call Sync and Close explicitly:
+	if err := f.Sync(); err != nil {  // flush kernel buffers to disk
+		f.Close()
+		return fmt.Errorf("sync: %w", err)
+	}
+	if err := f.Close(); err != nil {  // close can fail (flush error)
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
+}
+```
+
+## Streaming Pipeline — Composing Readers and Writers
+
+::code-wrapper{language="go"}
+```go
+// ─── gzip-compressed HTTP response ───
+func decompressResponse(resp *http.Response) ([]byte, error) {
+	// resp.Body is a Reader → gzip.Reader → io.ReadAll → bytes
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+
+	return io.ReadAll(gz)  // decompressed bytes
+}
+
+// ─── gzip-compressed file writer ───
+func writeGzipped(path string, data []byte) error {
+	f, err := os.Create(path)
+	if err != nil { return err }
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+	defer gz.Close()  // ⚠️ must Close to flush compressed data
+
+	_, err = gz.Write(data)
 	return err
 }
-defer f.Close()
 
-// Read
-data := make([]byte, 1024)
-n, err := f.Read(data)
+// ─── Base64-encoded gzip stream ───
+// Read: file → base64 decoder → gzip decoder → JSON decoder → struct
+func decodeNested(r io.Reader) (*Config, error) {
+	b64 := base64.NewDecoder(base64.StdEncoding, r)
+	gz, err := gzip.NewReader(b64)
+	if err != nil { return nil, err }
+	defer gz.Close()
 
-// Read all (Go 1.16+)
-data, err := os.ReadFile("file.txt")
-
-// Create/open for writing (truncate if exists)
-f, err := os.Create("file.txt")
-defer f.Close()
-n, err := f.Write([]byte("hello"))
-
-// Write all (Go 1.16+)
-err := os.WriteFile("file.txt", []byte("hello"), 0644)
-
-// Open with flags
-f, err := os.OpenFile("file.txt", os.O_APPEND|os.O_WRONLY, 0644)
-defer f.Close()
-f.WriteString("appended\n")
-``
-::
-
-### File modes and permissions
-
-::code-wrapper{language="text"}
-```text
-os.O_RDONLY   read only
-os.O_WRONLY   write only
-os.O_RDWR     read/write
-os.O_CREATE   create if not exists
-os.O_TRUNC    truncate to 0 on open
-os.O_APPEND   append to end
-
-0644         user: rw, group: r, other: r
-0600         user: rw only
-0755         user: rwx, group: rx, other: rx
+	var cfg Config
+	if err := json.NewDecoder(gz).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
 ```
-::
 
-## `bufio` — Buffered I/O
+## `io.Pipe` — In-Memory Stream Between Goroutines
 
 ::code-wrapper{language="go"}
 ```go
-// Buffered reader — efficient for line-by-line
-f, _ := os.Open("file.txt")
-defer f.Close()
-scanner := bufio.NewScanner(f)
-for scanner.Scan() {
-	line := scanner.Text()
-	fmt.Println(line)
+// io.Pipe creates a synchronous pipe: a Reader and Writer pair where
+// writes block until reads consume (and vice versa). It's a channel
+// for byte streams.
+
+func pipeDemo() {
+	r, w := io.Pipe()
+
+	// Writer goroutine:
+	go func() {
+		defer w.Close()  // signal EOF to the reader
+		json.NewEncoder(w).Encode(map[string]int{"x": 1, "y": 2})
+	}()
+
+	// Reader (blocks until writer writes, then blocks again for more):
+	var m map[string]int
+	if err := json.NewDecoder(r).Decode(&m); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(m)  // map[x:1 y:2]
 }
-if err := scanner.Err(); err != nil {
-	log.Fatal(err)
-}
 
-// Buffered writer — batches writes
-w := bufio.NewWriter(os.Stdout)
-defer w.Flush()   // flush remaining buffer
-w.WriteString("buffered\n")
-``
-::
-
-`bufio.Scanner` reads line-by-line (or word, or rune — configurable). `bufio.Writer` batches small writes into larger ones (more efficient for many small writes; remember `Flush`).
-
-### `Scanner` vs `Reader`
-
-- `Scanner` — line/word/rune-based, easy API, but limited buffer size (default 64KB — long lines fail). Use for typical text.
-- `Reader` (`bufio.Reader`) — byte-based, more control (`ReadString`, `ReadBytes`), handles long lines. Use for unusual input.
-
-## `strings.Reader` and `bytes.Reader`
-
-For treating a string or byte slice as a `Reader` (e.g., to pass to a function expecting `io.Reader`):
-
-::code-wrapper{language="go"}
-```go
-r := strings.NewReader("hello world")
-io.Copy(os.Stdout, r)   // prints "hello world"
-
-b := bytes.NewReader([]byte("hello"))
-scanner := bufio.NewScanner(b)
-``
-::
-
-## Combining Streams (composition)
-
-Because everything is a `Reader`/`Writer`, you can compose:
-
-::code-wrapper{language="go"}
-```go
-// Read a gzipped file
-f, _ := os.Open("file.gz")
-defer f.Close()
-gz, _ := gzip.NewReader(f)
-defer gz.Close()
-data, _ := io.ReadAll(gz)   // decompressed content
-
-// Write a gzipped file
-f, _ := os.Create("file.gz")
-defer f.Close()
-gz := gzip.NewWriter(f)
-defer gz.Close()
-gz.Write([]byte("compress me"))
-``
-::
-
-The same `io.Copy(os.Stdout, gz)` works whether the source is a file, a gzip stream, a network connection — the interface is the abstraction.
-
-## `io.ReadAll` (Go 1.16+)
-
-::code-wrapper{language="go"}
-```go
-data, err := io.ReadAll(r)   // reads until EOF, returns []byte
-``
-::
-
-Reads everything into memory. Convenient but beware memory use for large streams — prefer streaming (`io.Copy`) for big data.
-
-## `io.Pipe` — In-Memory Stream
-
-::code-wrapper{language="go"}
-```go
-r, w := io.Pipe()
-go func() {
-	defer w.Close()
-	w.Write([]byte("hello"))
-}()
-data, _ := io.ReadAll(r)   // "hello"
-``
-::
-
-`io.Pipe` creates a synchronous in-memory pipe — writes block until reads consume. Useful for connecting producers and consumers in the same process.
-
-## `ioutil` is deprecated
-
-Pre-1.16, `ioutil.ReadFile`, `ioutil.WriteFile`, `ioutil.ReadAll` were the APIs. Go 1.16 moved them to `os` and `io` — use `os.ReadFile`, `os.WriteFile`, `io.ReadAll`. `ioutil` is an alias now; don't use it in new code.
+// Use case: stream a large JSON response to S3 without buffering it all
+// in memory. The HTTP body reader writes to the pipe; S3 upload reads
+// from it concurrently.
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `io.Copy(dst, src)` for transferring data between streams — it handles buffering, looping, and EOF, and works for any `Reader`/`Writer` pair (file-to-network, gzip-to-file, etc.). Don't write manual `Read`/`Write` loops.
-- **Idiom**: use `os.ReadFile`/`os.WriteFile` (Go 1.16+) for whole-file reads/writes — they're one-liners that handle open/close/read/write. Reserve `os.Open` + `defer Close` + `Read` for streaming large files.
-- **Idiom**: use `bufio.Scanner` for line-by-line text reading — `for scanner.Scan() { line := scanner.Text() }` is the idiomatic pattern. But be aware of the 64KB default buffer limit (long lines fail with "token too long") — increase with `scanner.Buffer()` for long lines.
-- **Idiom**: compose streams via `io.Reader`/`io.Writer` — `gzip.NewReader(file)` gives a `Reader` that decompresses; `io.Copy(os.Stdout, gz)` prints decompressed data. The interface is the abstraction — you can stack compression, encryption, buffering, etc. without changing the consuming code.
-- **Idiom**: always `defer Close()` on files (and any `io.Closer`) right after opening — `f, _ := os.Open(...); defer f.Close()`. Even on error, the `defer` runs (if `f` is non-nil). For `bufio.Writer`/`gzip.Writer`, `defer w.Flush()` too — unwritten buffered data is lost on close without flush.
+- **Idiom**: use `io.Copy(dst, src)` for all data transfer — it handles buffering, EOF, and short reads. Don't manually loop `Read` + `Write` — `io.Copy` is tested and optimized.
+- **Idiom**: use `os.ReadFile`/`os.WriteFile` (Go 1.16+) for whole-file operations — they replace `ioutil.ReadFile`/`WriteFile` (deprecated). For streaming, use `os.Open` + `io.Copy`.
+- **Idiom**: use `bufio.Scanner` for line-by-line reading — increase the buffer with `scanner.Buffer(make([]byte, 0, 64*1024), maxSize)` for long lines (default max is 64KB).
+- **Performance**: `io.Copy` uses a 32KB internal buffer — optimal for most cases. For very large transfers, `io.CopyBuffer` lets you reuse a buffer (zero allocation).
+- **Safety**: for write durability, call `f.Sync()` before `f.Close()` — `Sync` flushes kernel buffers to disk. Without it, a crash after Close may lose data (the OS buffer is lost).
+- **Idiom**: check `scanner.Err()` after the `scanner.Scan()` loop — the loop exits on EOF (normal) or error; `Err()` tells you which.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`Read` returning `n > 0` and `err == io.EOF`**: some readers return data and EOF in the same call. Always process `n` bytes first, then check `err` — don't break on EOF before handling the data. `io.Copy`/`io.ReadAll` handle this; manual loops often don't.
-- **`Scanner` 64KB line limit**: `bufio.Scanner` has a default max token size of 64KB — lines longer than that cause `ErrTooLong`. Increase with `scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)`.
-- **`bufio.Writer` needs `Flush`**: `w := bufio.NewWriter(f); w.Write(...); // f.Close()` — without `w.Flush()`, buffered data is lost. `defer w.Flush()` before `defer f.Close()`.
-- **`os.Create` truncates**: `os.Create` opens with `O_RDWR|O_CREATE|O_TRUNC` — it empties an existing file. Use `os.OpenFile` with `O_APPEND` to append.
-- **`io.ReadAll` loads everything into memory**: for large streams (a multi-GB file), this exhausts memory. Stream with `io.Copy` instead.
-- **`Close` error is often ignored**: `defer f.Close()` ignores the error. For writes (where `Close` may flush and fail), check: `defer func() { if err := f.Close(); err != nil { log.Println(err) } }()`.
-- **`os.Open` returns a `*os.File`, not `io.Reader`**: `*os.File` implements `Reader`/`Writer`/`Closer` and more. Most functions accept `io.Reader`, so passing `*os.File` works.
-- **`io.EOF` is expected**: `Read` returning `io.EOF` is normal end-of-input, not an error. Distinguish it from real errors: `if err != nil && err != io.EOF { return err }`.
-- **File permissions on `os.WriteFile`**: the third arg (e.g., `0644`) is the mode, applied after umask. `0644` is user-rw, group-r, other-r. `0600` is user-only.
+- **`Read` may return `n < len(p)` with `err=nil`**: that's normal — don't assume the buffer is full. Always use `p[:n]` for the actual data.
+- **`bufio.Scanner` default max line is 64KB**: lines longer than 64KB cause `scanner.Err()` to return `bufio.ErrTooLong`. Increase with `scanner.Buffer(...)`.
+- **`defer f.Close()` discards the error**: `Close` can fail (flush error, network write). For writes, call `Close` explicitly and check the error. For reads, the discarded error is usually fine.
+- **`os.WriteFile` doesn't sync**: it writes and closes, but doesn't call `Sync`. For durability, open with `O_SYNC` or call `Sync` explicitly.
+- **`io.ReadAll` reads everything into memory**: for large streams, this causes OOM. Use `io.Copy` to stream to a file or `json.NewDecoder` for streaming decode.
+- **`http.Response.Body` must be closed**: `defer resp.Body.Close()` — leaking it leaks the TCP connection. Even on error, close it.
+- **`io.Pipe` is synchronous**: writes block until reads consume. If the reader is slow, the writer blocks. Use a buffered channel or `bytes.Buffer` for async buffering.
+- **Short writes**: `Write` may write fewer bytes than requested (`n < len(p)`). `io.Copy` handles this; manual code must loop until all bytes are written.
 
-## 🧠 Spot the Bug
-
-A developer reads a file and processes lines, but the last line is sometimes missing:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-scanner := bufio.NewScanner(f)
-for scanner.Scan() {
-	line := scanner.Text()
-	process(line)
+func readConfig(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
-``
+```
+
+What's the issue if the file is 10GB?
 ::
-
-They claim this misses the last line when the file doesn't end with a newline.
-
 <details>
 <summary>Answer</summary>
 
-Actually, `bufio.Scanner` **does** handle a final line without a trailing newline — `Scan` returns true for the last line and false after. This is correct behavior; the loop processes all lines.
+`io.ReadAll` reads the ENTIRE file into memory. For a 10GB file, this allocates ~10GB of RAM — likely OOM-killed.
 
-The real "missing last line" bug is when using `ReadString('\n')` with a `bufio.Reader`:
-
-```go
-r := bufio.NewReader(f)
-for {
-	line, err := r.ReadString('\n')
-	if err == io.EOF {
-		break   // ❌ breaks before processing the last line if it has no \n
-	}
-	process(line)
-}
-```
-::
-Here, `ReadString` returns the last line *with* `io.EOF` (no trailing `\n`), and the `break` discards it.
-
-The fix — process the line before breaking, or check for non-empty line:
+The fix — stream with `io.Copy` or `bufio.Scanner`:
 
 ```go
-for {
-	line, err := r.ReadString('\n')
-	if line != "" {
-		process(line)
+// Stream to another writer (no full buffering):
+func streamConfig(path string, w io.Writer) error {
+	f, err := os.Open(path)
+	if err != nil { return err }
+	defer f.Close()
+	_, err = io.Copy(w, f)  // streams in 32KB chunks
+	return err
+}
+
+// Or read line by line:
+func readConfigLines(path string) error {
+	f, err := os.Open(path)
+	if err != nil { return err }
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// process line — only one line in memory at a time
 	}
-	if err == io.EOF {
-		break
-	}
-	if err != nil {
-		log.Fatal(err)
-	}
+	return scanner.Err()
 }
 ```
-::
-Or just use `bufio.Scanner`, which handles this correctly — the `Scan` loop processes the last line regardless of trailing newline.
 
-**The lesson**: `bufio.Scanner` correctly handles files without a trailing newline. The `ReadString` + `EOF` pattern is the one that drops the last line — process the line before checking `EOF`, or use `Scanner`.
+`io.ReadAll` is fine for small files (configs, JSON responses). For large files, always stream.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now use `io.Reader`/`io.Writer` (the composable I/O abstraction), `io.Copy` for transfers, `os` for files (`Open`/`Create`/`OpenFile`/`ReadFile`/`WriteFile`), `bufio` for buffered/line-based I/O, compose streams (gzip + file + network), and handle `io.EOF`/`Flush`/`Close` correctly. Next: encoding (JSON, CSV, gob).
+→ [23 — Encoding: JSON, CSV, gob](/go/23-encoding) — struct tags, streaming JSON, `json.Number` precision, and gob for Go-to-Go serialization.

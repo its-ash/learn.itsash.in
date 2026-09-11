@@ -1,280 +1,474 @@
 # 12 — Enums (Algebraic Data Types)
 
-Enums are Rust's killer feature for modeling domain choices. Each variant can carry data of a different shape — they're algebraic data types (ADTs), more like F# discriminated unions than C enums.
+An enum proves at compile time that a value is *exactly one* of a fixed set of shapes. The compiler exploits that twice: illegal states become unrepresentable, and variant payloads overlap in memory.
 
-## Basic Enum
+## Under-the-Hood Mechanics
 
-### What an ADT is and why it's more than a C enum
+### Tagged union layout: one discriminant, overlapping payloads
 
-A Rust enum is an **algebraic data type (ADT)** — specifically a *sum type*: a value is *exactly one* of several variants, and each variant can carry its own shaped data. This is far more powerful than a C enum (which is just named integers): an `IpAddr::V4(u8, u8, u8, u8)` variant carries four bytes, while `IpAddr::V6(String)` carries a string. You model domain choices *with the data each choice needs attached*, and the compiler guarantees you handle every case when you `match`. The payoff: illegal states become unrepresentable (you can't have an "IPv6 with four bytes" — the type doesn't allow it), and forgetting a case is a compile error, not a runtime bug.
+Variants physically overlap in memory — only one is ever live — the same way a C `union` overlaps members, except Rust's tag enforces you can only read the currently-valid variant.
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-enum IpAddr {
-    V4(u8, u8, u8, u8),
-    V6(String),
+enum Event {
+    Tick,                    // no payload
+    Resize(u32, u32),        // 8 bytes
+    KeyPress(char),          // 4 bytes
+    Custom([u8; 24]),        // 24 bytes — the largest variant
 }
 
-let v4 = IpAddr::V4(127, 0, 0, 1);
-let v6 = IpAddr::V6(String::from("::1"));
-```
-::
-
-Each variant is a constructor; the enum value is *exactly one* of them.
-
-## Variants with Named Fields
-
-::code-wrapper{language="rust"}
-```rust
-enum Message {
-    Quit,
-    Move { x: i32, y: i32 },
-    Write(String),
-    ChangeColor(i32, i32, i32),
+fn main() {
+    // discriminant + max(payload sizes), rounded to alignment —
+    // never a guaranteed number, just an upper bound.
+    println!("{}", std::mem::size_of::<Event>());
 }
 ```
 ::
 
-- `Quit` — unit variant (no data).
-- `Move` — struct-like variant.
-- `Write` — tuple-like variant.
-- `ChangeColor` — tuple-like with multiple fields.
+`size_of::<Event>()` is **not specified by the language** — it can change between `rustc` versions for the same definition, so never assume a byte size for `repr(Rust)` in serialization/FFI code:
 
-Pattern matching destructures them:
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-match msg {
-    Message::Quit => {},
-    Message::Move { x, y } => println!("{x},{y}"),
-    Message::Write(s) => println!("{s}"),
-    Message::ChangeColor(r, g, b) => println!("{r},{g},{b}"),
+#[repr(Rust)] // default — size is an implementation detail
+enum Fragile { A(u8), B(u64) }
+
+#[repr(C, u8)] // pinned layout — safe to persist/FFI across versions
+enum Stable { A(u8), B(u64) }
+
+fn main() {
+    println!("{}", std::mem::size_of::<Fragile>()); // may change across rustc versions
+    println!("{}", std::mem::size_of::<Stable>());  // documented, C-ABI compatible
 }
 ```
 ::
 
-## `Option<T>` — The Null Replacement
+### Niche optimization: reusing "impossible" bit patterns to eliminate the tag
 
-### Why null was removed
+When a payload has a bit pattern that can never legally occur, the compiler encodes the variant tag in that pattern instead of a separate byte:
 
-Rust has **no null**. This is a deliberate rejection of the "billion-dollar mistake" — null references force defensive checks everywhere and silently fail when forgotten. `Option<T>` replaces null with a **type-level distinction**: a value of type `Option<T>` is *either* `Some(T)` *or* `None`, and you can't get the `T` out without handling both cases (via `match`, `?`, `unwrap_or`, etc.). The compiler forces you to acknowledge absence at the point of use, which eliminates an entire class of "forgot to check for null" bugs. A plain `T` is *guaranteed present* — no null check ever needed.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-enum Option<T> {
-    Some(T),
-    None,
+fn main() {
+    assert_eq!(std::mem::size_of::<&i32>(), 8);
+    assert_eq!(std::mem::size_of::<Option<&i32>>(), 8); // None == null, no extra byte
+
+    assert_eq!(std::mem::size_of::<std::num::NonZeroU32>(), 4);
+    assert_eq!(std::mem::size_of::<Option<std::num::NonZeroU32>>(), 4); // niche-optimized
+
+    // f64 has no invalid bit pattern to steal — every pattern is a
+    // valid float or NaN — so Option<f64> needs a real tag.
+    assert_eq!(std::mem::size_of::<f64>(), 8);
+    assert_eq!(std::mem::size_of::<Option<f64>>(), 16); // NOT niche-optimized
 }
 ```
 ::
 
-There is **no null** in Rust. Use `Option<T>` when a value may be absent. The compiler forces you to handle `None`.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let v: Option<i32> = Some(5);
-let none: Option<i32> = None;
-match v { Some(x) => println!("{x}"), None => println!("none") }
-let unwrapped = v.unwrap_or(0);
-```
-::
+fn main() {
+    // Niches can chain through nested enums — but don't rely on this
+    // without checking; it's compiler-version-dependent.
+    assert_eq!(std::mem::size_of::<Option<Option<&i32>>>(), 8); // often still niche-optimized
 
-## `Result<T, E>` — Error Handling Primitive
-
-### Why this exists
-
-`Result<T, E>` encodes **fallible operations in the type system** so failures can't be silently ignored. A function returning `Result` forces every caller to deal with the error path (via `match`, `?`, `unwrap`, etc.) — unlike exceptions, there's no way to forget that the operation might fail. This is the foundation of Rust's error-handling story: errors are ordinary values with ordinary types, and the type checker makes sure you handle them. Reach for `Result` for *any* operation that can fail (parsing, I/O, network, validation); use `Option` for *absence* (a key not in a map), `Result` for *failure* (a parse that encountered bad input).
-
-::code-wrapper{language="rust"}
-```rust
-enum Result<T, E> {
-    Ok(T),
-    Err(E),
+    // bool only uses 2 of 256 byte values — the other 254 are spare niches.
+    assert_eq!(std::mem::size_of::<bool>(), 1);
+    assert_eq!(std::mem::size_of::<Option<bool>>(), 1); // niche-optimized
 }
 ```
 ::
 
-The basis of Rust error handling. See Error Handling chapter.
+### `match` codegen: jump tables vs. comparison chains
 
-## Methods on Enums
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-impl Message {
-    fn call(&self) {
-        // dispatch on self
+enum Op { Add, Sub, Mul, Div } // dense discriminants, no guards
+
+fn dispatch_fast(op: &Op, a: i64, b: i64) -> i64 {
+    match op { // compiles to a jump table — O(1), indexed by discriminant
+        Op::Add => a + b,
+        Op::Sub => a - b,
+        Op::Mul => a * b,
+        Op::Div => a / b,
+    }
+}
+
+fn dispatch_slow(op: &Op, a: i64, b: i64) -> i64 {
+    match op {
+        Op::Add if a > 0 => a + b,      // guard present
+        Op::Add => a + b,
+        Op::Sub => a - b,
+        Op::Mul => a * b,
+        Op::Div => a / b,               // degrades to an if/else-if chain, O(n)
     }
 }
 ```
 ::
 
-Enums can have methods, just like structs.
+## Cost, Performance, and Trade-Offs
 
-## Enums with Generic Parameters
+**Niche optimization beats sentinel values, unconditionally:**
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-enum Either<L, R> {
-    Left(L),
-    Right(R),
-}
+struct RowSentinel { parent_id: i32 } // -1 means "no parent" — a lie the type allows
+struct RowSafe { parent_id: Option<std::num::NonZeroU32> } // same size, no lie possible
 
-enum Tree<T> {
-    Leaf,
-    Node(Box<Tree<T>>, T, Box<Tree<T>>),
-}
-```
-::
-
-Recursive enums need indirection (`Box`) because the compiler needs to know the size — direct self-recursion would be infinitely sized.
-
-## `#[derive]` for Enums
-
-::code-wrapper{language="rust"}
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Color { Red, Green, Blue }
-```
-::
-
-`Copy` only works if **every** variant's data is `Copy` (e.g., no `String`).
-
-## Match Exhaustiveness
-
-`match` must cover every variant. Use `_` for "everything else". For `#[non_exhaustive]` enums from external crates, `_` is *required* even if you cover all current variants (upstream may add more).
-
-::code-wrapper{language="rust"}
-```rust
-#[non_exhaustive]
-pub enum Event { Login, Logout }
-// External crate must write `_ => ...` arm.
-```
-::
-
-## Field-Access on Tuple Variants
-
-::code-wrapper{language="rust"}
-```rust
-let m = Message::Write("hi".into());
-let s = m.0;  // ERROR: cannot access field — must pattern match
-```
-::
-
-Tuple-variant fields aren't accessible via `.0` — you must destructure with `let Message::Write(s) = m;`. (Some newer nightly features relax this.)
-
-## Pattern Matching Patterns
-
-::code-wrapper{language="rust"}
-```rust
-match opt {
-    Some(0) => "zero",
-    Some(1..=9) => "small",
-    Some(n) if n > 1000 => "big",     // guard
-    Some(_) => "other",
-    None => "none",
-}
-
-// binding with @
-match n {
-    0..=9 => "digit",
-    x @ 10..=99 => "two digits: {x}",
-    _ => "big",
-}
-
-// or-patterns
-match c {
-    'a' | 'e' | 'i' | 'o' | 'u' => "vowel",
-    _ => "consonant",
+fn main() {
+    assert_eq!(std::mem::size_of::<i32>(), 4);
+    assert_eq!(std::mem::size_of::<Option<std::num::NonZeroU32>>(), 4); // identical cost
+    // RowSafe rejects parent_id == 0 by construction; RowSentinel does not.
 }
 ```
 ::
 
-## `if let` and `while let`
+**Enum size is dominated by the largest variant:**
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-if let Some(x) = opt { println!("{x}"); }
-while let Some(x) = iter.next() { /* ... */ }
-```
-::
-
-Short for "match one pattern and ignore the rest". Use when you only care about one case.
-
-## Enum Memory Layout
-
-### How the discriminant + payload sharing works
-
-An enum value stores a **discriminant** (a tag identifying which variant) plus enough space for the *largest* variant's payload. Variants *overlap* in that payload region — at any moment only one variant's data lives there, so the compiler allocates `max(payload sizes)` plus the tag. Smaller variants simply don't use all of it. **Niche optimization** goes further: if a variant has an impossible bit pattern (e.g., a non-null reference can never be null), the compiler reuses that "impossible" value to encode another variant, dropping the tag entirely. This is why `Option<&T>` is the same size as `&T` — `None` is stored as the null pointer, which a valid `&T` can never be.
-
-::code-wrapper{language="rust"}
-```rust
-enum E {
-    A,
-    B(i64),
-    C([u8; 16]),
+enum EventBad {
+    Tick,                 // wants to be 1 byte...
+    Custom([u8; 256]),    // ...but this forces every Tick to reserve 256+ bytes too
 }
-// size = max(payload size) + discriminant (often optimized)
+
+enum EventGood {
+    Tick,
+    Custom(Box<[u8; 256]>), // heap-allocated; enum footprint shrinks to a pointer
+}
+
+fn main() {
+    assert!(std::mem::size_of::<EventBad>() > 256);
+    assert!(std::mem::size_of::<EventGood>() <= 16); // pointer + tag, niche-optimized
+}
 ```
 ::
 
-The compiler performs **niche optimization**: if a variant is impossible to overlap with another, it can drop the discriminant. Classic case: `Option<&T>` is the same size as `&T` (null pointer is reserved for `None`).
+**Recursive indirection: `Box` vs `Rc`/`Arc`:**
 
-`Option<NonNull<T>>`, `Option<Box<T>>`, `Option<&mut T>` are all pointer-sized.
-
-## State Machines
-
-### Why enums are ideal for state machines
-
-Each enum variant encodes a **valid state** carrying exactly the data that state needs — `Idle` carries nothing, `Connected` carries an address and a timestamp. Transitions are functions that consume one state and return another, and the type checker validates them: you can't accidentally use `Connecting`'s data in an `Idle` context, and a `match` on the state is exhaustive so you can't forget to handle a state. This makes enums the natural, type-safe way to model protocol states, parser states, connection lifecycles, etc. — illegal transitions become unrepresentable rather than runtime bugs.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-enum Conn {
+enum TreeOwned<T> {
+    Leaf(T),
+    Node(Box<TreeOwned<T>>, Box<TreeOwned<T>>), // single owner, cheap move
+}
+
+enum TreeShared<T> {
+    Leaf(T),
+    Node(std::rc::Rc<TreeShared<T>>, std::rc::Rc<TreeShared<T>>), // subtrees can be shared
+    // Rc adds refcount overhead; using Box here would force .clone() deep-copies
+    // anywhere the same subtree needs two parents.
+}
+```
+::
+
+**Monomorphization cost of many `Result<T, E>` instantiations:**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Each distinct (T, E) pair generates its own Result machinery + Debug/?-glue.
+fn parse_a() -> Result<u32, std::num::ParseIntError> { "1".parse() }
+fn parse_b() -> Result<f64, std::num::ParseFloatError> { "1.0".parse() }
+fn parse_c() -> Result<u32, String> { Err("bad".into()) }
+// 3 distinct instantiations compiled, even though the shape is identical —
+// consolidate error types at module boundaries to cap this (see Error Handling chapter).
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: reimplementing a sum type as a struct-plus-tag
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// WRONG: nothing stops bank_account from also being Some(_) when kind == 0
+struct PaymentMethodNaive {
+    kind: u8, // 0 = card, 1 = bank_transfer, 2 = wallet
+    card_number: Option<String>,
+    bank_account: Option<String>,
+    wallet_id: Option<String>,
+}
+
+fn charge_naive(pm: &PaymentMethodNaive) {
+    match pm.kind {
+        0 => { /* trusts card_number is Some — nothing enforces it */ }
+        1 => { /* trusts bank_account is Some */ }
+        2 => { /* trusts wallet_id is Some */ }
+        _ => panic!("unknown kind"), // reachable: kind is just a u8, not 0..=2
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// RIGHT: illegal combinations are unrepresentable
+enum PaymentMethod {
+    Card { number: String, expiry: String },
+    BankTransfer { account: String, routing: String },
+    Wallet { id: String },
+}
+
+fn charge(pm: &PaymentMethod) {
+    match pm {
+        PaymentMethod::Card { number, expiry } => { /* only these fields exist */ }
+        PaymentMethod::BankTransfer { account, routing } => { /* ... */ }
+        PaymentMethod::Wallet { id } => { /* ... */ }
+        // no catch-all — adding a 4th variant makes every match site a
+        // compile error until updated, instead of a silent runtime gap
+    }
+}
+```
+::
+
+### Anti-pattern: recursive enums — compile-time size vs. runtime stack depth
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+enum JsonNaive {
+    Null,
+    Bool(bool),
+    Number(f64),
+    // Pair(JsonNaive, JsonNaive), // ERROR: infinite size — caught immediately
+    // Array(Vec<JsonNaive>) would compile fine — Vec already indirects.
+}
+```
+::
+
+Direct self-nesting is caught at compile time. The dangerous version compiles fine but blows the stack on untrusted input:
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+enum Json {
+    Null,
+    Bool(bool),
+    Number(f64),
+    Array(Vec<Json>),
+    Object(Vec<(String, Json)>),
+}
+
+impl Json {
+    // WRONG for untrusted input: 100,000 nested arrays -> stack overflow,
+    // and the auto-generated recursive Drop for Json hits the same wall.
+    fn depth_naive(&self) -> usize {
+        match self {
+            Json::Array(items) => 1 + items.iter().map(Json::depth_naive).max().unwrap_or(0),
+            Json::Object(fields) => 1 + fields.iter().map(|(_, v)| v.depth_naive()).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+impl Json {
+    // RIGHT: explicit, enforced depth limit at traversal/parse time
+    fn depth_bounded(&self, limit: usize) -> Result<usize, &'static str> {
+        fn go(v: &Json, remaining: usize) -> Result<usize, &'static str> {
+            if remaining == 0 {
+                return Err("max nesting depth exceeded");
+            }
+            match v {
+                Json::Array(items) => items.iter()
+                    .map(|i| go(i, remaining - 1))
+                    .try_fold(0, |acc, r| r.map(|d| acc.max(1 + d))),
+                Json::Object(fields) => fields.iter()
+                    .map(|(_, v)| go(v, remaining - 1))
+                    .try_fold(0, |acc, r| r.map(|d| acc.max(1 + d))),
+                _ => Ok(0),
+            }
+        }
+        go(self, limit)
+    }
+}
+```
+::
+
+### Anti-pattern: `#[non_exhaustive]` swallowed by a silent wildcard
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// dependency: #[non_exhaustive] pub enum Event { Login, Logout }
+
+// WRONG: compiles, but a future Event::SessionExpired vanishes silently
+fn handle_lazy(e: some_crate::Event) {
+    match e {
+        some_crate::Event::Login => { /* ... */ }
+        some_crate::Event::Logout => { /* ... */ }
+        _ => {} // "just in case" — swallows every future variant forever
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// RIGHT: the wildcard is loud, so an unhandled variant shows up in monitoring
+fn handle_right(e: some_crate::Event) {
+    match e {
+        some_crate::Event::Login => { /* ... */ }
+        some_crate::Event::Logout => { /* ... */ }
+        other => eprintln!("unhandled event variant: {other:?}"),
+    }
+}
+```
+::
+
+## Architectural Application
+
+**State machines** — every variant carries exactly the data valid for that state:
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+enum Connection {
     Idle,
-    Connecting(std::time::Instant),
-    Connected { addr: String, since: std::time::Instant },
-    Error(String),
+    Connected { socket_fd: i32, session_id: u64 },
+    Error { code: u32, message: String },
+}
+
+fn send(conn: &Connection, data: &[u8]) -> Result<(), &'static str> {
+    match conn {
+        Connection::Connected { socket_fd, .. } => { let _ = (socket_fd, data); Ok(()) }
+        Connection::Idle => Err("not connected"),
+        Connection::Error { message, .. } => Err(message.as_str()),
+        // compiler rejects any code path that reads socket_fd outside Connected
+    }
 }
 ```
 ::
 
-Each state carries the data relevant to it. Transitions are explicit functions returning a new `Conn`.
+**Error consolidation at module boundaries:**
 
-## Variants as Constructors
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let f: fn(String) -> Message = Message::Write;
+enum StoreError {
+    NotFound,
+    Io(std::io::Error),
+    Parse(std::num::ParseIntError),
+}
+
+impl From<std::io::Error> for StoreError {
+    fn from(e: std::io::Error) -> Self { StoreError::Io(e) }
+}
+impl From<std::num::ParseIntError> for StoreError {
+    fn from(e: std::num::ParseIntError) -> Self { StoreError::Parse(e) }
+}
+
+// callers only ever match StoreError, never the dozen low-level error types
+// each `?` internally converts via From — the public API absorbs the proliferation
+fn load(path: &str) -> Result<u32, StoreError> {
+    let text = std::fs::read_to_string(path)?; // io::Error -> StoreError via From
+    Ok(text.trim().parse()?)                    // ParseIntError -> StoreError via From
+}
 ```
 ::
 
-Each variant acts as a function. Useful for higher-order code.
+**Wire format: pin discriminants explicitly:**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+#[repr(u8)]
+enum OpBad { Read, Write, Delete } // implicit 0,1,2 — reordering variants breaks the wire format
+
+#[repr(u8)]
+enum OpGood { Read = 1, Write = 2, Delete = 3 } // explicit — safe to reorder in source later
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `#[derive(Default)]` with `#[default]` on a unit variant (stable since 1.62) instead of hand-writing `impl Default` — it's shorter and keeps the "default" choice visible right next to the variant it applies to.
-- **Debug**: `std::mem::discriminant(&a) == std::mem::discriminant(&b)` compares which variant two enum values are, ignoring payload — useful when you want "same kind" equality without deriving `PartialEq` on payload types that may not support it.
-- **Performance**: niche optimization means wrapping a non-nullable type (`&T`, `Box<T>`, `NonZeroU32`) in `Option` costs zero extra bytes — prefer these over sentinel values (`-1`, `0`) for "maybe absent" fields when the type allows it, since you get the safety of `Option` for free.
-- **Idiom**: `matches!(value, Pattern)` is almost always clearer than `if let Pattern = value { true } else { false }` for a single boolean check — reach for it any time a `match`'s only job is producing `true`/`false`.
-- **Debug**: `#[derive(Debug)]` on an enum with many variants makes `{:#?}` (pretty-print) output far more readable than `{:?}` when the payload is a nested struct — worth the extra formatting width in `println!` debugging sessions.
-- **Idiom**: `Result::transpose()`/`Option::transpose()` are the cleanest way to flip `Result<Option<T>, E>` and `Option<Result<T, E>>` — reach for them instead of a manual `match` when you find yourself nesting these two types.
+- **Idiom**: `#[default]` on a unit variant instead of hand-written `impl Default`.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(Default)]
+  enum LogLevel { Debug, #[default] Info, Warn, Error }
+  ```
+  ::
+- **Debug**: compare "same variant" without requiring `PartialEq` on the payload.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  use std::mem::discriminant;
+  fn main() {
+      let a = Some(vec![1, 2]);
+      let b = Some(vec![9]);
+      assert_eq!(discriminant(&a), discriminant(&b)); // both Some, payloads ignored
+  }
+  ```
+  ::
+- **Performance**: prefer niche-friendly types over sentinels — see the Cost section above; it's free, not a trade-off.
+- **Idiom**: `matches!` beats a manual boolean `match`.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  fn is_err_variant(r: &Result<i32, String>) -> bool {
+      matches!(r, Err(_)) // clearer than `if let Err(_) = r { true } else { false }`
+  }
+  ```
+  ::
+- **Performance**: verify jump-table codegen with `cargo asm` / Compiler Explorer in hot loops — don't assume from how the code "looks."
+- **Idiom**: `transpose()` flips nested `Option`/`Result` without a manual `match`.
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  fn main() {
+      let x: Result<Option<i32>, &str> = Ok(Some(5));
+      let y: Option<Result<i32, &str>> = x.transpose();
+      assert_eq!(y, Some(Ok(5)));
+  }
+  ```
+  ::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Recursive enums without `Box`**: `enum Bad { Node(Bad) }` — infinite size, compile error. Use `Box<Bad>`.
-- **Variant equality**: `Option::Some(5) == Option::Some(5)` works only if `T: PartialEq`.
-- **`Copy` enums**: only if all payloads are `Copy`.
-- **`Default` for enums**: not derivable for enums (no obvious default). You can `impl Default` manually — convention is "smallest/zero" variant (e.g., `Option::None`).
-- **`#[repr(C)]`**: gives C-style layout with explicit discriminant (size depends on largest discriminant). Use `#[repr(C, u8)]` etc. to fix discriminant width.
-- **Comparing variants**: `PartialOrd`/`Ord` compares by **declaration order** of variants, then by payload.
-- **`is_x()` methods**: idiom is to write `matches!(self, Self::X)` or a helper method rather than exposing internal representation.
-- **`matches!` macro**: `if matches!(opt, Some(0)) { }` — concise single-pattern check.
+- **Infinite size, caught immediately**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  enum Bad { Node(Bad) } // ERROR: recursive type has infinite size
+  ```
+  ::
+  Indirection fixes compile-time size only — bound depth explicitly for untrusted recursive input (see above).
+- **Variant equality needs `T: PartialEq`**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(PartialEq)]
+  enum Holds<T> { Value(T) } // derive fails if T can't derive PartialEq (e.g. dyn Trait payload)
+  ```
+  ::
+- **`Copy` requires every variant, every payload, to be `Copy`**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(Clone, Copy)]
+  enum Mixed { Num(i32), Text(String) } // ERROR: String disqualifies the whole enum
+  ```
+  ::
+- **No implicit `Default` for enums** — mark exactly one unit variant:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(Default)]
+  enum State { #[default] Idle, Running } // required — no "all zero bits" default exists
+  ```
+  ::
+- **`#[repr(C)]` discriminant width is not pinned unless you say so**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[repr(C)]      // discriminant width depends on largest value — fragile across FFI
+  enum OpA { Read, Write }
+  #[repr(C, u8)]  // pinned — safe across FFI/ABI boundary
+  enum OpB { Read, Write }
+  ```
+  ::
+- **Derived `Ord` follows declaration order, not payload alone**:
+  ::code-wrapper{language="rust" filename="main.rs"}
+  ```rust
+  #[derive(PartialEq, Eq, PartialOrd, Ord)]
+  enum Priority { Low, Medium, High } // Low < Medium < High — reordering variants flips this silently
+  ```
+  ::
+- **`size_of` on `repr(Rust)` can change between compiler versions** — never persist an assumed byte size without `#[repr(C, ...)]`.
 
 ## 🧠 Spot the Bug
 
-Will this compile, and if so, what's the size of `Shape` compared to `ShapeWithTag`?
+Will this compile, and what's the size of `Shape` vs `ShapeWithTag`?
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 enum Shape {
     Circle(f64),
@@ -297,98 +491,52 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-Both compile, but `ShapeWithTag` is larger than `Shape` — often close to double, once padding is accounted for.
+Both compile; `ShapeWithTag` is roughly double the size of `Shape`.
 
-`Shape` is a proper sum type: the compiler knows only *one* variant is ever active, so it lays out one discriminant (typically 1 byte, though alignment can round it up) plus enough space for the *largest* variant's payload (`f64`, 8 bytes) — the two variants' payloads share the same memory since they're never both present at once. `ShapeWithTag` instead stores `circle_radius: Option<f64>` and `square_side: Option<f64>` as **separate fields**, each independently sized (`Option<f64>` can't use niche optimization the way `Option<&T>` can, since every bit pattern of `f64` is potentially valid, so it needs its own discriminant byte plus 8 bytes, padded for alignment) — both fields exist simultaneously in memory even though the `tag` field means only one is ever logically meaningful. The hand-rolled "tagged struct" pattern (common in developers coming from C, where enums can't carry data) pays for both payloads at once; Rust's actual enum only pays for the one that's active.
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn main() {
+    // Shape: one discriminant + space for the largest payload (f64, 8 bytes) —
+    // Circle and Square payloads share the same memory, never both live.
+    assert!(std::mem::size_of::<Shape>() <= 16);
 
-**The lesson**: Rust's data-carrying enums overlap variant payloads in memory (one discriminant, space for the largest variant) — reimplementing the same idea with a struct-plus-tag-plus-multiple-`Option`-fields is a strictly larger, less safe imitation of what `enum` already gives you for free.
+    // ShapeWithTag stores BOTH Option<f64> fields simultaneously, and neither
+    // niche-optimizes (f64 has no spare bit pattern) — each needs its own
+    // discriminant byte + 8 bytes, padded. Both exist even though `tag`
+    // means only one is ever logically meaningful.
+    assert!(std::mem::size_of::<ShapeWithTag>() >= 24);
+}
+```
+::
+
+The struct-plus-tag pattern pays for every payload at once and reintroduces "state the type allows but the domain forbids" — `circle_radius` and `square_side` can both be `Some` simultaneously, a bug `Shape`'s `match` structurally prevents.
 
 </details>
 
-## `matches!` Macro
-
-::code-wrapper{language="rust"}
-```rust
-let ok = matches!(result, Ok(_));
-let small = matches!(n, 0..=9);
-```
-::
-
-Like a tiny `match` returning `bool`.
-
-## Typestate Pattern (advanced)
-
-Use type params to encode states:
-
-::code-wrapper{language="rust"}
-```rust
-struct Builder<T>(PhantomData<T>);
-struct Unconfigured;
-struct Configured;
-impl Builder<Unconfigured> {
-    fn configure(self) -> Builder<Configured> { Builder(PhantomData) }
-}
-impl Builder<Configured> {
-    fn build(self) -> Product { /* ... */ }
-}
-```
-::
-
-Calling `build` on an `Unconfigured` builder is a compile-time error. Encode invariants in the type system.
-
-## Enum Tricks & Patterns
-
-::code-wrapper{language="rust"}
-```rust
-// Trick: use matches! for quick boolean checks
-enum Status { Active, Inactive, Paused }
-if matches!(status, Status::Active) { }
-
-// Trick: if let Some/Ok for single-arm matches
-let opt: Option<i32> = Some(5);
-if let Some(x) = opt { println!("{x}"); }
-
-// Trick: use enum variants as function pointers
-enum Message { Write(String), Quit }
-let f: fn(String) -> Message = Message::Write;
-
-// Trick: derive Default on enums for certain patterns
-#[derive(Default)]
-enum State {
-    #[default]
-    Idle,
-    Running,
-}
-
-// Trick: use enums for type-safe state machines
-enum Connection {
-    Disconnected,
-    Connecting { addr: String, start_time: std::time::Instant },
-    Connected { addr: String, stream: std::io::Stdout }, // would be real stream
-    Error(String),
-}
-
-// Trick: manual implementation of is_* methods
-impl Status {
-    fn is_active(&self) -> bool { matches!(self, Status::Active) }
-}
-
-// Trick: map variants with map_err for error propagation
-let res: Result<i32, String> = Err("error".to_string());
-res.map_err(|e| format!("wrapped: {}", e))?;
-
-// Trick: use Option::flatten for nested Options
-let nested: Option<Option<i32>> = Some(Some(5));
-let flat: Option<i32> = nested.flatten(); // Some(5)
-
-// Trick: use Result::transpose to invert Result<Option<T>>
-let res: Result<Option<i32>, String> = Ok(Some(5));
-let opt: Option<Result<i32, String>> = res.transpose();
-```
-::
-
 ## Summary
 
-Enums are sum types: each value is one variant (with optional data). Combined with `match`, they form Rust's modeling backbone. `Option`/`Result` are the canonical examples. Niche optimization makes them memory-efficient. Pattern matching with guards, or-patterns, `@`-bindings, and `matches!` give you expressive dispatch. Use enums for type-safe state machines; use `matches!` for quick checks; use variants as function pointers for higher-order code.
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Tagged union: one discriminant + largest-variant space, payloads overlap.
+enum Compact { A, B([u8; 32]) } // sizeof ~= 33, not sizeof(A) + sizeof(B)
 
-Next: Pattern Matching — a deep dive.
+// Niche optimization: free Option over non-nullable types.
+assert_eq!(std::mem::size_of::<Option<&i32>>(), std::mem::size_of::<&i32>());
+
+// Oversized rare variant -> Box it.
+enum Fixed { Small, Big(Box<[u8; 256]>) }
+
+// Recursive enums: Box/Vec for compile-time size, explicit depth limit for
+// runtime safety against untrusted input.
+
+// #[non_exhaustive] wildcard arms must be loud (log/metric), never `_ => {}`.
+```
+::
+
+- Enums overlap variant payloads in memory — not "a struct with extra `Option` fields and a tag."
+- Niche optimization makes `Option<T>` free over non-nullable `T` — never use sentinel values instead.
+- `Box` the rare oversized variant; bound recursion depth explicitly for untrusted input.
+- Dense guard-free `match` compiles to a jump table; `#[non_exhaustive]` only has teeth if the wildcard arm is observable.
+- Enums are the correct default for state machines and layered error types — exhaustiveness turns "forgot a case" into a compile error.
+
+Next: Pattern Matching — the deep dive into how `match`, binding modes, and exhaustiveness actually work under the hood.

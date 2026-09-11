@@ -1,40 +1,97 @@
 # 31 — Performance, Profiling & Optimization
 
-Rust gives you C-level performance by default, but you can still write slow Rust. This chapter covers how to find and fix bottlenecks.
+Rust's pitch is "C-level performance, safe by default." That pitch is true only if you understand what the compiler is actually doing with your code — codegen unit partitioning, inlining heuristics, monomorphization bloat, allocator behavior. Senior engineers don't guess at performance; they read the assembly, read the flamegraph, and know which knobs in `Cargo.toml` change the output binary before touching a single line of application code.
 
-## Mindset
+## Under-the-Hood Mechanics
 
-1. **Don't optimize prematurely.** Write clear code; profile; optimize hot spots.
-2. **Measure, measure, measure.** Intuition is often wrong.
-3. **Iterate.** One change at a time; re-measure each time.
+### Codegen units and LTO
 
-## Benchmarking
+::code-wrapper{language="toml"}
+```toml
+# lto = false (release default): each CGU optimized independently,
+# no cross-CGU inlining beyond what's visible per-unit.
+[profile.release]
+codegen-units = 16
 
-### `cargo bench` (nightly)
+# lto = "thin": lightweight cross-CGU analysis — most of the benefit,
+# a fraction of the compile-time cost.
+[profile.release-thin]
+inherits = "release"
+lto = "thin"
+
+# lto = "fat": every CGU merged into one LLVM module before optimization.
+# Maximum inlining, longest compile time.
+[profile.release-fat]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+```
+::
+
+More CGUs = faster parallel compile, but a hot function split across two CGUs doesn't get cross-module inlining unless LTO recovers it at link time.
+
+### Monomorphization and inlining decisions
 
 ::code-wrapper{language="rust"}
 ```rust
-#![feature(test)]
-extern crate test;
-use test::Bencher;
+// Generic: compiler emits ONE concrete copy per instantiated T — zero-cost
+// at the call site (no vtable, fully inlinable), but more machine code per T.
+fn sum<T: std::iter::Sum + Copy>(items: &[T]) -> T { items.iter().copied().sum() }
+let _ = sum(&[1, 2, 3]);       // emits sum::<i32>
+let _ = sum(&[1.0, 2.0]);      // emits a SEPARATE sum::<f64> — two functions, not one
 
-#[bench]
-fn bench_add(b: &mut Bencher) {
-    b.iter(|| test::black_box(2) + test::black_box(2));
+// #[inline] is a HINT — LLVM can ignore it if the call site is too hot/large.
+#[inline]
+fn small_helper(x: i32) -> i32 { x + 1 }
+
+// #[inline(always)] FORCES it, bypassing LLVM's cost model — can bloat callers.
+#[inline(always)]
+fn forced(x: i32) -> i32 { x * 2 }
+```
+::
+
+### What the allocator actually does
+
+::code-wrapper{language="rust"}
+```rust
+// Vec::push is NOT "append to array" — on capacity overflow it allocates
+// a new, larger block (~2x growth), copies every element, frees the old one.
+let mut v = Vec::new();
+for i in 0..1000 {
+    v.push(i); // triggers O(log n) reallocations, O(n) total copies overall
+}
+
+// Vec::with_capacity avoids all but the last allocation:
+let mut v2 = Vec::with_capacity(1000);
+for i in 0..1000 {
+    v2.push(i); // no reallocation — capacity was reserved up front
 }
 ```
 ::
 
-`black_box` prevents the optimizer from constant-folding.
+A profiler shows the naive loop's reallocations as time in `__rust_realloc`, not in your logic.
 
-### `criterion` (stable, recommended)
+## Benchmarking
 
-::code-wrapper{language="rust"}
+### `criterion` (stable, production standard)
+
+::code-wrapper{language="rust" filename="benches/my_bench.rs"}
 ```rust
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
+
+fn fib(n: u64) -> u64 {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
 
 fn bench_fib(c: &mut Criterion) {
-    c.bench_function("fib 20", |b| b.iter(|| fib(black_box(20))));
+    let mut group = c.benchmark_group("fib");
+    for n in [10, 20, 30] {
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter(|| fib(black_box(n)));
+        });
+    }
+    group.finish();
 }
 
 criterion_group!(benches, bench_fib);
@@ -42,42 +99,65 @@ criterion_main!(benches);
 ```
 ::
 
-In `benches/my_bench.rs`. Run with `cargo bench`. Criterion provides statistics, regressions, and HTML reports.
+Criterion runs statistical analysis (outlier detection, confidence intervals) across many iterations and flags **regressions** against the previous run — the feature that matters in CI, where "did this PR make the hot path slower" needs a statistically defensible answer, not a single `Instant::now()` sample.
 
-### Custom Benchmarks
-
-For ad-hoc timing:
+### Why naive `Instant::now()` timing lies to you
 
 ::code-wrapper{language="rust"}
 ```rust
 let start = std::time::Instant::now();
-work();
-let elapsed = start.elapsed();
+let result = expensive_computation();
+println!("{:?}", start.elapsed()); // result is never used after this
 ```
 ::
 
+If `result` isn't observed, the optimizer is free to eliminate the computation that produced it — you end up timing nothing. Always sink benchmark values into `std::hint::black_box`, or use `criterion`, which does this correctly for you.
+
+## Cost, Performance, and Trade-Offs
+
+| Technique | Runtime win | Compile-time cost | Maintenance cost |
+|---|---|---|---|
+| `lto = "fat"` + `codegen-units = 1` | 5-20% throughput, smaller binary | 2-10x slower release builds | None — set once in CI release profile |
+| `#[inline(always)]` everywhere | Negative — i-cache pressure | Slightly slower compile | Binary bloat, harder profiling (frames disappear) |
+| Hand-written SIMD | 4-16x on data-parallel code | More code, platform-specific | Must maintain scalar fallback + runtime feature detection |
+| `Box<dyn Trait>` in a hot path | Avoids monomorphization bloat | Faster compile | Vtable indirection blocks inlining — wrong trade for a *hot* path specifically |
+| `Arc<Mutex<T>>` where `Rc<RefCell<T>>` suffices | None (you don't need atomics) | None | Atomic ops cost cycles you're paying for nothing; also signals "this is shared across threads" to future readers, which is a lie |
+| String interning | O(1) compare/hash vs O(n) | Extra dependency, table lifetime management | Only pays off with many *duplicate* short strings |
+
+::code-wrapper{language="toml"}
+```toml
+# Compile-time cost is a one-time tax paid by CI; runtime cost is paid
+# by every user, every request, forever — so spend compile time freely
+# in release, keep dev fast to iterate.
+[profile.dev]
+opt-level = 0
+codegen-units = 256   # fast, parallel, unoptimized
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1     # slow compile, best runtime — CI pays this, not users
+```
+::
+
+More inlining usually means a **larger** binary (code duplicated per call site) but **faster** execution — until i-cache pressure flips the sign and a bloated binary loses to a compact one from constant instruction-cache refills.
+
 ## Profiling
 
-### `perf` (Linux)
+### `perf` + flamegraphs (Linux)
 
 ::code-wrapper{language="bash"}
 ```bash
 cargo build --release
 perf record -g ./target/release/my_app
 perf report
-```
-::
 
-For flamegraphs:
-
-::code-wrapper{language="bash"}
-```bash
 cargo install flamegraph
 cargo flamegraph
 ```
 ::
 
-### `samply`
+### `samply` (cross-platform, web UI)
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -85,8 +165,6 @@ cargo install samply
 samply record ./target/release/my_app
 ```
 ::
-
-Samply gives a web UI with call trees and source-level annotations.
 
 ### `Instruments` (macOS)
 
@@ -96,376 +174,128 @@ xcrun xctrace record --template "Time Profiler" --launch ./target/release/my_app
 ```
 ::
 
-### `dtrace`, `vtune` (advanced)
+A profile is only trustworthy if it reflects production conditions: build with `debug = true` under `[profile.release]` so symbols resolve, but never profile a `dev` build and extrapolate to `release` — the two can have entirely different hot spots because `dev` skips inlining and optimization passes wholesale.
 
-For deeper hardware analysis (cache misses, branch mispredicts).
+## Production Failure Modes & Anti-Patterns
 
-## Optimization Techniques
-
-### 1. Avoid Unnecessary Allocation
+### Anti-pattern: optimizing what you *assume* is slow
 
 ::code-wrapper{language="rust"}
 ```rust
-// Bad: allocates per call
-fn process(items: &[u8]) -> Vec<u8> { items.iter().map(|x| x + 1).collect() }
-
-// Good: caller provides buffer
-fn process_into(items: &[u8], out: &mut [u8]) {
-    for (i, x) in items.iter().enumerate() { out[i] = x + 1; }
+// Naive: engineer assumes string formatting is the bottleneck,
+// spends a sprint hand-rolling a formatter, ships it —
+// the actual bottleneck was a synchronous DNS lookup per request.
+fn handle_request(req: &Request) -> Response {
+    let msg = format!("{}: {}", req.id, req.path); // "optimized" away
+    log::info!("{msg}");
+    let ip = resolve_dns(&req.host); // <- this was the real 40ms
+    Response::new(ip)
 }
 ```
 ::
 
-`String::with_capacity`, `Vec::with_capacity` to avoid regrowth.
+**Why it fails at scale**: without a flamegraph, engineers optimize the code that *looks* expensive (string formatting, allocation) rather than the code that *is* expensive (blocking I/O, lock contention, cache misses). This burns engineering time and adds complexity without moving the metric that matters. The fix is procedural, not technical: profile in an environment resembling production traffic *before* writing any optimization, and re-profile after each change to confirm the fix landed on the actual bottleneck.
 
-### 2. Use `&[T]` / `&str` in APIs
-
-Don't take `&Vec<T>` or `&String` — they impose ownership and lose the more general slice form. Slices are flexible and equally fast.
-
-### 3. Choose Iterators Over Explicit Loops (Sometimes)
-
-### Why iterators can be faster
-
-Iterator chains can be **faster** than hand-written loops because LLVM can prove stronger properties about them: the adapters are pure (no aliasing into the source collection, no early-exit side effects), so the optimizer can **auto-vectorize**, unroll, and fuse passes (a `.filter().map().sum()` chain can fuse into one loop, no intermediate allocation). The "sometimes explicit wins" case is when you need **manual SIMD** or **hand-tuned inner loops** the optimizer won't find (intrinsics, explicit unrolling). **Profile both** — intuition about which is faster is often wrong, and the compiler keeps improving. Reach for iterators by default (clarity + usually-fast); reach for explicit/SIMD only in a profiled hot path where iterators measured slower.
-
-Iterators often compile to tighter loops because the compiler can reason about them. But for very tight inner loops, the explicit form sometimes wins (or with manual SIMD). Profile both.
-
-### 4. Box Large Struct Fields
-
-A struct with a large `Vec` field still has its `(ptr, len, cap)` header inline (24 bytes), but a large `[u8; 1024]` field makes the struct huge. Use `Box<[u8; 1024]>` for large fixed-size data to keep the struct small (good for cache and copying).
-
-### 5. Avoid `Box<dyn Trait>` in Hot Paths
-
-Vtable indirection is ~few ns but kills inlining. Genericize hot paths.
-
-### 6. Cache Locality
-
-- Flat `Vec<T>` over `Vec<Vec<T>>`.
-- `ArrayVec`/`SmallVec` for inline storage.
-- Structure-of-arrays over array-of-structures for SIMD-friendly access.
-
-### 7. SIMD via `std::simd` (nightly) or `wide`/`pulp` (stable)
-
-### Why SIMD matters and when to hand-write it
-
-SIMD (Single Instruction, Multiple Data) processes **N values per instruction** using wide vector registers (e.g., 4 `f32`s in one `f32x4` operation). For **data-parallel** workloads (matrix math, image processing, DSP, anything doing the same op on many values), this is a 4-16x speedup. You reach for **auto-vectorization first**: write clean iterator chains, enable `opt-level = 3`, and let LLVM vectorize (check with `cargo asm` / Godbolt that it actually did). Reach for **hand-written SIMD** (`std::simd`, `wide`, `pulp`) only when auto-vectorization fails (complex logic, gathers/scatters) or you need a specific instruction set (AVX2, NEON). Hand-written SIMD is more code and platform-specific (use runtime detection via `is_x86_feature_detected!`), so only do it in profiled hot paths.
+### Anti-pattern: `Box<dyn Trait>` monoculture in a hot path
 
 ::code-wrapper{language="rust"}
 ```rust
-#![feature(portable_simd)]
-use std::simd::f32x4;
-let a = f32x4::from_array([1.0, 2.0, 3.0, 4.0]);
-let b = f32x4::from_array([5.0, 6.0, 7.0, 8.0]);
-let c = a + b;
-```
-::
+// Naive: every plugin call goes through dynamic dispatch,
+// even in a loop processing millions of events/sec.
+trait Handler { fn handle(&self, ev: &Event); }
 
-For auto-vectorization, write iterator chains and let LLVM do it; check with `cargo asm` or Godbolt.
-
-### 8. `#[inline]` Selectively
-
-::code-wrapper{language="rust"}
-```rust
-#[inline]
-fn small() -> u32 { /* ... */ }
-
-#[inline(always)]
-fn tiny() -> u32 { /* ... */ }
-```
-::
-
-Don't `#[inline(always)]` everywhere — it bloats code and hurts i-cache.
-
-### 9. Avoid Heap Allocations in Hot Loops
-
-- Reuse buffers via `&mut Vec`.
-- Use `arrayvec::ArrayVec` for fixed-size buffers.
-- Use `smallvec::SmallVec` for small-but-may-grow.
-
-### 10. Use `&mut [T]` for In-Place Mutation
-
-::code-wrapper{language="rust"}
-```rust
-fn sum_of_squares(v: &mut [i32]) {
-    for x in v.iter_mut() { *x = *x * *x; }
+fn process(handlers: &[Box<dyn Handler>], events: &[Event]) {
+    for ev in events {
+        for h in handlers {
+            h.handle(ev); // vtable indirection, no inlining, per call
+        }
+    }
 }
 ```
 ::
 
-Avoids allocation; cache-friendly.
-
-### 11. Lock Granularity
-
-### Why contention scales inversely
-
-Lock performance is dominated by **contention**: how many threads want the lock *simultaneously* and how long they hold it. The rule: contention scales **inversely** with critical-section size/frequency — big or frequent critical sections = lots of contention = poor scaling. Strategies:
-
-- **`RwLock` for read-heavy** — readers don't block each other, so reads scale with thread count. Switch from `Mutex` to `RwLock` when reads vastly outnumber writes.
-- **Shard locks across N buckets** — instead of one lock for a map, have N maps each with its own lock. A given key hashes to one bucket, so contention spreads N-way. Reach for `dashmap`/`sharded`-style designs when write contention on a single lock is the bottleneck.
-- **Lock-free via atomics** — for simple state (counters, flags, single-slot caches), atomics avoid the lock entirely. Reach for them when the protected state is a single primitive operation.
-
-Switch strategies when profiling shows lock contention as the bottleneck — measure with `perf`/`samply` before restructuring.
-
-- `RwLock` for read-heavy.
-- Shard locks across N buckets for parallel writes.
-- Lock-free via atomics when possible.
-
-### 12. Avoid Reallocations
+**Why it fails at scale**: at low volume the vtable call's few-nanosecond cost is invisible. At millions of events/sec across many handlers, the indirect call prevents inlining (so the CPU can't fuse `handle`'s body into the loop), defeats branch prediction (indirect calls are harder to predict than direct ones), and blocks LLVM from proving anything about what `handle` does — no auto-vectorization, no dead-code elimination across the boundary. The production fix, when the handler set is closed and known at compile time, is an enum dispatch or a generic parameter monomorphized per handler type, keeping `dyn` only at the outer boundary where handler configuration is genuinely dynamic (e.g., loaded from a config file at startup, called rarely relative to hot-loop iteration).
 
 ::code-wrapper{language="rust"}
 ```rust
-let mut v = Vec::with_capacity(N);
-for x in iter { v.push(x); }
-```
-::
-
-### 13. Use `Arc::clone` Carefully
-
-Each `Arc::clone` does an atomic increment — much cheaper than a deep clone but not free. Avoid in tightest loops.
-
-### 14. `mem::replace` and `mem::take`
-
-::code-wrapper{language="rust"}
-```rust
-let old = mem::take(&mut self.buffer);   // self.buffer is now empty
-process(old);
-```
-::
-
-Avoids cloning; useful for swap-and-go state.
-
-### 15. Reduce Trait Object Dispatch
-
-::code-wrapper{language="rust"}
-```rust
-// Generic
-fn sum<T>(v: &[T]) -> T where T: Sum + Copy { v.iter().copied().sum() }
-
-// Box<dyn> — slower
-fn sum_dyn(v: &[Box<dyn Additive>]) { /* vtable per call */ }
-```
-::
-
-### 16. `Cow` to Avoid Allocations
-
-::code-wrapper{language="rust"}
-```rust
-fn normalize(s: &str) -> Cow<str> {
-    if needs_transform(s) { Cow::Owned(s.to_uppercase()) } else { Cow::Borrowed(s) }
+// Production-grade: closed set of handlers, static dispatch.
+enum Handler { Metrics(MetricsHandler), Audit(AuditHandler) }
+impl Handler {
+    fn handle(&self, ev: &Event) {
+        match self {
+            Handler::Metrics(h) => h.handle(ev), // inlinable, monomorphized
+            Handler::Audit(h) => h.handle(ev),
+        }
+    }
 }
 ```
 ::
 
-### 17. Pre-compute and Cache
+### Anti-pattern: unbounded async task spawning
 
 ::code-wrapper{language="rust"}
 ```rust
-struct Cached { data: Vec<u8> }
-impl Cached {
-    fn lookup(&self, key: usize) -> u8 { self.data[key] }
+// Naive: one tokio::spawn per incoming item, no backpressure.
+async fn ingest(mut stream: impl Stream<Item = Job> + Unpin) {
+    while let Some(job) = stream.next().await {
+        tokio::spawn(async move { process(job).await }); // unbounded
+    }
 }
 ```
 ::
 
-Avoid recomputing in hot paths.
-
-### 18. String Interning
-
-### How it works and when it pays off
-
-Interning replaces **repeated string values with integer IDs**: a global table maps `&str → u32`, and you store/pass the `u32` instead. Comparing two IDs is one integer compare (vs. a byte-by-byte string compare); hashing an ID is hashing an integer (vs. hashing the whole string); and repeated strings share one allocation (vs. N copies). You reach for it when the **same short strings appear many times** (compiler symbol tables, AST node tags, enum-like string keys, log field names) — the payoff is large for *many-duplicates, few-unique* workloads. `string_interner`/`lasso` are the standard crates. Don't intern one-off strings — the table overhead isn't worth it.
-
-For repeated short strings, use `string_interner`/`lasso` to assign integer IDs.
-
-### 19. Use `&'static` Where Appropriate
-
-### Why it helps and when "appropriate" applies
-
-`'static` is the **longest lifetime**, and a `&'static T` is universally substitutable for any `&'a T` (covariance). In some generic contexts, this lets the compiler **elide lifetime-parameter bookkeeping** — the type has no lifetime parameter to track, simplifying monomorphization. Reach for `'static` when the data genuinely lives for the whole program (string literals, once-initialized configs leaked via `OnceLock`/`Box::leak`). **Don't overuse**: manufacturing `'static` with `Box::leak` to silence lifetime errors leaks memory; it's appropriate only for data whose lifetime matches the process. Reserve `'static` for true globals, not as a band-aid for borrow-checker friction.
-
-Avoids lifetime-tracking overhead in some generic contexts. Don't overuse.
-
-### 20. Compile-Time Computation
+**Why it fails at scale**: each `spawn` allocates a task struct on the heap and hands it to the scheduler. Under a burst (upstream sends faster than `process` can drain), this creates unbounded concurrent tasks — memory grows without limit, the scheduler's run queue thrashes, and the process eventually OOMs or degrades so badly that *legitimate* work starves behind the backlog. The production fix bounds concurrency explicitly:
 
 ::code-wrapper{language="rust"}
 ```rust
-const N: usize = 1000;
-let arr = [0; N];
+use futures::stream::StreamExt;
+
+async fn ingest(stream: impl Stream<Item = Job> + Unpin) {
+    stream
+        .for_each_concurrent(Some(64), |job| async move { process(job).await })
+        .await; // caps in-flight work at 64, applies backpressure upstream
+}
 ```
 ::
 
-Move computation to compile time via `const`/`const fn` when possible.
+## Architectural Application
 
-## `release` Profile Pitfalls
-
-- **Default `release`**: `opt-level = 3` but `lto = false`, `codegen-units = 16` (parallel compile, less optimization). For final binaries, bump these.
-- **`panic = "abort"`** can unlock more optimizations (no unwinding tables).
-- **`strip = "symbols"`** reduces binary size.
-- **`opt-level = "z"`** minimizes size, often at a perf cost.
-
-## Measuring Allocations
-
-Use a custom allocator that logs:
+Performance is a system-design decision, not a micro-optimization exercise, at three levels: service boundary (generic vs. `dyn`), concurrency architecture (lock granularity), and build pipeline (profile tuning per deployment target).
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::alloc::{GlobalAlloc, Layout, System};
+// Service boundary — generic-first public API; dyn reserved for the
+// genuinely heterogeneous, low-frequency case (plugin registry).
+pub fn process<S: Strategy>(strategy: &S, data: &[u8]) -> Vec<u8> { strategy.run(data) }
+pub trait Strategy { fn run(&self, data: &[u8]) -> Vec<u8>; }
 
-struct Counting;
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, l: Layout) -> *mut u8 { eprintln!("alloc {:?}", l); System.alloc(l) }
-    unsafe fn dealloc(&self, p: *mut u8, l: Layout) { System.dealloc(p, l) }
-}
-
-#[global_allocator]
-static A: Counting = Counting;
+// Concurrency architecture — granularity chosen from MEASURED contention,
+// not guessed: single lock caps throughput at one core; lock-free adds
+// unsafe surface for zero benefit under low contention.
+use std::sync::Mutex;
+struct LowContention { state: Mutex<Vec<u8>> }        // fine if rarely touched
+// vs. dashmap::DashMap for measured high-contention key-value access
 ```
 ::
-
-Or use `dhat` for heap profiling.
-
-## `cargo bloat`
-
-::code-wrapper{language="bash"}
-```bash
-cargo install cargo-bloat
-cargo bloat --release
-cargo bloat --release --crates
-```
-::
-
-Shows which functions take the most binary size.
-
-## Inspecting Assembly
-
-::code-wrapper{language="bash"}
-```bash
-cargo install cargo-asm
-cargo asm my_crate::function
-```
-::
-
-Or use Godbolt (godbolt.org) — paste Rust code, see assembly.
-
-## Common Performance Pitfalls
-
-- **`String::new()` followed by many `push_str`**: use `with_capacity`.
-- **`format!` in hot loops**: pre-format or use `write!` into a reused buffer.
-- **`Vec<u8>` for byte parsing**: `bytes::Bytes`/`BytesMut` are often faster.
-- **`HashMap` with crypto-strong hash**: use `FxHashMap`/`AHashMap` for non-adversarial keys.
-- **`Vec::push` in a counted loop**: `Vec::with_capacity` once.
-- **`to_string()` on a `&str` you only need to read**: just use the `&str`.
-- **`Arc::clone` in inner loop**: clone once, reuse.
-- **`HashMap` lookup-then-insert**: use `entry` (one hash).
-- **Locks held across `await`**: contention; drop lock first.
-- **`Vec<Vec<T>>` matrices**: flat layout + index math is faster.
-- **`Box<dyn>` in inner loops**: indirect calls prevent inlining.
-- **`cloned()` instead of `copied()`**: `copied` is faster for `Copy` types.
-- **`Vec<u8>` from `read_to_end`**: use `Vec::with_capacity` if size is known.
-- **`String::from_utf8` then `unwrap`**: `from_utf8_lossy` avoids the check.
-
-## Memory Layout
-
-### Why each `repr` exists and when to override
-
-The default Rust layout **reorders fields** to minimize padding (gaps for alignment), producing smaller structs that use cache better — let the compiler do this by default. Override only when a **specific layout is required**:
-
-- `#[repr(C)]` — fixed C ABI field order + padding. **FFI, binary formats, shared memory** — wherever the exact layout must match an external contract.
-- `#[repr(transparent)]` — wrapper has the *exact* layout of its single field. Newtypes that must be ABI-identical to the inner type (a `struct Meters(f64)` that's a `f64` to C).
-- `#[repr(packed)]` — no padding, alignment 1. For matching packed C structs/binary formats. **Slow on many platforms** (unaligned access) and UB risk — use only when you must match a packed format.
-
-- `#[repr(C)]`: fixed, predictable, no padding-optimization.
-- `#[repr(transparent)]`: same layout as inner.
-- `#[repr(packed)]`: no padding, alignment 1 — slow on many platforms, UB risk.
-- Field reordering (default Rust layout) minimizes padding; let the compiler do it.
-
-## `std::alloc` Layout
-
-Allocations must be aligned to `Layout::align`. Mismatched alignment is UB. `Box::new_uninit_slice`/`Vec::with_capacity` handle this for you.
-
-## Async Performance
-
-### Why these choices matter
-
-- **Avoid `Box<dyn Future>` in hot paths; use generics** — `Box::pin(async {...})` allocates per call and adds vtable dispatch (no inlining), which kills the zero-cost property. Use `impl Future` (static dispatch, monomorphized) when you can.
-- **Avoid `tokio::spawn` for short-lived work — use `join!`/`FuturesUnordered`** — `spawn` has overhead (task scheduling, a heap-allocated task struct). For many short tasks you await immediately, `join!`/`FuturesUnordered` keeps them in the current task, avoiding per-task spawn overhead.
-- **Bounded channels for backpressure** (vs unbounded that grow) — bounded channels throttle the producer to match consumer speed, preventing unbounded memory growth under load. Unbounded channels have no backpressure, so a fast producer + slow consumer = OOM eventually.
-- **`current_thread` runtime** for single-threaded apps — avoids the multi-thread scheduler's worker-thread overhead when you have no need for parallelism.
-
-## Performance Tricks & Anti-Patterns to Avoid
-
-::code-wrapper{language="rust"}
-```rust
-// AVOID: copying large structs repeatedly
-fn expensive_copy(data: LargeStruct) { /* ... */ } // makes a copy
-// FIX: take a reference
-fn efficient(data: &LargeStruct) { /* ... */ }
-
-// AVOID: String concatenation in a loop
-let mut result = String::new();
-for s in strings {
-    result.push_str(&s); // multiple reallocations
-}
-// FIX: use with_capacity or join
-let result = strings.join("");
-// OR: use a Vec as a buffer
-let mut buf = String::with_capacity(1000);
-for s in strings { buf.push_str(&s); }
-
-// AVOID: Vec::push in a loop without pre-allocation
-let mut v = Vec::new();
-for _ in 0..1_000_000 { v.push(1); } // many reallocations
-// FIX: pre-allocate
-let mut v = Vec::with_capacity(1_000_000);
-for _ in 0..1_000_000 { v.push(1); }
-
-// AVOID: HashMap operations without entry API
-if !map.contains_key(&k) {
-    map.insert(k, v);
-}
-// FIX: use entry for single hash lookup
-map.entry(k).or_insert(v);
-
-// AVOID: sorting with default comparator when you can compare faster
-// Some types have cheaper comparisons via Eq than via Ord
-
-// AVOID: calling expensive functions with short-circuit operations
-if expensive() && cheap() { } // expensive runs first, wasting time
-if cheap() && expensive() { } // better: cheap exits early
-
-// TRICK: use inline assembly for critical sections (rare)
-#[inline(always)]
-fn critical() { }
-
-// TRICK: use repr(transparent) for zero-cost newtypes
-#[repr(transparent)]
-struct Meters(f64); // exactly the same layout as f64
-```
-::
-
-## Performance Optimization Checklist
-
-1. **Profile first**: Use `criterion`, `flamegraph`, or `perf`.
-2. **Measure baseline**: Get numbers before and after any change.
-3. **Identify hot spots**: Focus on code that runs often.
-4. **Reduce allocations**: Use `Vec::with_capacity`, `String::with_capacity`.
-5. **Avoid copies**: Take references, use `Cow`.
-6. **Use iterators**: Chain adaptors compile to tight loops.
-7. **Inline judiciously**: Small functions benefit; large functions don't.
-8. **Lock granularity**: Keep critical sections small.
-9. **Cache results**: Avoid recomputing expensive values.
-10. **Use SIMD**: For vectorizable operations.
-11. **Profile again**: Verify the improvement.
-
-## Release Profile Optimization
 
 ::code-wrapper{language="toml"}
-[profile.release]
+```toml
+# Build pipeline — dev optimizes iteration speed, release optimizes
+# for the deployment target's actual constraint.
+[profile.dev]
+opt-level = 0
+codegen-units = 256
+
+[profile.release]           # latency-sensitive service
 opt-level = 3
-lto = "fat"           # link-time optimization
-codegen-units = 1     # better optimization, slower compile
-panic = "abort"       # no unwinding, smaller binary
-strip = true          # remove debug symbols
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release-small]     # size-constrained edge/embedded binary
+inherits = "release"
+opt-level = "z"
 
 [profile.bench]
 inherits = "release"
@@ -474,51 +304,45 @@ inherits = "release"
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `std::hint::black_box` (stable, successor to `test::black_box`) prevents the optimizer from constant-folding or eliminating a value in *any* build, not just `cargo bench` — use it in ad-hoc `Instant::now()` micro-benchmarks too.
-- **Idiom**: profile before guessing — `cargo flamegraph` on a debug-symbol-enabled release build (`debug = true` under `[profile.release]`) turns a vague "this feels slow" into a concrete, addressable stack frame.
-- **Performance**: `cargo asm` or Godbolt (godbolt.org) is the fastest way to check whether an iterator chain actually auto-vectorized — don't trust intuition about "iterators vs loops" performance without looking at the generated assembly for your specific case.
-- **Debug**: a custom `#[global_allocator]` that logs every `alloc`/`dealloc` call (shown in this chapter) is a zero-dependency way to spot unexpected allocation hot spots before reaching for a heavier tool like `dhat`.
-- **Idiom**: `Vec::with_capacity` pays off even when your estimate is approximate — an *undercount* still saves most of the reallocations compared to starting from `Vec::new()`, since growth is exponential regardless.
-- **Clippy**: `clippy::perf` group (part of `clippy::all`) catches many of this chapter's anti-patterns automatically — `redundant_clone`, `or_fun_call`, `single_char_pattern`, and more — running `cargo clippy` before profiling often removes the low-hanging fruit for free.
+- **Debug**: `std::hint::black_box` (stable) is the successor to `test::black_box` — use it in any ad-hoc `Instant::now()` benchmark, not just `criterion` code, to stop the optimizer from proving your computation is unobserved.
+- **Performance**: `cargo asm` or Godbolt (godbolt.org) is the only reliable way to confirm an iterator chain actually auto-vectorized — "iterators are usually faster" is a heuristic, not a guarantee, for your specific loop and target CPU.
+- **Debug**: a custom `#[global_allocator]` that logs every `alloc`/`dealloc` call is a zero-dependency way to spot unexpected allocation hot spots before reaching for `dhat`.
+- **Idiom**: `Vec::with_capacity` pays off even with an approximate estimate — an undercount still eliminates most reallocations, since growth is exponential regardless of the starting point.
+- **Clippy**: the `clippy::perf` lint group (part of `clippy::all`) catches `redundant_clone`, `or_fun_call`, and similar anti-patterns automatically — run it before profiling to remove the free wins.
+- **Portability**: code hand-tuned with `#[target_feature(enable = "avx2")]` is silently unused on ARM or older x86 unless gated with `is_x86_feature_detected!` — always benchmark the fallback path, since that's what most non-x86_64-server users actually run.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`opt-level = 3` alone doesn't enable link-time optimization**: the default `[profile.release]` has `lto = false` and `codegen-units = 16` — this parallelizes compilation but caps how much cross-function inlining/optimization LLVM can do; two projects both "built in release mode" can differ substantially in runtime performance based on unrelated `Cargo.toml` profile settings.
-- **`#[inline(always)]` can make code slower, not faster**: forcing inlining of a large or frequently-called function bloats the binary and can hurt instruction-cache locality, ironically *reducing* real-world throughput even though the benchmark for that one function in isolation looks faster.
-- **Debug-mode overflow panics vanish in release, changing observable behavior**: code that "works" in `cargo test` (debug, panics on overflow) can silently wrap in `cargo run --release` — a performance-motivated switch to release mode is also a correctness-mode switch for arithmetic, which is easy to forget.
-- **`Arc::clone`'s atomic increment is not free, even though it's much cheaper than a deep clone**: in a sufficiently tight loop (millions of iterations), the atomic operation itself becomes measurable — "just use `Arc::clone`, it's cheap" is true in absolute terms but not always true relative to the rest of a hot loop's cost budget.
-- **`String`/`Vec` capacity growth strategy is not guaranteed by the standard library**: relying on exact capacity values after a sequence of `push`es (e.g., asserting `v.capacity() == 16`) is relying on an implementation detail that has changed across Rust versions and is not part of the stability guarantee.
-- **`black_box` doesn't stop *all* optimizations, only some**: wrapping a value in `black_box` prevents constant folding of that value, but the compiler can still optimize surrounding code in ways that change measured timings — naive benchmarks without `black_box` on both inputs and outputs can report numbers that are effectively measuring how well the optimizer proved the loop did nothing.
-- **Platform quirk — cache-line and SIMD-width assumptions don't transfer across architectures**: code hand-tuned for AVX2 (`#[target_feature(enable = "avx2")]`) silently isn't used at all on non-x86 targets or older x86 CPUs unless gated correctly with `is_x86_feature_detected!` — the fallback path's performance is what most users on ARM (e.g., Apple Silicon) or older hardware actually experience, and it's easy to benchmark only on the fast path.
+- **`opt-level = 3` alone doesn't enable link-time optimization**: the release default is `lto = false`, `codegen-units = 16` — two projects both "built in release mode" can differ substantially in runtime performance purely from unrelated `Cargo.toml` profile settings.
+- **`#[inline(always)]` can make code slower**: forcing inlining of a large or frequently-called function bloats the binary and hurts i-cache locality — the isolated-function benchmark looks faster while real-world throughput drops.
+- **Debug-mode overflow panics vanish in release**: code that panics on overflow under `cargo test` can silently wrap under `cargo run --release` — a performance-motivated profile switch is also a correctness-mode switch for arithmetic.
+- **`Arc::clone`'s atomic increment is not free**: cheaper than a deep clone, but in a sufficiently tight loop (millions of iterations) the atomic operation itself becomes measurable against the rest of the loop's cost budget.
+- **`String`/`Vec` capacity growth strategy isn't a stability guarantee**: asserting exact capacity values after a sequence of pushes relies on an implementation detail that has changed across Rust versions.
+- **`black_box` stops some optimizations, not all**: it prevents constant-folding of the wrapped value, but surrounding code can still be optimized in ways that skew measured timings if inputs *and* outputs aren't both wrapped.
 
 ## 🧠 Spot the Bug
 
-Why is `sum_bad` measured as dramatically faster than `sum_good` in a naive benchmark, even though `sum_good` is the "more correct" version?
+Why does this "optimization" make the service slower under real production load, despite passing every local benchmark faster than the original?
 
 ::code-wrapper{language="rust"}
 ```rust
-fn sum_bad(v: &[i32]) -> i32 {
-    let mut total = 0;
-    for &x in v {
-        total += x;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+struct Cache {
+    inner: Arc<Mutex<lru::LruCache<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    async fn get_or_compute(&self, key: &str) -> Vec<u8> {
+        let mut guard = self.inner.lock().await;
+        if let Some(v) = guard.get(key) {
+            return v.clone();
+        }
+        let value = expensive_remote_fetch(key).await; // <- await while holding the lock
+        guard.put(key.to_string(), value.clone());
+        value
     }
-    total
-}
-
-fn sum_good(v: &[i32]) -> i32 {
-    v.iter().sum()
-}
-
-fn benchmark() {
-    let v = vec![1; 1_000_000];
-
-    let start = std::time::Instant::now();
-    let _ = sum_bad(&v);
-    println!("bad: {:?}", start.elapsed());
-
-    let start = std::time::Instant::now();
-    let _ = sum_good(&v);
-    println!("good: {:?}", start.elapsed());
 }
 ```
 ::
@@ -526,16 +350,33 @@ fn benchmark() {
 <details>
 <summary>Answer</summary>
 
-In a release build, both are likely to report near-zero elapsed time — and whichever runs *second* often looks artificially faster, or both look identical, because neither result is used for anything.
+The local benchmark (single-threaded, low concurrency) doesn't reveal it because there's no contention to expose — one caller at a time never waits on the lock. Under real production concurrency, holding `guard` across `expensive_remote_fetch(key).await` means **every other request that touches the cache — even for a completely different key — blocks until this one remote fetch completes.** A single slow upstream call serializes the entire cache, collapsing what should be a highly concurrent data structure into an accidental global critical section gated by network latency.
 
-The bug is in the benchmark, not the functions: `let _ = sum_bad(&v);` discards the return value immediately, and the compiler's optimizer is legally allowed to prove that a pure function's result which is never observed doesn't need to be computed at all — in a sufficiently aggressive release build, LLVM can eliminate the entire loop body of `sum_bad` (and possibly `sum_good`) as dead code, since summing into a value that's immediately thrown away has no observable side effect. What you're measuring at that point is close to the cost of `Instant::now()` calls themselves, not the summation logic — the "bad" one might get optimized away more aggressively than the "good" one (or vice versa) depending on how each shape happens to interact with LLVM's dead-code elimination passes, producing a misleading and unstable comparison.
+The `tokio::sync::Mutex` was reached for specifically *because* the critical section needed to hold across an `.await` — but the actual bug is architectural: the lock should never have needed to span the remote fetch in the first place. The fix drops the lock before the slow operation and re-acquires it only for the cheap insert, accepting a possible duplicate fetch on a cache-miss race (a correct, bounded trade-off) instead of serializing all traffic on network latency:
 
-**The lesson**: never benchmark a discarded return value — wrap results in `std::hint::black_box` (or use `criterion`, which does this for you) so the optimizer can't prove the computation is dead code.
+::code-wrapper{language="rust"}
+```rust
+async fn get_or_compute(&self, key: &str) -> Vec<u8> {
+    {
+        let guard = self.inner.lock().await;
+        if let Some(v) = guard.get(key) {
+            return v.clone();
+        }
+    } // lock released before the slow call
+    let value = expensive_remote_fetch(key).await;
+    let mut guard = self.inner.lock().await;
+    guard.put(key.to_string(), value.clone());
+    value
+}
+```
+::
+
+**The lesson**: switching to an async-aware `Mutex` fixes the compile error from awaiting across a lock, but doesn't fix the design problem of a slow operation happening *inside* a critical section — that's a throughput bug no amount of "the right mutex type" can paper over.
 
 </details>
 
 ## Summary
 
-Profile with `criterion`, `flamegraph`, `samply`, `cargo bloat`. Optimize hot paths: avoid allocation, use slices, generic over `dyn`, `with_capacity`, lock granularity, SIMD. Use `release` profile + `lto = "fat"` + `codegen-units = 1` for final binaries. Don't trust intuition; measure. Iterate. Avoid common anti-patterns like repeated string concatenation, unsafe HashMap operations, and premature `Box<dyn>` usage.
+Profile before optimizing — `criterion` for statistically valid benchmarks, `perf`/`flamegraph`/`samply` for finding real hot spots. Understand that `codegen-units`, `lto`, and `#[inline]` are compiler-facing knobs with real, non-obvious performance and compile-time trade-offs — the release default is tuned for compile speed, not runtime speed. Prefer static dispatch and slices in hot paths; reserve `dyn` and heap indirection for genuinely low-frequency, heterogeneous call sites. Treat lock scope as a throughput architecture decision, not an implementation detail — the biggest production performance bugs are almost never a missing `#[inline]`, they're a lock or an allocation somewhere it shouldn't be.
 
 Next: Documentation.

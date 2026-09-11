@@ -1,19 +1,23 @@
+---
+title: "19 — Routing with React Router"
+description: "React Router v6.4+ data-router API: createBrowserRouter, nested routes with Outlet, dynamic params, useNavigate, route protection, lazy-loaded routes with Suspense, useSearchParams, route loaders, actions, and error boundaries. Code-first reference for mid-to-senior React engineers."
+---
+
 # 19 — Routing with React Router
 
-React itself has no concept of URLs, navigation, or pages — every earlier chapter's examples run as a single, unrouted tree. **React Router** is the de facto standard library that maps URLs to component trees, and this chapter covers its data-router API (the current recommended approach) from basic routes through nested layouts, dynamic segments, protected routes, and data loading.
+## Router Setup — createBrowserRouter + RouterProvider
 
-## Setting Up a Router
-
-React Router v6.4+'s recommended API builds a route tree with `createBrowserRouter`, then renders it with a single `<RouterProvider>` at the app's root — a departure from the purely component-based `<BrowserRouter>`/`<Routes>`/`<Route>` nesting of earlier versions, though that older API still works and appears in many existing codebases.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="router_setup.js"}
 ```javascript
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 
+// v6.4+ data router: single config object tree, rendered once at app root.
+// The older <BrowserRouter>/<Routes>/<Route> JSX API still works but lacks
+// loaders, actions, and automatic error boundaries — prefer the data router.
 const router = createBrowserRouter([
   { path: '/', element: <HomePage /> },
   { path: '/about', element: <AboutPage /> },
-  { path: '/products', element: <ProductsPage /> },
+  { path: '*', element: <NotFound /> },  // splat — matches anything unmatched
 ])
 
 function App() {
@@ -22,186 +26,297 @@ function App() {
 ```
 ::
 
-## Navigation: `Link` and `useNavigate`
+## Navigation — Link vs useNavigate
 
-Regular `<a href>` tags trigger a full page reload — defeating the point of a single-page app. React Router's `<Link>` intercepts the click and updates the URL/tree client-side instead, and `useNavigate` provides the same behavior imperatively, for navigation triggered by code rather than a direct click.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="navigation.js"}
 ```javascript
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 
 function ProductCard({ product }) {
   const navigate = useNavigate()
 
-  function handlePurchase() {
-    processOrder(product.id).then(() => navigate('/order-confirmation'))
+  async function handlePurchase() {
+    const order = await processOrder(product.id)
+    // Imperative navigation — only after an async action completes.
+    // Pass state for the destination to read via useLocation().
+    navigate(`/orders/${order.id}`, { replace: true, state: { from: 'purchase' } })
   }
 
   return (
     <div>
+      {/* <Link> preserves <a> affordances: middle-click, right-click, ctrl-click */}
       <Link to={`/products/${product.id}`}>{product.name}</Link>
       <button onClick={handlePurchase}>Buy Now</button>
     </div>
   )
 }
+
+// NavLink adds active-class styling via a render-prop or className function.
+// `end` prevents prefix-matching: without it, to="/" matches EVERY route.
+<NavLink to="/" end className={({ isActive }) => isActive ? 'active' : ''}>
+  Home
+</NavLink>
 ```
 ::
 
-`<Link>` is the right choice whenever navigation *is* the direct result of a click (also giving users the native browser affordances of `<a>` — middle-click to open in a new tab, right-click to copy link — for free); `useNavigate` is for navigation that happens as a *consequence* of some other action completing, like a successful form submission or an async operation.
+## Dynamic Segments — useParams
 
-## Dynamic Segments and `useParams`
-
-A route path segment prefixed with `:` captures that portion of the URL as a named parameter, read inside the matched component via `useParams`.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="dynamic_params.js"}
 ```javascript
 const router = createBrowserRouter([
   { path: '/products/:productId', element: <ProductDetail /> },
+  // Multiple params: /users/:userId/posts/:postId
+  { path: '/users/:userId/posts/:postId', element: <UserPost /> },
+  // Optional splat: /files/* matches /files, /files/a, /files/a/b/c
+  { path: '/files/*', element: <FileBrowser /> },
 ])
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-import { useParams } from 'react-router-dom'
 
 function ProductDetail() {
   const { productId } = useParams()
-  // productId is always a string, even if the URL segment looks numeric — /products/42 gives "42"
+  // ALWAYS a string — /products/42 gives "42", not 42.
+  // Common bug: if (productId === 42) — never true. Use Number(productId).
   const { data: product, status } = useFetch(`/api/products/${productId}`)
-
   if (status === 'loading') return <Spinner />
+  if (status === 'error') return <ErrorState />
   return <h1>{product.name}</h1>
+}
+
+function FileBrowser() {
+  const params = useParams()
+  // Splat captures the rest of the path as params['*'] — e.g. "/files/a/b" → "a/b"
+  const filePath = params['*'] || ''
+  return <FileTree path={filePath} />
 }
 ```
 ::
 
-## Nested Routes and Layouts
+## Nested Routes and Layouts with Outlet
 
-Real applications almost always share layout (navigation, sidebars, footers) across many pages — React Router's nested-route configuration renders a parent route's element as a persistent shell, with `<Outlet />` marking where the matched child route's content is inserted.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="nested_routes.js"}
 ```javascript
 const router = createBrowserRouter([
   {
     path: '/',
     element: <RootLayout />,
+    errorElement: <RootError />,  // catches errors from ALL children too
     children: [
-      { index: true, element: <HomePage /> },
+      { index: true, element: <HomePage /> },           // matches "/" exactly
       { path: 'products', element: <ProductsPage /> },
       { path: 'products/:productId', element: <ProductDetail /> },
-      { path: 'account', element: <AccountLayout />, children: [
-        { index: true, element: <AccountOverview /> },
-        { path: 'orders', element: <OrderHistory /> },
-        { path: 'settings', element: <AccountSettings /> },
-      ]},
+      {
+        path: 'account',
+        element: <AccountLayout />,                       // nested layout
+        children: [
+          { index: true, element: <AccountOverview /> },  // matches "/account"
+          { path: 'orders', element: <OrderHistory /> },
+          { path: 'settings', element: <AccountSettings /> },
+        ],
+      },
     ],
   },
 ])
-```
-::
 
-::code-wrapper{language="javascript"}
-```javascript
+// RootLayout renders once and NEVER unmounts while navigating between children.
+// State, scroll position, open dropdowns, audio players — all persist.
 import { Outlet, NavLink } from 'react-router-dom'
 
 function RootLayout() {
   return (
     <div>
       <nav>
-        <NavLink to="/" end className={({ isActive }) => isActive ? 'active' : ''}>Home</NavLink>
+        <NavLink to="/" end>Home</NavLink>
         <NavLink to="/products">Products</NavLink>
         <NavLink to="/account">Account</NavLink>
       </nav>
-      {/* Outlet renders whichever child route matched the current URL —
-          RootLayout itself never unmounts while navigating between children */}
-      <Outlet />
+      {/* Outlet = insertion point for whichever child route matched */}
+      <main><Outlet /></main>
+      <Footer />
     </div>
   )
 }
 ```
 ::
 
-Because `RootLayout` doesn't unmount when navigating between `/`, `/products`, and `/account`, any state or DOM inside it (a persistent audio player, an open dropdown, scroll position of a sidebar) survives navigation — a meaningfully different (and usually desired) experience compared to a routing setup where the whole page remounts on every navigation. `index: true` marks the child route that renders at the parent's own path with nothing appended (`/` itself, or `/account` itself) — the nested-routing equivalent of a default case. `NavLink`'s `isActive` render-prop-style `className` function is what lets navigation UI highlight the current page without manually comparing the URL yourself; the `end` prop on the `/` link prevents it from also matching (and highlighting) every other route, since without `end`, `/` is technically a prefix of every path.
+## Route Loaders — Fetch Before Render
 
-## Data Loaders: Fetching Before Rendering
-
-React Router's data routers support a `loader` function per route, run *before* the route's element renders — data is available immediately via `useLoaderData`, rather than the component mounting first and then triggering its own fetch inside a `useEffect` (chapter 17's pattern).
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="loaders.js"}
 ```javascript
+// Loaders run DURING navigation, before the route element renders.
+// Data is available immediately via useLoaderData — no loading flash.
+// This inverts fetch-on-mount: "navigate → fetch → render with data"
+// instead of "navigate → render spinner → fetch → re-render with data."
+
 const router = createBrowserRouter([
   {
     path: '/products/:productId',
     element: <ProductDetail />,
-    loader: async ({ params }) => {
-      const res = await fetch(`/api/products/${params.productId}`)
-      if (!res.ok) throw new Response('Not Found', { status: 404 })
+    loader: async ({ params, request }) => {
+      // `request` is a Request object — has .url, .signal (AbortSignal), .headers
+      // Use request.signal to cancel the fetch if the user navigates away mid-load.
+      const res = await fetch(`/api/products/${params.productId}`, {
+        signal: request.signal,
+      })
+      if (res.status === 404) {
+        // Throwing a Response triggers the route's errorElement.
+        // isRouteErrorResponse() returns true for thrown Response objects.
+        throw new Response('Product not found', { status: 404 })
+      }
+      if (!res.ok) throw new Response('Server error', { status: 500 })
       return res.json()
     },
   },
 ])
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-import { useLoaderData } from 'react-router-dom'
 
 function ProductDetail() {
-  // No loading state needed here at all — React Router doesn't render this component
-  // until the loader's promise has already resolved.
-  const product = useLoaderData()
-  return <h1>{product.name}</h1>
+  const product = useLoaderData()  // already resolved — no loading state needed
+  return (
+    <div>
+      <h1>{product.name}</h1>
+      <p>${product.price}</p>
+    </div>
+  )
 }
 ```
 ::
 
-This inverts the usual fetch-on-mount flow: instead of "render, then fetch, then re-render with data" (a visible loading flash for every navigation), the loader runs during navigation itself, and the new page's content appears already populated — closer to how traditional server-rendered navigation feels, while remaining a client-side single-page app underneath. A `loader` throwing a `Response` (as shown, for a `404`) is caught by the route's `errorElement`, covered next.
+### Loader with Parallel Fetches and Caching
 
-## Error Handling Per Route
-
-A route can declare an `errorElement`, rendered in place of the normal `element` whenever that route's loader/action throws, or the route's own rendering throws — effectively an error boundary (chapter 16) scoped specifically to routing failures.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="loader_parallel.js"}
 ```javascript
-import { useRouteError, isRouteErrorResponse } from 'react-router-dom'
+// Multiple independent fetches — run in parallel, not sequentially.
+async function dashboardLoader({ params, request }) {
+  const [user, orders, recommendations] = await Promise.all([
+    fetch('/api/me', { signal: request.signal }).then(r => r.json()),
+    fetch(`/api/users/${params.userId}/orders`, { signal: request.signal }).then(r => r.json()),
+    fetch(`/api/users/${params.userId}/recs`, { signal: request.signal }).then(r => r.json()),
+  ])
+  return { user, orders, recommendations }
+}
+
+// Manual cache: React Router doesn't deduplicate loader calls across navigations.
+// A simple cache layer helps avoid re-fetching on back/forward navigation.
+const cache = new Map()
+
+async function cachedProductLoader({ params, request }) {
+  const key = params.productId
+  if (cache.has(key)) {
+    const cached = cache.get(key)
+    if (Date.now() - cached.ts < 60_000) return cached.data  // 1-minute TTL
+  }
+  const res = await fetch(`/api/products/${key}`, { signal: request.signal })
+  if (!res.ok) throw new Response('Error', { status: res.status })
+  const data = await res.json()
+  cache.set(key, { data, ts: Date.now() })
+  return data
+}
+```
+::
+
+## Route Actions — Mutations
+
+::code-wrapper{language="javascript" filename="actions.js"}
+```javascript
+// Actions handle form submissions / mutations. The data router automatically
+// revalidates all active loaders after an action completes — no manual refetch.
 
 const router = createBrowserRouter([
   {
-    path: '/products/:productId',
-    element: <ProductDetail />,
-    loader: productLoader,
-    errorElement: <ProductError />,
+    path: '/products/:productId/edit',
+    element: <EditProduct />,
+    action: async ({ params, request }) => {
+      const formData = await request.formData()
+      const res = await fetch(`/api/products/${params.productId}`, {
+        method: 'PUT',
+        body: JSON.stringify(Object.fromEntries(formData)),
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) {
+        // Return errors as data (not throw) to show inline validation errors.
+        return { errors: await res.json() }
+      }
+      return { success: true }  // triggers loader revalidation automatically
+    },
+  },
+])
+
+function EditProduct() {
+  const product = useLoaderData()
+  const actionData = useActionData()  // whatever the action returned
+  const navigation = useNavigation()  // { state: 'idle' | 'submitting' | 'loading' }
+
+  return (
+    <Form method="post">
+      <input name="name" defaultValue={product.name} />
+      {actionData?.errors?.name && <p className="error">{actionData.errors.name}</p>}
+      <button disabled={navigation.state !== 'idle'}>
+        {navigation.state === 'submitting' ? 'Saving…' : 'Save'}
+      </button>
+    </Form>
+  )
+}
+```
+::
+
+## Error Boundaries Per Route
+
+::code-wrapper{language="javascript" filename="error_boundaries.js"}
+```javascript
+import { useRouteError, isRouteErrorResponse, Link } from 'react-router-dom'
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    errorElement: <RootError />,      // catches errors from layout + all children
+    children: [
+      { path: 'products/:productId', element: <ProductDetail />, loader: productLoader,
+        errorElement: <ProductError />,  // scoped — only catches this route's errors
+      },
+    ],
   },
 ])
 
 function ProductError() {
   const error = useRouteError()
-  if (isRouteErrorResponse(error) && error.status === 404) {
-    return <p>That product doesn't exist.</p>
+
+  if (isRouteErrorResponse(error)) {
+    // Thrown Response objects have .status, .statusText, .data
+    if (error.status === 404) return <p>Product not found. <Link to="/products">Browse all</Link></p>
+    if (error.status === 401) return <p>Please log in.</p>
+    return <p>{error.status}: {error.statusText}</p>
   }
-  return <p>Something went wrong loading this product.</p>
+  // A plain Error thrown during render or in a loader — no .status.
+  if (error instanceof Error) return <p>Unexpected: {error.message}</p>
+  return <p>Unknown error.</p>
 }
 ```
 ::
 
 ## Protected Routes
 
-React Router has no built-in "auth guard" concept — protected routes are implemented as a wrapper component checking auth state and either rendering the intended content or redirecting, using `<Navigate>` for a declarative redirect during render.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="protected_routes.js"}
 ```javascript
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
+// THREE-STATE auth check — loading, authenticated, unauthenticated.
+// Two-state (user | null) causes a flash redirect for logged-in users
+// because `null` means "haven't checked yet" AND "confirmed logged out."
 function RequireAuth() {
-  const { user } = useAuth()
+  const { user, status } = useAuth()
   const location = useLocation()
 
-  if (!user) {
-    // Preserve the attempted destination in state, so login can redirect back afterward
+  if (status === 'loading') return <FullScreenSpinner />
+  if (status === 'unauthenticated') {
+    // `replace` overwrites history so back-button doesn't re-trigger the redirect.
+    // `state.from` lets LoginPage redirect back after successful login.
     return <Navigate to="/login" state={{ from: location }} replace />
   }
+  return <Outlet />  // user is confirmed authenticated — render children
+}
+
+function RequireRole({ role }) {
+  const { user } = useAuth()
+  if (!user.roles.includes(role)) return <Navigate to="/forbidden" replace />
   return <Outlet />
 }
 
@@ -210,18 +325,18 @@ const router = createBrowserRouter([
     element: <RequireAuth />,
     children: [
       { path: '/dashboard', element: <Dashboard /> },
-      { path: '/settings', element: <Settings /> },
+      {
+        element: <RequireRole role="admin" />,
+        children: [
+          { path: '/admin', element: <AdminPanel /> },
+          { path: '/admin/users', element: <UserManagement /> },
+        ],
+      },
     ],
   },
   { path: '/login', element: <LoginPage /> },
 ])
-```
-::
 
-`RequireAuth` uses the same nested-route-plus-`<Outlet>` mechanism as layouts — a parentless route element that guards every one of its children, running the auth check exactly once per navigation into that subtree rather than duplicated in every protected page. `replace` on `<Navigate>` replaces the current history entry instead of pushing a new one, so clicking the browser's back button from `/login` doesn't return to the protected page that just redirected away (which would immediately redirect again, creating a confusing back-button loop).
-
-::code-wrapper{language="javascript"}
-```javascript
 function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -229,32 +344,120 @@ function LoginPage() {
 
   async function handleLogin(credentials) {
     await login(credentials)
-    navigate(from, { replace: true })
+    navigate(from, { replace: true })  // go back to where the user was trying to go
   }
-
   return <LoginForm onSubmit={handleLogin} />
 }
 ```
 ::
 
-## Query Parameters with `useSearchParams`
+## Lazy Loading Routes with Suspense
 
-Path segments (`:productId`) capture required, structural parts of a URL; query strings (`?sort=price&page=2`) suit optional, order-independent parameters like filters and pagination, read and updated via `useSearchParams` — an API deliberately mirroring `useState`'s tuple shape.
+::code-wrapper{language="javascript" filename="lazy_routes.js"}
+```javascript
+import { lazy, Suspense } from 'react'
+import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 
-::code-wrapper{language="javascript"}
+// Each lazy() call creates a separate JS chunk — users only download
+// the code for routes they actually visit.
+const HomePage = lazy(() => import('./pages/HomePage'))
+const ProductsPage = lazy(() => import('./pages/ProductsPage'))
+const ProductDetail = lazy(() => import('./pages/ProductDetail'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const AdminPanel = lazy(() => import('./pages/AdminPanel'))
+
+const PageSpinner = () => <div className="spinner">Loading…</div>
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <Suspense fallback={<PageSpinner />}><HomePage /></Suspense>,
+  },
+  {
+    path: '/products',
+    element: <Suspense fallback={<PageSpinner />}><ProductsPage /></Suspense>,
+  },
+  {
+    path: '/products/:productId',
+    element: <Suspense fallback={<PageSpinner />}><ProductDetail /></Suspense>,
+    loader: productLoader,  // loader runs in parallel with chunk download
+  },
+  {
+    path: '/settings',
+    element: <Suspense fallback={<PageSpinner />}><SettingsPage /></Suspense>,
+  },
+  // Admin chunk is never downloaded by non-admin users at all.
+  {
+    path: '/admin',
+    element: <Suspense fallback={<PageSpinner />}><AdminPanel /></Suspense>,
+  },
+])
+
+function App() {
+  return <RouterProvider router={router} />
+}
+```
+::
+
+### Lazy Routes with Shared Suspense Boundary
+
+::code-wrapper{language="javascript" filename="lazy_shared_suspense.js"}
+```javascript
+// One Suspense boundary wrapping a layout + all its lazy children —
+// the fallback shows for the FIRST lazy child to load, then children
+// swap in as their chunks arrive. Simpler than per-route Suspense.
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: (
+      <RootLayout>
+        <Suspense fallback={<PageSpinner />}>
+          <Outlet />
+        </Suspense>
+      </RootLayout>
+    ),
+    children: [
+      { index: true, element: <HomePage /> },
+      { path: 'products', element: <ProductsPage /> },
+      { path: 'settings', element: <SettingsPage /> },
+    ],
+  },
+])
+
+// ANTI-PATTERN: wrapping <Outlet> in Suspense inside a layout that ALSO
+// has non-lazy content — the spinner replaces the entire outlet area,
+// including any persisted layout state, on every lazy route load.
+```
+::
+
+## Search Params — useSearchParams
+
+::code-wrapper{language="javascript" filename="search_params.js"}
 ```javascript
 import { useSearchParams } from 'react-router-dom'
 
+// Mirrors useState's tuple API but syncs to the URL query string.
+// State in the URL = shareable, bookmarkable, refresh-surviving.
 function ProductList() {
   const [searchParams, setSearchParams] = useSearchParams()
   const sort = searchParams.get('sort') || 'relevance'
   const page = Number(searchParams.get('page')) || 1
+  const filter = searchParams.get('filter')  // null if not present
 
   function handleSortChange(newSort) {
     setSearchParams(prev => {
       const next = new URLSearchParams(prev)
       next.set('sort', newSort)
-      next.set('page', '1') // reset pagination whenever sort criteria changes
+      next.set('page', '1')  // reset pagination when sort changes
+      return next
+    })
+  }
+
+  function handleFilterChange(key, value) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (value) next.set(key, value)
+      else next.delete(key)  // remove param when filter cleared
       return next
     })
   }
@@ -265,53 +468,316 @@ function ProductList() {
         <option value="relevance">Relevance</option>
         <option value="price">Price</option>
       </select>
-      <ProductGrid sort={sort} page={page} />
+      <ProductGrid sort={sort} page={page} filter={filter} />
     </div>
   )
+}
+
+// ANTI-PATTERN: calling setSearchParams on every keystroke without debouncing —
+// floods browser history with one entry per character. Use a local useState
+// for the input + debounce into setSearchParams (see Ch 11 useDebounce).
+function SearchInput() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [localQuery, setLocalQuery] = useState(searchParams.get('q') || '')
+  const debouncedQuery = useDebounce(localQuery, 300)
+
+  useEffect(() => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (debouncedQuery) next.set('q', debouncedQuery)
+      else next.delete('q')
+      return next
+    }, { replace: true })  // replace: don't spam history entries
+  }, [debouncedQuery])
+
+  return <input value={localQuery} onChange={e => setLocalQuery(e.target.value)} />
 }
 ```
 ::
 
-Storing sort/page state in the URL rather than local `useState` means the current view is shareable (copy-pasting the URL reproduces the exact same filtered/sorted/paginated state for someone else) and survives a page refresh — a meaningful UX property plain component state can't provide.
+## Complex Implementation — Full App Router
+
+::code-wrapper{language="javascript" filename="full_router.js"}
+```javascript
+import {
+  createBrowserRouter, RouterProvider, Outlet, Link, NavLink,
+  useLoaderData, useActionData, useNavigation, useRouteError,
+  isRouteErrorResponse, Navigate, useLocation, useSearchParams,
+} from 'react-router-dom'
+import { lazy, Suspense } from 'react'
+
+// --- Lazy page chunks ---
+const HomePage = lazy(() => import('./pages/Home'))
+const ProductList = lazy(() => import('./pages/ProductList'))
+const ProductDetail = lazy(() => import('./pages/ProductDetail'))
+const Checkout = lazy(() => import('./pages/Checkout'))
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
+
+const Spinner = () => <div className="spinner" />
+
+// --- Loaders ---
+async function productsLoader({ request }) {
+  const res = await fetch('/api/products', { signal: request.signal })
+  if (!res.ok) throw new Response('Failed to load products', { status: res.status })
+  return res.json()
+}
+
+async function productDetailLoader({ params, request }) {
+  const res = await fetch(`/api/products/${params.productId}`, { signal: request.signal })
+  if (res.status === 404) throw new Response('Not found', { status: 404 })
+  if (!res.ok) throw new Response('Server error', { status: 500 })
+  return res.json()
+}
+
+// --- Actions ---
+async function checkoutAction({ request }) {
+  const formData = await request.formData()
+  const res = await fetch('/api/checkout', {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) return { error: 'Checkout failed' }
+  const order = await res.json()
+  return { order }  // component reads via useActionData, then navigates
+}
+
+// --- Layouts ---
+function RootLayout() {
+  return (
+    <div>
+      <nav>
+        <NavLink to="/" end>Home</NavLink>
+        <NavLink to="/products">Products</NavLink>
+      </nav>
+      <main><Outlet /></main>
+    </div>
+  )
+}
+
+function AdminLayout() {
+  return (
+    <div>
+      <aside><AdminSidebar /></aside>
+      <main><Outlet /></main>
+    </div>
+  )
+}
+
+// --- Auth Guards ---
+function RequireAuth() {
+  const { user, status } = useAuth()
+  const location = useLocation()
+  if (status === 'loading') return <Spinner />
+  if (!user) return <Navigate to="/login" state={{ from: location }} replace />
+  return <Outlet />
+}
+
+function RequireAdmin() {
+  const { user } = useAuth()
+  if (user?.role !== 'admin') return <Navigate to="/forbidden" replace />
+  return <Outlet />
+}
+
+// --- Error Boundaries ---
+function RootError() {
+  const error = useRouteError()
+  if (isRouteErrorResponse(error)) {
+    if (error.status === 404) return <NotFoundPage />
+    return <ServerErrorPage status={error.status} message={error.statusText} />
+  }
+  return <UnexpectedErrorPage error={error} />
+}
+
+// --- Full Router Config ---
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    errorElement: <RootError />,
+    children: [
+      { index: true, element: <Suspense fallback={<Spinner />}><HomePage /></Suspense> },
+      {
+        path: 'products',
+        element: <Suspense fallback={<Spinner />}><ProductList /></Suspense>,
+        loader: productsLoader,
+      },
+      {
+        path: 'products/:productId',
+        element: <Suspense fallback={<Spinner />}><ProductDetail /></Suspense>,
+        loader: productDetailLoader,
+      },
+      {
+        path: 'checkout',
+        element: <Suspense fallback={<Spinner />}><Checkout /></Suspense>,
+        action: checkoutAction,
+      },
+    ],
+  },
+  {
+    element: <RequireAuth />,
+    children: [
+      {
+        element: <RequireAdmin />,
+        children: [
+          {
+            path: '/admin',
+            element: <AdminLayout />,
+            children: [
+              { index: true, element: <Suspense fallback={<Spinner />}><AdminDashboard /></Suspense> },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  { path: '/login', element: <LoginPage /> },
+])
+
+export default function App() {
+  return <RouterProvider router={router} fallbackElement={<Spinner />} />
+}
+```
+::
+
+## Anti-Pattern — Common Routing Mistakes
+
+::code-wrapper{language="javascript" filename="anti_patterns.js"}
+```javascript
+// ANTI-PATTERN: BrowserRouter with deeply nested <Routes> everywhere
+// instead of a single config. Scattered route definitions, no loaders,
+// no error boundaries, no data revalidation.
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/products" element={<Products />}>
+          <Route path=":id" element={<Detail />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  )
+}
+// This works but loses: loaders, actions, errorElement, useLoaderData,
+// automatic revalidation, typed routes, and the developer experience
+// of a single route config tree. Use createBrowserRouter.
+
+// ANTI-PATTERN: Comparing useParams to a number
+if (productId === 42) { /* never true — productId is "42" */ }
+// Fix: if (Number(productId) === 42) { /* works */ }
+
+// ANTI-PATTERN: Fetching inside useEffect when a loader exists
+function ProductDetail() {
+  const { productId } = useParams()
+  const [product, setProduct] = useState(null)
+  useEffect(() => {
+    fetch(`/api/products/${productId}`).then(r => r.json()).then(setProduct)
+  }, [productId])  // loading flash on every navigation, no abort, race conditions
+  if (!product) return <Spinner />
+  return <h1>{product.name}</h1>
+}
+// Fix: use a loader — data available before render, no flash, built-in abort.
+
+// ANTI-PATTERN: <Navigate> without replace in auth guards
+if (!user) return <Navigate to="/login" />
+// Back button -> protected page -> redirect -> /login -> loop. Always use replace.
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Use `<Link>`/`<NavLink>` for anything a user directly clicks to navigate, and `useNavigate` only for navigation that's a *side effect* of something else completing (a submitted form, a finished async action) — mixing the two inconsistently makes middle-click/right-click browser affordances unpredictable across an app.
-- **Idiom** — Prefer route `loader` functions over `useEffect`-based fetching for data a page fundamentally needs to render at all — it removes an entire class of "flash of loading spinner on every navigation" UX and sidesteps the race-condition concerns from chapter 17 for the common "fetch on mount" case specifically.
-- **Idiom** — Store filter/sort/pagination state in the URL via `useSearchParams` rather than local component state whenever the current view should be shareable, bookmarkable, or survive a refresh.
-- **Debug** — `useParams()` values are always strings, even for path segments that look numeric — a common bug is comparing `productId === 42` (a number) against a `useParams` value, which is always `"42"` (a string) and never strictly equal to the number.
-- **Idiom** — Always pair `<Navigate replace>` with redirect-on-auth-failure logic — omitting `replace` leaves the protected route in browser history, so the back button re-triggers the redirect instead of navigating further back as a user would expect.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Use <Link>/<NavLink> for direct-click navigation; useNavigate for
+// navigation as a side effect (after form submit, async completion). Mixing
+// them inconsistently breaks middle-click/right-click browser affordances.
+
+// [Idiom] Prefer loaders over useEffect-fetch for data a page MUST have to
+// render. Removes the loading-flash class of UX issues entirely and sidesteps
+// fetch-on-mount race conditions (Ch 17). The loader's request.signal handles
+// abort automatically when the user navigates away mid-load.
+
+// [Idiom] Store filter/sort/pagination state in the URL via useSearchParams —
+// shareable, bookmarkable, refresh-surviving. Local useState for the same
+// state is lost on refresh and can't be shared via a URL.
+
+// [Debug] useNavigate(-1) / useNavigate(1) navigate browser history — but
+// only works if there IS history to go back to. On a direct entry (user
+// typed the URL or opened a link), there's no previous entry. Use
+// navigate(location.state?.from || '/default') as a fallback.
+
+// [Idiom] Use { replace: true } on setSearchParams for transient state
+// (search-as-you-type) to avoid flooding browser history with one entry
+// per keystroke. Use default (push) for discrete state changes (page
+// navigation, filter application).
+
+// [Performance] lazy() + Suspense at route boundaries is the highest-leverage
+// code split — users only download code for routes they visit. The loader
+// runs in parallel with the chunk download, so data + code arrive together.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **A nested layout route's parent element does not remount when navigating between its children** — state, open dropdowns, and scroll position inside a shared layout persist across child-route navigation by design; this is usually desired but surprises developers expecting a full "new page" reset on every navigation.
-- **A route with no `end` prop on `NavLink` matches as active for every path that starts with it** — `<NavLink to="/">` without `end` shows as active on every single route in the app, since every path technically starts with `/`; add `end` to any link meant to match only its exact path.
-- **`loader` functions run on every navigation to that route, including back/forward browser navigation** — a loader with a side effect beyond fetching (analytics tracking, for instance) fires far more often than a component-mount-based `useEffect` would, since browser history navigation re-runs loaders without necessarily remounting the whole component tree.
-- **Throwing inside a `loader` is caught by `errorElement`, but a plain `throw new Error(...)` and `throw new Response(...)` are handled differently** — `isRouteErrorResponse` only returns `true` for thrown `Response` objects (with a real `.status`); a thrown plain `Error` has no `.status` and needs separate handling in the same `errorElement` component.
-- **`useSearchParams`'s setter, like `useState`'s, triggers a re-render and a URL change on every call** — building a search-as-you-type filter directly against `setSearchParams` on every keystroke without debouncing floods the browser's history/URL-bar update mechanism far more aggressively than updating local state would, and can feel janky as the address bar visibly rewrites on every character.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] useParams values are ALWAYS strings. /products/42 -> "42".
+// Comparing productId === 42 (number) is never true. Use Number(productId).
+
+// [Gotcha] A nested layout's parent element does NOT remount when navigating
+// between children — state, scroll position, and open UI persist by design.
+// If you need a "clean slate" on each child, move that state into the child.
+
+// [Gotcha] <NavLink to="/"> without `end` matches EVERY route (every path
+// starts with /). Always add `end` to root or exact-match NavLinks.
+
+// [Gotcha] Loaders re-run on back/forward browser navigation, not just
+// forward navigation. A loader with side effects (analytics, logging) fires
+// far more often than a useEffect-based approach would.
+
+// [Gotcha] isRouteErrorResponse() returns true ONLY for thrown Response
+// objects. A thrown plain Error has no .status — handle it separately
+// in the same errorElement.
+
+// [Gotcha] setSearchParams on every keystroke floods browser history.
+// Use local state + debounce + setSearchParams({ replace: true }) for
+// search-as-you-type patterns.
+
+// [Gotcha] useSearchParams().get('key') returns null if the param is
+// absent, NOT an empty string. Falsy checks like `if (searchParams.get('q'))`
+// work, but `searchParams.get('q').length` throws on null — guard it.
+
+// [Gotcha] Lazy-loaded routes without a Suspense ancestor throw at runtime,
+// not merely warn. Every lazy() component needs a <Suspense> somewhere
+// above it in the tree, or the app crashes on first load of that route.
+
+// [Gotcha] The `request.signal` in a loader is aborted when the user
+// navigates away. If you ignore it (don't pass it to fetch), the fetch
+// completes in the background and you may get an unhandled rejection
+// if the response handling code runs after the route unmounted.
+```
+::
 
 ## 🧠 Spot the Bug
 
-A protected `/dashboard` route redirects to `/login` correctly for logged-out users, but logged-in users who refresh the page on `/dashboard` are also incorrectly bounced to `/login` for a brief flash before the dashboard finally appears.
+A product detail page uses a loader to fetch data, but navigating between products (`/products/1` → `/products/2`) shows the OLD product's data briefly before updating.
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
-function useAuth() {
-  const [user, setUser] = useState(null)
-
-  useEffect(() => {
-    fetchCurrentUser().then(setUser)
-  }, [])
-
-  return { user }
+function ProductDetail() {
+  const product = useLoaderData()
+  return (
+    <div>
+      <h1>{product.name}</h1>
+      <p>{product.description}</p>
+    </div>
+  )
 }
 
-function RequireAuth() {
-  const { user } = useAuth()
-  if (!user) {
-    return <Navigate to="/login" replace />
-  }
-  return <Outlet />
+// The loader:
+async function productLoader({ params }) {
+  const res = await fetch(`/api/products/${params.productId}`)
+  return res.json()
 }
 ```
 ::
@@ -319,17 +785,54 @@ function RequireAuth() {
 <details>
 <summary>Answer</summary>
 
-`useAuth`'s `user` state starts as `null` and only becomes populated once `fetchCurrentUser()` resolves, asynchronously, after the component has already rendered at least once. `RequireAuth` treats `user === null` as "not authenticated" unconditionally — but `null` here actually means two different things at two different times: "we haven't checked yet" (initial render, before the fetch resolves) and "we checked, and there is no user" (fetch resolved with no session). Every logged-in user hits the redirect during that brief initial window before the auth check completes, exactly the flash described.
+`useLoaderData` returns the data from the **most recent completed navigation's** loader. When navigating from `/products/1` to `/products/2`, React Router starts the new loader, but the `ProductDetail` component is still mounted with the **old** data until the new loader resolves. During that window, the component renders with `product` still pointing to product 1's data — a stale flash.
 
-**The lesson**: an auth hook needs a third, explicit state — typically `status: 'loading' | 'authenticated' | 'unauthenticated'` (chapter 12's guard-clause pattern) — so a protected route can render a loading state while the check is pending, and only redirect once the check has *definitively* resolved to "no user," rather than treating "not yet known" the same as "confirmed absent."
+**Fix**: Use `useNavigation()` to detect when a loader is in-flight and show a loading indicator or disable the content:
+
+```javascript
+function ProductDetail() {
+  const product = useLoaderData()
+  const navigation = useNavigation()
+  // navigation.state is 'loading' while the new loader runs
+  if (navigation.state === 'loading') return <Spinner />
+  return <h1>{product.name}</h1>
+}
+```
+
+Alternatively, wrap the route in `<Suspense>` so React Router shows the fallback during the loader fetch instead of stale content.
 
 </details>
 
 ## Key Takeaways
 
-- React Router's data-router API (`createBrowserRouter` + `<RouterProvider>`) is the current recommended approach, supporting nested routes, loaders, and per-route error boundaries in one configuration.
-- `<Link>`/`<NavLink>` handle direct-click navigation with native browser affordances intact; `useNavigate` handles navigation as a side effect of some other completed action.
-- Nested routes with `<Outlet>` let a shared layout persist across child-route navigation without remounting — state and scroll position inside it survive.
-- Route `loader` functions fetch data before a route renders, eliminating the fetch-on-mount loading flash and sidestepping many of chapter 17's race conditions for that specific use case.
-- Protected routes are implemented as a wrapper component checking auth state and using `<Navigate replace>` to redirect — always distinguish "auth check pending" from "confirmed unauthenticated" to avoid flashing a redirect for legitimately logged-in users.
-- Query parameters via `useSearchParams` are the right place for shareable, bookmarkable, refresh-surviving view state like filters, sort order, and pagination — path segments suit required, structural identifiers instead.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. createBrowserRouter + <RouterProvider> is the recommended v6.4+ API —
+//    supports loaders, actions, errorElement, and automatic revalidation.
+//    The older <BrowserRouter>/<Routes> JSX API lacks these features.
+
+// 2. <Link>/<NavLink> for direct-click navigation (preserves <a> affordances);
+//    useNavigate for imperative navigation after an action completes.
+//    Always use { replace: true } on auth-redirect <Navigate> to avoid
+//    back-button redirect loops.
+
+// 3. Nested routes + <Outlet> = persistent layouts that don't remount
+//    between child navigations. State, scroll position, and UI persist.
+
+// 4. Loaders fetch data BEFORE the route renders — no loading flash,
+//    automatic abort via request.signal, and data ready via useLoaderData.
+//    Actions handle mutations and automatically revalidate active loaders.
+
+// 5. Protected routes need THREE auth states: loading, authenticated,
+//    unauthenticated. Two-state (user | null) flashes a redirect for
+//    every logged-in user during the initial async check.
+
+// 6. lazy() + Suspense at route boundaries = highest-leverage code split.
+//    The chunk download runs in parallel with the loader — data + code
+//    arrive together. Every lazy route needs a Suspense ancestor.
+
+// 7. useSearchParams for shareable/refresh-surviving view state (filters,
+//    sort, pagination). Debounce + { replace: true } for search-as-you-type
+//    to avoid flooding browser history with per-keystroke entries.
+```
+::

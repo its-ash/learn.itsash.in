@@ -1,77 +1,160 @@
 # 01 — Introduction & Setup
 
-## What Is Python?
+## Execution Model: Source → Bytecode → VM
 
-Python is a **high-level, dynamically typed, multi-paradigm** language created by Guido van Rossum, first released in 1991. Key characteristics:
+::code-wrapper{language="python"}
+```python
+# CPython's execution pipeline, observable from pure Python:
+# 1. Source (.py) → compiler → bytecode (platform-independent .pyc)
+# 2. Bytecode → CPython VM eval loop → execution
+# 3. .pyc cached in __pycache__/ to skip step 1 on subsequent imports
 
-- **Dynamic typing** — variables are names bound to objects; a name can be rebound to a value of any type at runtime.
-- **Interpreted, but compiled to bytecode** — source (`.py`) is compiled to bytecode (`.pyc`) which runs on a virtual machine (the CPython VM). It is not "purely interpreted" line-by-line, nor is it compiled to native machine code ahead of time like C or Rust.
-- **Multi-paradigm** — supports procedural, object-oriented (everything is an object), and functional styles (first-class functions, closures, `map`/`filter`).
-- **Batteries included** — a large standard library (`os`, `json`, `datetime`, `collections`, `itertools`, `asyncio`, and more) ships with every installation.
-- **Readable by design** — enforced significant whitespace (indentation defines blocks) and a philosophy captured in [PEP 20 — The Zen of Python](https://peps.python.org/pep-0020/): "There should be one — and preferably only one — obvious way to do it."
-- **Reference-counted with cycle-detecting GC** — objects are freed via reference counting; a generational garbage collector handles reference cycles.
+import dis, sys, types
 
-Run `import this` in any Python REPL to print the Zen of Python — it's an actual Easter egg module, not just a saying.
+# Compile a function and inspect its bytecode — this is what the VM actually executes
+def pipeline_example(data: list[int]) -> int:
+    total = 0
+    for item in data:
+        if item > 0:                    # POP_JUMP_IF_FALSE branches at bytecode level
+            total += item               # BINARY_OP in-place add
+    return total
 
-## CPython vs Other Implementations
+# disassembles to CPython bytecode — each line is one VM instruction
+dis.dis(pipeline_example)
+#  2           0 RESUME                   0      ← 3.11+ opcode, coroutine-aware entry
+#  3           2 LOAD_CONST               1 (0)  ← push literal 0 onto value stack
+#              4 STORE_FAST               1 (total) ← store into fast local slot 1
+#  4           6 LOAD_FAST                1 (total) ← load local for loop init
+#  ... (full output shows LOAD_FAST, BINARY_OP, POP_JUMP_IF_FALSE, JUMP_BACKWARD)
 
-"Python" is a *language specification*; there are multiple *implementations* that run it.
+# The bytecode object itself is a real object you can inspect
+code = pipeline_example.__code__
+print(f"argcount={code.co_argcount}, varnames={code.co_varnames}")
+print(f"stacksize={code.co_stacksize}  ← max value-stack depth the VM needs")
+print(f"consts={code.co_consts}  ← literals folded into the code object at compile time")
+```
+::
 
-| Implementation | Description | When to use |
+::code-wrapper{language="python"}
+```python
+# Production-grade: a bytecode-level hot-path analyzer
+# Walks a function's code object to count specific opcodes — useful for
+# understanding why a "simple" function is slow without a full profiler
+
+import dis
+from collections import Counter
+
+def opcode_profile(func):
+    """Count VM opcodes in a function — reveals hidden overhead in 'simple' code."""
+    counts = Counter()
+    for instr in dis.get_instructions(func):
+        counts[instr.opname] += 1
+    return counts
+
+def naive_sum(data):
+    total = 0
+    for x in data:
+        total += x          # LOAD_FAST + LOAD_CONST + BINARY_OP + STORE_FAST per iteration
+    return total
+
+profile = opcode_profile(naive_sum)
+# Each loop iteration = ~4 opcodes × N iterations — this is why pure-Python
+# loops are O(N) bytecode dispatches while sum(data) is a single C call
+print(profile.most_common(5))
+# [('LOAD_FAST', ...), ('STORE_FAST', ...), ('BINARY_OP', ...), ...]
+```
+::
+
+### Implementation Landscape
+
+| Implementation | Engine | Use Case |
 |---|---|---|
-| **CPython** | The reference implementation, written in C. What you get from python.org, `pyenv`, `apt`, `brew`. | Default choice for almost everything. |
-| **PyPy** | A Python implementation with a JIT (just-in-time) compiler, written in RPython. Often 4–10x faster for long-running, CPU-bound pure-Python code. | Long-running numeric/algorithmic workloads without heavy C-extension dependencies. |
-| **Jython** | Runs on the JVM, compiles to Java bytecode. Largely inactive/legacy. | Interop with existing JVM codebases (rare today). |
-| **IronPython** | Runs on .NET/CLR. | Interop with .NET codebases. |
-| **MicroPython** | A lean reimplementation for microcontrollers. | Embedded systems (ESP32, Raspberry Pi Pico). |
+| **CPython** | C interpreter, no JIT (3.13 adds experimental JIT) | Default — the reference implementation. All examples here target CPython 3.11+. |
+| **PyPy** | RPython JIT, 4–10× faster on long-running pure-Python | CPU-bound workloads without heavy C-extension dependencies. |
+| **MicroPython** | Lean interpreter for embedded | ESP32, Raspberry Pi Pico — restricted stdlib, no `asyncio` in full form. |
 
-Unless you have a specific reason (JIT speed, embedded target, VM interop), you want **CPython**. This curriculum assumes CPython 3.11+.
+### The GIL — architectural constraint, not a bug
 
-### Why "the GIL" matters even at this stage
+::code-wrapper{language="python"}
+```python
+# The GIL (Global Interpreter Lock) means only ONE thread executes CPython
+# bytecode at any instant — even on a 64-core machine. This is because
+# CPython's reference counting (refcount in every PyObject header) is not
+# thread-safe without a global lock.
+#
+# Consequence: threading gives NO speedup for CPU-bound pure Python.
+# Use multiprocessing (separate interpreters, separate GILs) for CPU parallelism.
+# Use threading/asyncio for I/O-bound work (GIL released during I/O waits).
 
-CPython has a **Global Interpreter Lock (GIL)** — only one thread executes Python bytecode at a time, even on multi-core machines. This shapes idiomatic Python: CPU-bound parallelism uses `multiprocessing` (separate processes, no shared GIL) rather than `threading`. Chapter 21 covers this in depth — mentioned here because it explains *why* Python's concurrency story looks different from Java's or Go's from day one.
+import threading, time, multiprocessing as mp
 
-## Python 2 vs Python 3
+def cpu_bound(n):
+    return sum(i * i for i in range(n))
 
-Python 2 reached end-of-life on **January 1, 2020**. Every example in this curriculum targets **Python 3.11+**. If you encounter Python 2 code (`print "hello"` without parentheses, `xrange`, implicit integer division truncation being the *default* for `/`), treat it as legacy and port it — the `2to3` tool and `six` compatibility shims exist but are rarely needed for new work in 2026.
+if __name__ == "__main__":
+    N = 20_000_000
 
-## Installing Python with pyenv
+    # Sequential baseline
+    t0 = time.perf_counter(); cpu_bound(N); cpu_bound(N)
+    print(f"sequential: {time.perf_counter() - t0:.2f}s")
 
-Never rely on your OS's system Python for development — on macOS and Linux it's often outdated, used internally by the OS itself, and modifying it can break system tools. Use a version manager.
+    # Threading — NO parallelism for CPU-bound work (GIL serializes)
+    t0 = time.perf_counter()
+    threads = [threading.Thread(target=cpu_bound, args=(N,)) for _ in range(2)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    print(f"2 threads (CPU-bound): {time.perf_counter() - t0:.2f}s  ← ~same as sequential")
 
-::code-wrapper{language="bash"}
+    # Multiprocessing — TRUE parallelism (separate processes, separate GILs)
+    t0 = time.perf_counter()
+    with mp.Pool(2) as pool:
+        pool.map(cpu_bound, [N, N])
+    print(f"2 processes (CPU-bound): {time.perf_counter() - t0:.2f}s  ← ~half")
+```
+::
+
+## Production Environment Setup
+
+::code-wrapper{language="bash" filename="setup.sh"}
 ```bash
-# macOS / Linux — install pyenv
-curl https://pyenv.run | bash
+# ── Production-grade Python environment bootstrap ──
+# Never use system Python for development — macOS ships 3.9 for OS tooling,
+# Ubuntu ships whatever the distro pinned. Both are stale and shared with OS tools.
 
-# Add to your shell profile (~/.zshrc or ~/.bashrc)
+# Option A: uv (recommended 2025+) — manages interpreters AND venvs in one tool
+curl -LsSf https://astral.sh/uv/install.sh | sh
+eval "$(uv generate-shell-support)"   # or restart shell
+
+uv python install 3.12.4               # downloads + installs a standalone CPython
+uv python pin 3.12.4                    # writes .python-version for the project
+uv venv .venv                           # creates isolated venv with its own site-packages
+source .venv/bin/activate
+uv pip install -e ".[dev]"              # editable install + dev extras from pyproject.toml
+
+# Option B: pyenv + venv (traditional, works everywhere)
+curl https://pyenv.run | bash
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 
-# Restart your shell, then:
-pyenv install --list | grep " 3.12"   # see available 3.12.x versions
 pyenv install 3.12.4
-pyenv global 3.12.4                   # set as the default for your user
-
-# Per-project version (writes a .python-version file)
-cd my-project
-pyenv local 3.12.4
+pyenv local 3.12.4                     # writes .python-version — pinned per-directory
+python -m venv .venv                   # stdlib venv: own interpreter + own site-packages
+source .venv/bin/activate
+python -m pip install --upgrade pip    # bundled pip may lag by months
 ```
 ::
 
 ::code-wrapper{language="bash"}
 ```bash
-# Verify
-python --version    # Python 3.12.4
-python3 --version   # same, on systems where "python" still points elsewhere
-which python         # confirm it resolves inside ~/.pyenv/shims
+# Verify the environment is correctly isolated — critical for debugging import issues
+which python                           # must resolve INSIDE .venv/bin/, not system
+python -c "import sys; print(sys.executable)"  # the actual interpreter binary path
+python -c "import sys; print(sys.prefix)"       # venv root — differs from base_prefix
+python -c "import sys; print(sys.path)"        # site-packages should be .venv-local
+pip show pip | grep Location            # confirms installs land in the right place
 ```
 ::
-
-### Windows
-
-Use the official installer from python.org (check "Add python.exe to PATH"), or `pyenv-win`, or the Microsoft Store package for quick starts. For serious development, `pyenv-win` mirrors the Unix workflow above.
 
 ## The REPL
 
@@ -196,15 +279,44 @@ This matters because:
 - `.pyc` files are **not** portable across major/minor Python versions or CPU architectures in a meaningful "compiled binary" sense — they're not a substitute for ahead-of-time compilation like C's `.o` files. They only skip the *parse+compile* step, not execution.
 - Top-level script files (the one you invoke with `python script.py`) are **not** cached to `.pyc` — only *imported* modules are. This is a frequent point of confusion when people expect `__pycache__` to appear next to their entry-point script.
 
-## Interpreted vs Compiled — Where Python Actually Sits
+## Where Python Sits in the Compilation Spectrum
 
-| | C / Rust | Java / C# | Python (CPython) |
-|---|---|---|---|
-| Compiles to | Native machine code (ahead of time) | Bytecode (ahead of time), JIT to native at runtime | Bytecode (lazily, on import/first run) |
-| Execution | Direct CPU execution | JVM/CLR interprets or JIT-compiles bytecode | CPython VM interprets bytecode (no JIT by default) |
-| Type checking | Compile-time (static) | Compile-time (static) | Runtime (dynamic) — see chapter 20 for optional static checking via `mypy` |
+| | C / Rust | Java / C# | CPython | PyPy |
+|---|---|---|---|---|
+| Compiles to | Native code (AOT) | Bytecode → JIT to native | Bytecode (lazy, on import) | Bytecode → JIT (tracing) |
+| Type checking | Compile-time | Compile-time | Runtime (dynamic) | Runtime (dynamic) |
+| CPU-bound loop speed | 1× (baseline) | ~0.8–1.2× | ~30–100× slower | ~3–10× slower |
 
-Python's lack of a default JIT is precisely why CPU-bound pure-Python loops are slow compared to Java/C#/Rust — and why performance-critical Python code either delegates to C extensions (numpy, pandas — see chapter 26) or reaches for PyPy.
+::code-wrapper{language="python"}
+```python
+# The performance gap, demonstrated — same algorithm, different execution paths
+import time
+
+N = 5_000_000
+
+# Pure-Python loop — millions of bytecode dispatches, each with type dispatch overhead
+t0 = time.perf_counter()
+total = 0
+for i in range(N):
+    total += i
+python_loop = time.perf_counter() - t0     # ~0.3s — each += is 4+ VM opcodes
+
+# Built-in sum() — single C function call, loop runs in compiled C, no per-element dispatch
+t0 = time.perf_counter()
+total = sum(range(N))                       # C-level iteration, no bytecode per element
+builtin_sum = time.perf_counter() - t0      # ~0.03s — 10× faster, same algorithm
+
+# numpy — SIMD-vectorized C, operates on contiguous memory blocks
+import numpy as np
+t0 = time.perf_counter()
+total = int(np.arange(N).sum())              # single C call over a contiguous int64 buffer
+numpy_sum = time.perf_counter() - t0         # ~0.005s — 60× faster than the Python loop
+
+print(f"python loop:  {python_loop:.4f}s  ({N:,} bytecode dispatches)")
+print(f"builtin sum:  {builtin_sum:.4f}s  (1 C call)")
+print(f"numpy sum:    {numpy_sum:.4f}s  (SIMD-vectorized C)")
+```
+::
 
 ## Project Structure Conventions
 

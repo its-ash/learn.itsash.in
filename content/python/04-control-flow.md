@@ -1,47 +1,76 @@
 # 04 — Control Flow
 
-## `if` / `elif` / `else`
+## Production State Machine with `match`/`case` (3.10+)
 
 ::code-wrapper{language="python"}
 ```python
-def classify(temp_celsius):
-    if temp_celsius < 0:
-        return "freezing"
-    elif temp_celsius < 15:
-        return "cold"
-    elif temp_celsius < 25:
-        return "mild"
-    else:
-        return "hot"
+# ── Real-world: async task state machine using structural pattern matching ──
+# Models a job scheduler's lifecycle — each state transition is a pattern match
+# against the current state + event tuple, with guards for conditional transitions.
 
-print(classify(-5))   # freezing
-print(classify(20))    # mild
-```
-::
+from dataclasses import dataclass
+from enum import Enum, auto
 
-Python has no `switch` statement in the C sense (structural pattern matching via `match`/`case`, covered below, is the closer analog since 3.10) and no ternary `? :` syntax — instead it has a **conditional expression**:
+class State(Enum):
+    PENDING = auto()
+    RUNNING = auto()
+    PAUSED = auto()
+    COMPLETED = auto()
+    FAILED = auto()
 
-::code-wrapper{language="python"}
-```python
-age = 15
-status = "adult" if age >= 18 else "minor"
-print(status)   # minor
+@dataclass
+class Task:
+    id: str
+    state: State = State.PENDING
+    retries: int = 0
+    error: str | None = None
 
-# Chainable, though readability suffers past one level
-label = "high" if age >= 65 else "mid" if age >= 18 else "low"
-```
-::
+def transition(task: Task, event: str, payload: dict | None = None) -> Task:
+    """State machine: (current_state, event) → new_state, with guard clauses."""
+    payload = payload or {}
 
-### Common gotcha: assignment is a statement, not an expression
+    match (task.state, event):
+        case (State.PENDING, "start"):
+            task.state = State.RUNNING
 
-::code-wrapper{language="python"}
-```python
-# if x = 5:      # SyntaxError — assignment can't appear in a condition
-#     ...
+        case (State.RUNNING, "pause"):
+            task.state = State.PAUSED
 
-# This is a deliberate design choice to prevent the classic C bug of
-# writing `if (x = 5)` when you meant `if (x == 5)`. Use walrus if you
-# genuinely need to assign-and-test: if (x := 5):
+        case (State.PAUSED, "resume"):
+            task.state = State.RUNNING
+
+        case (State.RUNNING, "complete") if payload.get("success", True):
+            task.state = State.COMPLETED
+
+        case (State.RUNNING, "complete"):
+            task.error = payload.get("error", "unknown")
+            task.state = State.FAILED
+
+        case (State.FAILED, "retry") if task.retries < 3:   # guard: max 3 retries
+            task.retries += 1
+            task.error = None
+            task.state = State.PENDING
+
+        case (State.FAILED, "retry"):
+            raise RuntimeError(f"Task {task.id} exhausted retries ({task.retries})")
+
+        case (State.COMPLETED, _):
+            pass   # terminal state — any event is a no-op
+
+        case (state, event):
+            raise ValueError(f"Invalid transition: {state.name} + {event}")
+
+    return task
+
+# Drive the state machine through a realistic lifecycle
+task = Task("job-42")
+transition(task, "start")
+transition(task, "pause")
+transition(task, "resume")
+transition(task, "complete", {"success": False, "error": "OOM"})
+print(task)   # Task(id='job-42', state=<State.FAILED: 5>, retries=0, error='OOM')
+transition(task, "retry")
+print(task.state)   # State.PENDING — back in queue
 ```
 ::
 

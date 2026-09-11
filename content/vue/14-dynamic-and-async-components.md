@@ -1,336 +1,358 @@
+---
+title: Vue 3 Engineering Reference — Dynamic & Async Components
+description: component :is switching, defineAsyncComponent loading/error/timeout, KeepAlive LRU caching with include/exclude, Suspense orchestration, and shallowRef for component references.
+---
+
 # 14 — Dynamic & Async Components
 
-## `<component :is>` — Switching Components at Runtime
+## component :is — Runtime Component Switching
 
-::code-wrapper{language="vue" filename="TabbedPanel.vue"}
+::code-wrapper{language="vue" filename="DynamicComponent.vue"}
 ```vue
 <script setup>
-import { ref, shallowRef } from 'vue'
-import GeneralTab from './GeneralTab.vue'
-import SecurityTab from './SecurityTab.vue'
-import BillingTab from './BillingTab.vue'
+import { shallowRef, markRaw, ref, computed } from 'vue'
+import HomeView from './HomeView.vue'
+import ProfileView from './ProfileView.vue'
+import SettingsView from './SettingsView.vue'
 
-const tabs = { general: GeneralTab, security: SecurityTab, billing: BillingTab }
+// ── shallowRef: hold component definitions without deep reactivity ──
+// Components are complex objects — reactive() wrapping them is wasteful
+// and can break Vue's internal compilation caches. Use shallowRef or markRaw.
+const components = shallowRef({
+  home: markRaw(HomeView),
+  profile: markRaw(ProfileView),
+  settings: markRaw(SettingsView),
+})
 
-// shallowRef, not ref — the component definition itself never needs deep
-// reactivity; ref() would pointlessly try to make the component object reactive
-const activeTab = shallowRef(GeneralTab)
+const activeTab = ref('home')
+const currentComponent = computed(() => components.value[activeTab.value])
 </script>
 
 <template>
+  <!-- ── :is binds to: component object | string name | async component ── -->
+  <!-- Vue resolves the component and renders it. -->
+  <!-- Switching :is unmounts the old component, mounts the new one. -->
+  <component :is="currentComponent" />
+
   <nav>
-    <button v-for="(comp, name) in tabs" :key="name" @click="activeTab = comp">
+    <button v-for="(comp, name) in components" :key="name" @click="activeTab = name">
       {{ name }}
     </button>
   </nav>
-  <component :is="activeTab" />
 </template>
 ```
 ::
 
-`:is` also accepts a plain string naming a globally registered component, or even a native HTML tag (`<component is="h1">` renders a real `<h1>`) — useful for a heading component whose tag level is controlled by a prop:
+### Anti-Pattern: reactive() on Component Definitions
 
-::code-wrapper{language="vue" filename="Heading.vue"}
-```vue
-<script setup>
-const props = defineProps({ level: { type: Number, default: 1 } })
-</script>
+::code-wrapper{language="typescript" filename="anti-pattern.ts"}
+```typescript
+import { reactive } from 'vue'
+import HomeView from './HomeView.vue'
 
-<template>
-  <component :is="`h${level}`"><slot /></component>
-</template>
+// ❌ WRONG: reactive() wraps the component in a deep Proxy
+// This breaks Vue's internal component caching and causes subtle render bugs.
+const components = reactive({
+  home: HomeView,  // Proxy-wrapped — internal compilation cache misses
+})
+
+// ✅ CORRECT: shallowRef or markRaw
+import { shallowRef, markRaw } from 'vue'
+const components = shallowRef({
+  home: markRaw(HomeView),  // raw — no Proxy wrapping
+})
 ```
 ::
 
-## `defineAsyncComponent` — Code-Splitting at the Component Level
+## defineAsyncComponent — Code Splitting with States
 
-::code-wrapper{language="javascript"}
-```javascript
-import { defineAsyncComponent } from 'vue'
-
-const HeavyChart = defineAsyncComponent(() => import('./HeavyChart.vue'))
-```
-::
-
-This produces exactly the same chunking benefit as a lazy-loaded route (chapter 11), but at component granularity — appropriate for something expensive that isn't always visible on a given route, like a rarely-opened settings modal or a chart library loaded only once a user actually requests a report.
-
-### With loading, error, delay, and timeout options
-
-::code-wrapper{language="javascript" filename="components/AsyncChart.js"}
-```javascript
+::code-wrapper{language="typescript" filename="async-components.ts"}
+```typescript
 import { defineAsyncComponent } from 'vue'
 import LoadingSpinner from './LoadingSpinner.vue'
-import LoadError from './LoadError.vue'
+import ErrorDisplay from './ErrorDisplay.vue'
 
-export const AsyncChart = defineAsyncComponent({
-  loader: () => import('./HeavyChart.vue'),
+// ── Basic async component: loaded on first use ──
+// Dynamic import creates a separate chunk (code splitting).
+const AsyncDashboard = defineAsyncComponent(() => import('./Dashboard.vue'))
+
+// ── Full configuration: loading/error states, delay, timeout ──
+const AsyncChart = defineAsyncComponent({
+  // loader: returns a promise that resolves to the component
+  loader: () => import('./Chart.vue'),
+
+  // loadingComponent: shown while the chunk downloads
   loadingComponent: LoadingSpinner,
-  // only show the spinner if loading takes longer than this — avoids a
-  // distracting flash of a spinner for chunks that load in a few ms
+
+  // errorComponent: shown if the chunk fails to load
+  errorComponent: ErrorDisplay,
+
+  // delay: ms before showing loadingComponent (avoid flicker for fast loads)
   delay: 200,
-  errorComponent: LoadError,
-  // if the import doesn't resolve within this window, show errorComponent
-  timeout: 10000,
+
+  // timeout: ms before showing errorComponent (chunk took too long)
+  timeout: 10_000,
+
+  // suspensible: defer to <Suspense> boundary (true by default)
+  // If false, shows loadingComponent instead of using Suspense fallback
+  suspensible: true,
+
+  // ── onError: retry logic for failed loads ──
   onError(error, retry, fail, attempts) {
-    if (attempts <= 3) {
-      retry()   // transient network blip — try again automatically
+    // error: the load error
+    // retry(): call to retry loading
+    // fail(): call to give up (show errorComponent)
+    // attempts: number of attempts so far
+    if (error.message.includes('Network') && attempts <= 3) {
+      setTimeout(retry, 1000 * attempts)  // exponential-ish backoff
     } else {
-      fail()    // give up and render errorComponent
+      fail()  // give up — show errorComponent
     }
-  }
+  },
 })
 ```
 ::
 
-Without a `delay`, a fast connection loading a small chunk in 30ms still shows the loading component for at least one paint frame, producing a visible flicker — the `delay` option is a small but genuinely noticeable UX improvement, not a micro-optimization.
+## KeepAlive — LRU Caching of Component Instances
 
-## `<KeepAlive>` — Preserving Component State Across Toggles
-
-Without `<KeepAlive>`, switching away from a component (via `v-if` or `<component :is>`) fully unmounts it — any local state (scroll position, an unsaved draft, form input) is lost the moment it's switched away from and recreated fresh next time:
-
-::code-wrapper{language="vue" filename="TabbedPanel.vue"}
+::code-wrapper{language="vue" filename="KeepAlivePattern.vue"}
 ```vue
+<script setup>
+import { ref, computed, KeepAlive } from 'vue'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+
+// ── KeepAlive caches component instances when they're toggled out ──
+// Instead of destroying + recreating (losing state), the instance is
+// detached from the DOM and cached in memory. Re-activation restores state.
+//
+// Hooks: onActivated (re-attached), onDeactivated (detached, not destroyed)
+</script>
+
 <template>
-  <KeepAlive>
-    <component :is="activeTab" />
+  <!-- ── include/exclude: cache only specific components by name ── -->
+  <!-- Component name comes from: defineOptions({ name: 'X' }) or .vue filename -->
+  <KeepAlive
+    :include="['UserList', 'SearchResults']"
+    :exclude="['HeavyChart']"
+    :max="5"
+  >
+    <!-- ── max: LRU eviction — keep at most 5 instances ── -->
+    <!-- When 6th is cached, the least recently used is destroyed -->
+    <component :is="route.meta.component" />
   </KeepAlive>
 </template>
 ```
-::
 
-::code-wrapper{language="vue" filename="EditorTab.vue"}
+::code-wrapper{language="vue" filename="KeepAliveTab.vue"}
 ```vue
 <script setup>
-import { ref, onActivated, onDeactivated } from 'vue'
+import { ref, onMounted, onActivated, onDeactivated, onUnmounted, defineOptions } from 'vue'
 
-const draft = ref('')   // preserved across tab switches thanks to KeepAlive
+defineOptions({ name: 'UserList' })  // required for KeepAlive include/exclude
 
+const searchQuery = ref('')
+
+// ── onMounted fires ONCE even with KeepAlive ──
+onMounted(() => console.log('mounted — fires once'))
+
+// ── onActivated fires on EVERY activation (including first mount) ──
 onActivated(() => {
-  console.log('editor tab shown again — state was preserved')
+  // ── Resume polling, re-attach event listeners, refresh data ──
+  // This is the "resume" hook — component is visible again.
+  startPolling()
 })
 
+// ── onDeactivated fires when cached (detached from DOM, NOT destroyed) ──
 onDeactivated(() => {
-  console.log('editor tab hidden — instance kept alive in memory, not destroyed')
+  // ── Pause polling, remove event listeners — component is hidden ──
+  // State (searchQuery, scroll position) is PRESERVED for re-activation.
+  stopPolling()
+})
+
+// ── onUnmounted fires only when KeepAlive evicts (max exceeded) or is removed ──
+onUnmounted(() => console.log('truly destroyed'))
+</script>
+```
+::
+
+## Suspense — Async Component Orchestration
+
+::code-wrapper{language="vue" filename="SuspensePattern.vue"}
+```vue
+<script setup>
+import { ref, onErrorCaptured, defineAsyncComponent } from 'vue'
+
+// ── Suspense: coordinates multiple async child components ──
+// Shows fallback until ALL async children's setup() promises resolve.
+const AsyncHeader = defineAsyncComponent(() => import('./AsyncHeader.vue'))
+const AsyncMain = defineAsyncComponent(() => import('./AsyncMain.vue'))
+const AsyncFooter = defineAsyncComponent(() => import('./AsyncFooter.vue'))
+
+const error = ref(null)
+
+// ── Error handling: Suspense doesn't handle errors itself ──
+// Use onErrorCaptured in the parent to catch async setup errors.
+onErrorCaptured((err) => {
+  error.value = err
+  return false  // prevent error from propagating further
 })
 </script>
-```
-::
 
-As chapter 08 covered, a `<KeepAlive>`-wrapped component fires `onActivated`/`onDeactivated` on every show/hide instead of repeated `onMounted`/`onUnmounted` cycles — code that assumes "mounted" happens once per visible instance breaks under `<KeepAlive>`, since a component can be constructed once but activated/deactivated many times over its actual lifetime in the DOM.
-
-### `include` / `exclude` / `max`
-
-::code-wrapper{language="vue"}
-```vue
 <template>
-  <!-- only cache components whose `name` option matches -->
-  <KeepAlive include="GeneralTab,SecurityTab" :max="5">
-    <component :is="activeTab" />
-  </KeepAlive>
+  <div v-if="error" class="error">
+    <p>Failed to load: {{ error.message }}</p>
+    <button @click="error = null">Retry</button>
+  </div>
+
+  <!-- ── Suspense shows #fallback until ALL children resolve ── -->
+  <Suspense v-else>
+    <template #default>
+      <AsyncHeader />
+      <AsyncMain />
+      <AsyncFooter />
+      <!-- All three must resolve before #default renders -->
+    </template>
+    <template #fallback>
+      <div class="loading-skeleton">Loading page…</div>
+    </template>
+  </Suspense>
 </template>
 ```
-::
 
-`include`/`exclude` match against a component's registered `name` (set via `defineOptions({ name: '...' })` in `<script setup>` — chapter 07) — a component with no explicit name can't be matched by string, which is a common reason `include` silently fails to cache anything. `max` caps how many inactive instances stay cached; once exceeded, the least-recently-used one is actually destroyed (firing its real `onUnmounted`, not `onDeactivated`) to make room.
-
-## Transitions — Animating Enter/Leave
-
-`<Transition>` wraps a single element/component and automatically applies CSS classes at each phase of entering or leaving:
-
-::code-wrapper{language="vue" filename="Notification.vue"}
+::code-wrapper{language="vue" filename="AsyncChild.vue"}
 ```vue
 <script setup>
 import { ref } from 'vue'
 
-const visible = ref(false)
+const data = ref(null)
+
+// ── Top-level await makes this an async component ──
+// Suspense waits for this promise before rendering the child.
+const res = await fetch('/api/data')
+data.value = await res.json()
 </script>
 
 <template>
-  <button @click="visible = !visible">Toggle</button>
-
-  <Transition name="fade">
-    <p v-if="visible" class="notice">Saved successfully.</p>
-  </Transition>
-</template>
-
-<style scoped>
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>
-```
-::
-
-The six CSS classes Vue applies and removes automatically, named from the `name` prop: `fade-enter-from` → `fade-enter-active` → (removed once the transition ends), and `fade-leave-from` → `fade-leave-active` → `fade-leave-to` on the way out. Only `-active` classes should define the actual `transition`/`animation` property; `-from`/`-to` define the start/end state being interpolated between.
-
-### Transitioning between two elements
-
-::code-wrapper{language="vue" filename="LikeButton.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const liked = ref(false)
-</script>
-
-<template>
-  <Transition name="fade" mode="out-in">
-    <button v-if="!liked" key="unliked" @click="liked = true">🤍 Like</button>
-    <button v-else key="liked" @click="liked = false">❤️ Liked</button>
-  </Transition>
-</template>
-```
-::
-
-`mode="out-in"` waits for the leaving element to finish before the entering one starts (the default, no `mode`, runs both simultaneously, which usually looks wrong for a swap like this — the two elements overlap mid-transition). A `:key` on each branch is required so Vue treats them as genuinely different elements to transition between, not the same `<button>` being patched in place.
-
-## `<TransitionGroup>` — Animating Lists
-
-::code-wrapper{language="vue" filename="TodoList.vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-
-const todos = ref([
-  { id: 1, text: 'Learn Vue' },
-  { id: 2, text: 'Build something' }
-])
-
-function remove(id) {
-  todos.value = todos.value.filter((t) => t.id !== id)
-}
-</script>
-
-<template>
-  <TransitionGroup name="list" tag="ul">
-    <li v-for="todo in todos" :key="todo.id">
-      {{ todo.text }}
-      <button @click="remove(todo.id)">✕</button>
-    </li>
-  </TransitionGroup>
-</template>
-
-<style scoped>
-.list-enter-active,
-.list-leave-active {
-  transition: all 0.3s ease;
-}
-.list-enter-from,
-.list-leave-to {
-  opacity: 0;
-  transform: translateX(30px);
-}
-/* required for a smooth REORDER animation when items move without
-   entering or leaving at all */
-.list-move {
-  transition: transform 0.3s ease;
-}
-/* removed items must be taken out of layout flow during their leave
-   transition, or remaining items can't smoothly slide into the gap */
-.list-leave-active {
-  position: absolute;
-}
-</style>
-```
-::
-
-Unlike `<Transition>`, `<TransitionGroup>` requires every child to have a `:key` (it's rendering a real `v-for` list) and renders a real wrapper element (`tag="ul"` here) by default rather than being a no-op wrapper — omitting `tag` renders a `<span>`,  usually not what's wanted around a list of `<li>`s.
-
-## Options API Equivalent
-
-::code-wrapper{language="vue"}
-```vue
-<script>
-import GeneralTab from './GeneralTab.vue'
-import SecurityTab from './SecurityTab.vue'
-
-export default {
-  components: { GeneralTab, SecurityTab },
-  data() {
-    return { activeTab: 'GeneralTab' }
-  }
-}
-</script>
-
-<template>
-  <KeepAlive>
-    <component :is="activeTab" />
-  </KeepAlive>
+  <div>{{ data }}</div>
 </template>
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Performance** — Use `shallowRef`, not `ref`, when a variable holds a component definition (as with `activeTab` above) — the component object has no reactive internals that benefit from deep reactivity, and `ref` would recursively (and pointlessly) attempt to proxy it.
-- **Idiom** — Give every component a `name` via `defineOptions` specifically so `<KeepAlive>`'s `include`/`exclude` can target it by string — an anonymous `<script setup>` component (the default, no explicit name) can't be matched this way, and the omission is a common, silent cause of "include isn't working."
-- **Idiom** — Always give `defineAsyncComponent` a `delay` (100–300ms is typical) before its loading component appears — showing a spinner for chunks that resolve near-instantly on a fast connection is a bigger UX regression than a very brief unstyled flash would be.
-- **Debug** — When a `<Transition>` doesn't seem to animate at all, check for a missing `:key` on the swapped branches (Vue may be patching the same element in place rather than transitioning between two different ones) before assuming the CSS itself is wrong.
-- **Idiom** — `<TransitionGroup>`'s `.list-move` class (for the FLIP-style reorder animation) and `position: absolute` on `.list-leave-active` are easy to forget and both needed together for a smooth "item removed, others slide up" list animation — treat them as a matched pair, not optional extras.
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. markRaw vs shallowRef for component refs ──
+// markRaw(comp): marks a single component as non-reactive
+// shallowRef({ a: compA, b: compB }): the whole object is shallow (non-deep)
+
+// ── 2. Async component + Suspense + error boundary ──
+// Wrap <Suspense> in a parent with onErrorCaptured for full error handling.
+// Suspense handles loading, parent handles errors.
+
+// ── 3. KeepAlive include can be a regex ──
+// <KeepAlive :include="/^(User|Profile)/"> → caches any component starting with User or Profile
+
+// ── 4. Prefetch async components on hover ──
+// <RouterLink @mouseover="() => import('./NextPage.vue')">Next</RouterLink>
+// Triggers chunk download before navigation — faster perceived load.
+
+// ── 5. defineAsyncComponent onError for CDN fallback ──
+onError(err, retry, fail) {
+  // Try loading from a backup CDN if the primary fails
+  if (primaryCDNFailed) { retryWithBackupCDN() } else { fail() }
+}
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`<KeepAlive>`-wrapped components fire `onActivated`/`onDeactivated`, not repeated `onMounted`/`onUnmounted`** — Data-fetching logic placed in `onMounted` runs exactly once for the component's entire cached lifetime, even as a user switches away and back many times — anything that should refresh on each reveal belongs in `onActivated` instead.
-- **`include`/`exclude` match by component `name`, and an unnamed `<script setup>` component can't be matched** — This produces no error and no warning — the component is just never cached, and the resulting bug ("KeepAlive doesn't seem to be doing anything for this one component") is easy to misattribute to `<KeepAlive>` itself rather than the missing `name`.
-- **`<TransitionGroup>` renders a real wrapper element by default (a `<span>` unless `tag` is set) — `<Transition>` renders none** — Reaching for `<Transition>` around a list (instead of `<TransitionGroup>`) produces no per-item enter/leave animation at all, since `<Transition>` only ever animates a single root node transitioning to another single root node, not independent items in a list.
-- **Two branches inside `<Transition>` without distinct `:key`s can get patched in place instead of transitioned between** — If both `v-if`/`v-else` branches happen to be the same element type Vue may reuse the DOM node rather than treating it as an enter/leave pair — always add explicit, distinct `:key`s to force the transition Vue intends.
-- **`defineAsyncComponent`'s `onError` retry logic can retry forever if the `attempts <= N` check is written incorrectly, or never retry at all if it's inverted** — Since `onError` gives you full manual control (`retry()`/`fail()`), a boundary-condition mistake here silently changes from "reasonable exponential-style retry" to "infinite retry loop hammering a broken endpoint" with no framework-level safety net protecting against that mistake.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. :is with string name requires global registration ──
+// <component :is="'MyComponent'" /> — only works if MyComponent is globally
+// registered via app.component(). With <script setup>, import the component
+// object directly: <component :is="MyComponent" />
+
+// ── 2. KeepAlive + onMounted fires only once ──
+// Common bug: event listeners in onMounted with KeepAlive.
+// onDeactivated should remove them, onActivated should re-add.
+// Putting cleanup in onUnmounted means listeners persist while cached.
+
+// ── 3. Async component timeout doesn't cancel the import ──
+// If timeout fires, errorComponent shows, but the import promise still resolves
+// later. The component is cached — next render uses it without re-loading.
+
+// ── 4. Suspense fallback shows for ALL async children ──
+// If one child takes 5s and another takes 0.1s, the fast one isn't shown
+// until the slow one resolves. Split into separate Suspense boundaries if needed.
+
+// ── 5. :max on KeepAlive — eviction is LRU, not FIFO ──
+// The least recently ACTIVATED (not created) component is evicted.
+// A component created first but used most recently survives over newer ones.
+
+// ── 6. Suspense can't catch errors in event handlers ──
+// Only catches errors in: render, setup, lifecycle, watchers of async children.
+// Event handler errors go to app.config.errorHandler.
+```
+::
 
 ## 🧠 Spot the Bug
 
-Switching between two settings tabs is supposed to preserve each tab's unsaved form state, but the second tab's input always starts blank again after switching away and back.
+A KeepAlive tab's scroll position resets when the user returns to it.
 
-::code-wrapper{language="vue" filename="SettingsPanel.vue"}
+::code-wrapper{language="vue" filename="KeepAliveBug.vue"}
 ```vue
 <script setup>
-import { shallowRef } from 'vue'
-import GeneralTab from './GeneralTab.vue'
-import SecurityTab from './SecurityTab.vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
-const activeTab = shallowRef(GeneralTab)
+const scrollPos = ref(0)
+
+onMounted(() => {
+  window.addEventListener('scroll', () => { scrollPos.value = window.scrollY })
+})
+
+onUnmounted(() => {
+  // ⚠️ Doesn't fire on tab switch — only on true destruction (eviction)
+  window.removeEventListener('scroll', handler)
+  window.scrollTo(0, scrollPos.value)  // ← never runs on tab switch
+})
 </script>
-
-<template>
-  <button @click="activeTab = GeneralTab">General</button>
-  <button @click="activeTab = SecurityTab">Security</button>
-
-  <component :is="activeTab" />
-</template>
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-There is no `<KeepAlive>` wrapping `<component :is="activeTab" />` at all — every tab switch fully unmounts the outgoing component and mounts a brand-new instance of the incoming one, discarding all of its local state (including any unsaved form input) each time, exactly as if `<KeepAlive>` had never been part of the picture. The fix has nothing to do with `SecurityTab` specifically — the same loss happens for *both* tabs, it's just more noticeable on whichever tab has visible unsaved input.
+With `KeepAlive`, switching tabs fires `onDeactivated` (not `onUnmounted`) and returning fires `onActivated` (not `onMounted`). The scroll restoration code in `onUnmounted` never runs during tab switching — it only runs when the component is truly evicted from cache.
 
-::code-wrapper{language="vue" filename="SettingsPanel.vue"}
+**Fix** — use `onActivated`/`onDeactivated` for KeepAlive lifecycle:
+
+::code-wrapper{language="vue" filename="KeepAliveFixed.vue"}
 ```vue
-<template>
-  <button @click="activeTab = GeneralTab">General</button>
-  <button @click="activeTab = SecurityTab">Security</button>
+<script setup>
+import { ref, onActivated, onDeactivated } from 'vue'
 
-  <KeepAlive>
-    <component :is="activeTab" />
-  </KeepAlive>
-</template>
+const scrollPos = ref(0)
+
+function handler() { scrollPos.value = window.scrollY }
+
+onActivated(() => {
+  // Restore scroll position when tab is re-activated
+  window.scrollTo(0, scrollPos.value)
+  window.addEventListener('scroll', handler)
+})
+
+onDeactivated(() => {
+  // Save scroll position when tab is deactivated (cached)
+  window.removeEventListener('scroll', handler)
+})
+</script>
 ```
 ::
 
-**The lesson**: `<component :is>` on its own has no memory — every switch is a full unmount/remount cycle. State preservation across a dynamic-component switch is `<KeepAlive>`'s entire purpose, and it's opt-in, not a default behavior of `<component :is>`.
+**The lesson**: with `KeepAlive`, `onMounted`/`onUnmounted` fire only once. Use `onActivated`/`onDeactivated` for save/restore logic that should run on every tab switch.
 
 </details>
-
-## Key Takeaways
-
-- `:is` accepts a component object, a globally registered name string, or a native HTML tag name, letting a single template slot render entirely different content at runtime.
-- `defineAsyncComponent` code-splits at the component level; pair it with `delay`/`timeout`/`errorComponent` for a production-quality loading experience, not just the bare loader function.
-- `<KeepAlive>` preserves component instance state across dynamic-component or `v-if` switches, but changes the lifecycle contract — `onActivated`/`onDeactivated` replace repeated `onMounted`/`onUnmounted`.
-- `include`/`exclude` on `<KeepAlive>` match a component's `name` option — an unnamed component silently can't be targeted.
-- `<Transition>` animates a single element/component swap (needs distinct `:key`s on each branch); `<TransitionGroup>` animates list enter/leave/reorder and renders a real wrapper tag.
-- A smooth list reorder animation needs `.list-move` plus `position: absolute` on the leaving class — both together, not either alone.

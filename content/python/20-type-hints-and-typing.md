@@ -1,22 +1,126 @@
 # 20 — Type Hints & Typing
 
-## Why Type Hints Exist: Static Analysis, Not Runtime Enforcement
+## Production Type System — Generics, Protocols, and API Boundaries
 
 ::code-wrapper{language="python"}
 ```python
-def greet(name: str) -> str:
-    return f"Hello, {name}!"
+# ── Production: a fully typed repository pattern with generics and protocols ──
+# Demonstrates the real-world type system: TypeVar bounds, Protocol (structural typing),
+# TypedDict for JSON shapes, and overload for API ergonomics.
 
-print(greet("Ada"))    # "Hello, Ada!"
-print(greet(42))         # "Hello, 42!" — NO error at runtime! Python never checks the hint
+from typing import (
+    Protocol, TypeVar, Generic, TypedDict, NotRequired,
+    overload, Callable, Final, TYPE_CHECKING,
+)
+from dataclasses import dataclass
+from abc import abstractmethod
+
+# ── Protocol: structural typing — "if it has these methods, it qualifies" ──
+# No inheritance required — any class with matching methods satisfies the Protocol.
+class Repository(Protocol[T := TypeVar("T", bound="Entity")]):
+    """Repository protocol — any class implementing these methods is a valid repo."""
+    @abstractmethod
+    def get_by_id(self, id: int) -> T | None: ...
+    @abstractmethod
+    def save(self, entity: T) -> T: ...
+    @abstractmethod
+    def delete(self, id: int) -> bool: ...
+
+# ── TypedDict: typed JSON API shapes — validated by mypy, invisible at runtime ──
+class UserAPIResponse(TypedDict):
+    id: int
+    email: str
+    name: str
+    roles: list[str]
+    metadata: NotRequired[dict[str, str]]   # 3.11+ — key may be absent entirely
+
+class CreateUserRequest(TypedDict):
+    email: str
+    name: str
+    roles: NotRequired[list[str]]   # optional with default in the handler
+
+# ── Generic repository implementation ──
+@dataclass
+class Entity:
+    id: int
+
+@dataclass
+class User(Entity):
+    email: str
+    name: str
+
+class InMemoryRepository(Generic[T]):
+    """A generic in-memory repository — type-safe for any Entity subclass."""
+    def __init__(self) -> None:
+        self._store: dict[int, T] = {}
+
+    def get_by_id(self, id: int) -> T | None:
+        return self._store.get(id)
+
+    def save(self, entity: T) -> T:
+        self._store[entity.id] = entity   # type: ignore[attr-defined] — Entity has .id
+        return entity
+
+    def delete(self, id: int) -> bool:
+        return self._store.pop(id, None) is not None
+
+    def find_all(self) -> list[T]:
+        return list(self._store.values())
+
+# ── Usage: mypy verifies the entire chain ──
+user_repo: InMemoryRepository[User] = InMemoryRepository()
+user_repo.save(User(id=1, email="ada@example.com", name="Ada"))
+
+found = user_repo.get_by_id(1)   # mypy infers: User | None
+if found:
+    print(found.email)            # mypy knows `found` is User here (narrowed by `if`)
+
+# mypy catches type mismatches at the call site:
+# user_repo.save("not a user")   # mypy error: Argument 1 has incompatible type "str"; expected "User"
 ```
 ::
 
-This is the single most important fact about Python type hints: **they are pure documentation and static-analysis metadata, ignored entirely by the interpreter at runtime**. `greet(42)` runs without complaint because Python's runtime semantics haven't changed at all since before type hints existed (PEP 484, 2014) — the annotation `name: str` is stored in `greet.__annotations__` and nowhere else consulted. Catching `greet(42)` as an error requires running a separate static type checker (`mypy`, `pyright`) against the source *before* running it, exactly like a linter.
-
 ::code-wrapper{language="python"}
 ```python
-print(greet.__annotations__)   # {'name': <class 'str'>, 'return': <class 'str'>}
+# ── TYPE_CHECKING: avoid runtime import costs for type-only imports ──
+# Imports inside `if TYPE_CHECKING:` are invisible at runtime — no circular imports,
+# no heavy module load, but mypy/pyright see them and type-check correctly.
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # These imports exist ONLY for the type checker — zero runtime cost
+    import expensive_module   # would be slow/circular at runtime, fine for mypy
+    from myapp.models import HeavyModel   # forward reference, resolved by mypy only
+
+def process(item: "HeavyModel") -> "expensive_module.Result":
+    # The string annotations ("HeavyModel") are not evaluated at runtime —
+    # they're parsed as strings and resolved by mypy from the TYPE_CHECKING imports
+    return item.process()   # type: ignore[attr-defined] — runtime doesn't know the type
+
+# ── Final: preventing reassignment of constants and overriding of methods ──
+MAX_CONNECTIONS: Final[int] = 100   # mypy flags any reassignment as an error
+# MAX_CONNECTIONS = 200   # mypy error: Cannot assign to final name
+
+class BaseService:
+    def handle(self) -> None: ...
+
+class CachedService(BaseService):
+    @property
+    def is_cached(self) -> bool: ...
+
+# ── overload: multiple signatures for the same function ──
+@overload
+def parse_value(raw: str) -> str: ...
+@overload
+def parse_value(raw: bytes) -> bytes: ...
+def parse_value(raw: str | bytes) -> str | bytes:
+    """Actual implementation — mypy uses the overloads for call-site type checking."""
+    return raw.strip()
+
+# mypy knows: parse_value("x") returns str, parse_value(b"x") returns bytes
+result_str: str = parse_value("  hello  ")     # mypy: OK — str overload
+result_bytes: bytes = parse_value(b"  hello  ")  # mypy: OK — bytes overload
 ```
 ::
 

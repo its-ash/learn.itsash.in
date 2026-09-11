@@ -1,38 +1,71 @@
+---
+title: "10 — useReducer & Complex State"
+description: "useReducer mechanics, action dispatch, reducer composition, when to choose useReducer over useState, and production patterns for multi-field forms and state machines. Code-first reference for mid-to-senior React engineers."
+---
+
 # 10 — `useReducer` & Complex State
 
-## Why `useState` Stops Scaling
+## useState vs useReducer: The Decision
 
-`useState` is ideal for independent, simple values. Once a component's state involves multiple sub-values that update together, transition through defined stages, or depend on the *action taken* rather than just "set this field," managing it as several separate `useState` calls tends to spread related logic across scattered `setX` calls, invite impossible in-between states, and make the actual state transitions hard to see in one place.
+::code-wrapper{language="javascript" filename="usestate_vs_usereducer.js"}
+```javascript
+// useState: independent values, simple updates, 1-3 state fields
+// useReducer: interdependent state, complex transitions, many fields, state machines
 
-`useReducer` centralizes state transitions into a single function: given the current state and an action describing "what happened," it returns the next state. This is the same pattern as Redux (chapter 18) — indeed, Redux's core idea is a `useReducer`-shaped state container with extra tooling around it.
+// USE useState WHEN:
+// - State is a single primitive or simple object
+// - Updates are independent (setA doesn't affect B)
+// - Few state fields (1-3)
+// - Update logic is a one-liner
 
-## Basic Shape
+// USE useReducer WHEN:
+// - Multiple state fields update together (interdependent)
+// - Next state depends on complex conditions
+// - You need a clear audit trail of state transitions (actions)
+// - State has a finite set of well-defined "modes" or "phases"
+// - Update logic is more than 2-3 lines
+// - Testing the state logic separately matters (reducers are pure functions)
+```
+::
 
-::code-wrapper{language="javascript"}
+## useReducer Anatomy
+
+::code-wrapper{language="javascript" filename="usereducer_anatomy.js"}
 ```javascript
 import { useReducer } from 'react'
 
-function reducer(state, action) {
+// useReducer(reducer, initialState) → [state, dispatch]
+// reducer: (state, action) → newState  (PURE function, no side effects)
+// action: { type: string, ...payload }
+
+const initialState = { count: 0, step: 1 }
+
+function counterReducer(state, action) {
   switch (action.type) {
     case 'increment':
-      return { count: state.count + 1 }
+      return { ...state, count: state.count + state.step }
     case 'decrement':
-      return { count: state.count - 1 }
+      return { ...state, count: state.count - state.step }
+    case 'setStep':
+      return { ...state, step: action.step }
     case 'reset':
-      return { count: 0 }
+      return initialState
     default:
-      throw new Error(`Unknown action type: ${action.type}`)
+      // CRITICAL: always return state in default — throwing is also acceptable.
+      // Returning state (not throwing) means unknown actions are silently ignored.
+      // Throwing catches bugs in development: assertUnreachable(action.type)
+      return state
   }
 }
 
 function Counter() {
-  const [state, dispatch] = useReducer(reducer, { count: 0 })
-
+  const [state, dispatch] = useReducer(counterReducer, initialState)
   return (
     <div>
-      <p>{state.count}</p>
-      <button onClick={() => dispatch({ type: 'increment' })}>+1</button>
-      <button onClick={() => dispatch({ type: 'decrement' })}>-1</button>
+      <span>{state.count}</span>
+      <button onClick={() => dispatch({ type: 'increment' })}>+</button>
+      <button onClick={() => dispatch({ type: 'decrement' })}>−</button>
+      <button onClick={() => dispatch({ type: 'setStep', step: 5 })}>Step 5</button>
       <button onClick={() => dispatch({ type: 'reset' })}>Reset</button>
     </div>
   )
@@ -40,284 +73,189 @@ function Counter() {
 ```
 ::
 
-`useReducer(reducer, initialState)` returns `[state, dispatch]`. Calling `dispatch(action)` schedules a re-render with `reducer(currentState, action)` as the new state — you never call the reducer function yourself.
+## Production Pattern: Multi-Field Form
 
-## `useReducer` vs. `useState`: When to Reach for Which
-
-| Situation | Prefer |
-|---|---|
-| A single independent value (a toggle, a text input) | `useState` |
-| Several fields that always change together as one unit | `useReducer`, or a single object `useState` |
-| State transitions depend on the *previous state* in non-trivial ways | `useReducer` |
-| The component has many possible "events" that each affect state differently (forms, wizards, games) | `useReducer` |
-| You want state transition logic to be testable in isolation, outside of any component | `useReducer` — the reducer is a pure function, trivially unit-testable |
-
-## A Realistic Example: An Async Data-Fetching Reducer
-
-This formalizes the "status string" pattern introduced in chapter 4, making illegal states genuinely unrepresentable and centralizing every transition in one auditable function.
-
-::code-wrapper{language="javascript"}
-```javascript
-const initialState = { status: 'idle', data: null, error: null }
-
-function fetchReducer(state, action) {
-  switch (action.type) {
-    case 'FETCH_STARTED':
-      return { status: 'loading', data: null, error: null }
-    case 'FETCH_SUCCEEDED':
-      return { status: 'success', data: action.payload, error: null }
-    case 'FETCH_FAILED':
-      return { status: 'error', data: null, error: action.payload }
-    default:
-      return state
-  }
-}
-
-function UserProfile({ userId }) {
-  const [state, dispatch] = useReducer(fetchReducer, initialState)
-
-  useEffect(() => {
-    let cancelled = false
-    dispatch({ type: 'FETCH_STARTED' })
-
-    fetchUser(userId)
-      .then(data => { if (!cancelled) dispatch({ type: 'FETCH_SUCCEEDED', payload: data }) })
-      .catch(err => { if (!cancelled) dispatch({ type: 'FETCH_FAILED', payload: err.message }) })
-
-    return () => { cancelled = true }
-  }, [userId])
-
-  if (state.status === 'loading') return <Spinner />
-  if (state.status === 'error') return <ErrorMessage message={state.error} />
-  if (state.status === 'success') return <ProfileCard user={state.data} />
-  return null
-}
-```
-::
-
-Compare this to the equivalent with three separate `useState` calls: nothing enforces that `error` gets cleared when a new fetch starts, or that `data` and `error` aren't both non-null simultaneously. Every transition here is explicit and impossible to get "half right" by forgetting to reset a sibling piece of state.
-
-## A Multi-Step Form Wizard
-
-`useReducer` shines for stateful flows with many distinct actions — form wizards, multi-step checkouts, undo/redo, games.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="form_reducer.js"}
 ```javascript
 const initialFormState = {
-  step: 1,
-  values: { name: '', email: '', plan: null },
+  values: { name: '', email: '', password: '' },
   errors: {},
+  touched: { name: false, email: false, password: false },
+  isSubmitting: false,
 }
 
-function wizardReducer(state, action) {
+function formReducer(state, action) {
   switch (action.type) {
-    case 'FIELD_CHANGED':
+    case 'field_change':
+      // Update a single field value, clear its error, keep touched as-is
       return {
         ...state,
         values: { ...state.values, [action.field]: action.value },
         errors: { ...state.errors, [action.field]: undefined },
       }
-    case 'VALIDATION_FAILED':
-      return { ...state, errors: action.errors }
-    case 'NEXT_STEP':
-      return { ...state, step: state.step + 1 }
-    case 'PREV_STEP':
-      return { ...state, step: Math.max(1, state.step - 1) }
-    case 'RESET':
-      return initialFormState
+    case 'field_blur':
+      // Mark field as touched and validate it
+      return {
+        ...state,
+        touched: { ...state.touched, [action.field]: true },
+        errors: {
+          ...state.errors,
+          [action.field]: validateField(action.field, state.values[action.field]),
+        },
+      }
+    case 'start_submit':
+      // Validate all fields, set submitting only if no errors
+      const allErrors = validateAll(state.values)
+      return {
+        ...state,
+        touched: { name: true, email: true, password: true },
+        errors: allErrors,
+        isSubmitting: Object.keys(allErrors).length === 0,
+      }
+    case 'submit_success':
+      return { ...initialFormState }  // reset everything
+    case 'submit_error':
+      return { ...state, isSubmitting: false, errors: { ...state.errors, submit: action.error } }
     default:
       return state
   }
 }
 
-function SignupWizard() {
-  const [state, dispatch] = useReducer(wizardReducer, initialFormState)
-
-  function handleNext() {
-    const errors = validateStep(state.step, state.values)
-    if (Object.keys(errors).length > 0) {
-      dispatch({ type: 'VALIDATION_FAILED', errors })
-      return
-    }
-    dispatch({ type: 'NEXT_STEP' })
-  }
-
-  return (
-    <div>
-      {state.step === 1 && (
-        <NameEmailStep
-          values={state.values}
-          errors={state.errors}
-          onChange={(field, value) => dispatch({ type: 'FIELD_CHANGED', field, value })}
-        />
-      )}
-      {state.step === 2 && <PlanStep values={state.values} onChange={/* ... */ () => {}} />}
-      <button onClick={() => dispatch({ type: 'PREV_STEP' })} disabled={state.step === 1}>Back</button>
-      <button onClick={handleNext}>Next</button>
-    </div>
-  )
-}
+// Usage: const [formState, dispatch] = useReducer(formReducer, initialFormState)
+// dispatch({ type: 'field_change', field: 'email', value: 'user@test.com' })
+// dispatch({ type: 'field_blur', field: 'email' })
+// dispatch({ type: 'start_submit' })
 ```
 ::
 
-## Lazy Initialization with `useReducer`
+## State Machine: Async Data Fetching
 
-Like `useState`, `useReducer` accepts a third argument — an init function — for expensive or derived initial state, applied to the second argument.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="async_state_machine.js"}
 ```javascript
-function init(initialCount) {
-  return { count: initialCount, history: [initialCount] }
-}
+// A finite state machine for async operations: idle → loading → success/error
 
-function reducer(state, action) {
+const initialState = { status: 'idle', data: null, error: null }
+
+function asyncReducer(state, action) {
   switch (action.type) {
-    case 'increment': {
-      const next = state.count + 1
-      return { count: next, history: [...state.history, next] }
-    }
+    case 'fetch_start':
+      return { status: 'loading', data: null, error: null }
+    case 'fetch_success':
+      return { status: 'success', data: action.data, error: null }
+    case 'fetch_error':
+      return { status: 'error', data: null, error: action.error }
     case 'reset':
-      return init(action.payload)  // reuse init to reset cleanly
+      return initialState
     default:
       return state
   }
 }
 
-function CounterWithHistory({ startAt }) {
-  const [state, dispatch] = useReducer(reducer, startAt, init)
-  // init(startAt) runs once, on mount — same lazy-initialization contract as useState
-  return (
-    <div>
-      <p>{state.count}</p>
-      <button onClick={() => dispatch({ type: 'increment' })}>+1</button>
-      <button onClick={() => dispatch({ type: 'reset', payload: startAt })}>Reset</button>
-    </div>
-  )
+function useAsyncFetch(fetchFn, deps = []) {
+  const [state, dispatch] = useReducer(asyncReducer, initialState)
+
+  useEffect(() => {
+    let cancelled = false
+    dispatch({ type: 'fetch_start' })
+    fetchFn()
+      .then(data => { if (!cancelled) dispatch({ type: 'fetch_success', data }) })
+      .catch(error => { if (!cancelled) dispatch({ type: 'fetch_error', error: error.message }) })
+    return () => { cancelled = true }
+  }, deps)
+
+  return state
 }
+
+// The state machine makes IMPOSSIBLE states unreachable:
+// You can't be in "loading" and "success" at the same time.
+// With separate useStates (setStatus, setData, setError), you CAN accidentally
+// set inconsistent combinations: setStatus('loading') + setData(oldData).
 ```
 ::
 
-## Combining `useReducer` with Context
+## Lazy Initialization with useReducer
 
-The single most common production pattern for "app-wide state without a full library" is a reducer's `state` and `dispatch` shared via Context — this is conceptually identical to a minimal hand-rolled Redux.
-
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="lazy_init_reducer.js"}
 ```javascript
-const CartStateContext = createContext(null)
-const CartDispatchContext = createContext(null)
+// useReducer supports lazy initialization (same as useState):
+// useReducer(reducer, initialArg, initFunction)
+// initFunction(initialArg) runs only on mount.
 
-function cartReducer(state, action) {
-  switch (action.type) {
-    case 'ADD_ITEM':
-      return { ...state, items: [...state.items, action.item] }
-    case 'REMOVE_ITEM':
-      return { ...state, items: state.items.filter(i => i.id !== action.id) }
-    case 'CLEAR':
-      return { ...state, items: [] }
-    default:
-      return state
-  }
+function init(initialCount) {
+  // Read from localStorage or compute on mount only
+  const saved = localStorage.getItem('count')
+  return { count: saved ? parseInt(saved, 10) : initialCount, step: 1 }
 }
 
-function CartProvider({ children }) {
-  const [state, dispatch] = useReducer(cartReducer, { items: [] })
-
-  return (
-    <CartStateContext.Provider value={state}>
-      <CartDispatchContext.Provider value={dispatch}>
-        {children}
-      </CartDispatchContext.Provider>
-    </CartStateContext.Provider>
-  )
-}
-
-// Split into two contexts deliberately: components that only dispatch
-// (e.g., an "Add to Cart" button) never re-render when the cart's ITEMS
-// change, because dispatch itself is a stable function reference forever.
-function useCartState() { return useContext(CartStateContext) }
-function useCartDispatch() { return useContext(CartDispatchContext) }
-```
-::
-
-::code-wrapper{language="javascript"}
-```javascript
-function AddToCartButton({ product }) {
-  const dispatch = useCartDispatch()  // never causes THIS component to re-render on cart changes
-  return (
-    <button onClick={() => dispatch({ type: 'ADD_ITEM', item: product })}>
-      Add to Cart
-    </button>
-  )
-}
-
-function CartSummary() {
-  const { items } = useCartState()  // re-renders only when cart state actually changes
-  return <p>{items.length} items in cart</p>
-}
-```
-::
-
-This dispatch/state context split is a real, valuable performance pattern: `dispatch` returned by `useReducer` is guaranteed stable across renders (same reference forever, similar to a `useState` setter), so components that only need to dispatch actions — never read state — can subscribe to a context that never triggers their re-render.
-
-## `useReducer` Does Not Replace `useState` Everywhere
-
-It's tempting, once learned, to reach for `useReducer` universally "for consistency." Resist this for simple, independent values — a lone boolean toggle or a single text input gains nothing from a reducer and loses the directness of `setValue(x)`.
-
-::code-wrapper{language="javascript"}
-```javascript
-// Overkill for a single boolean
-function reducer(state, action) {
-  switch (action.type) {
-    case 'toggle': return !state
-    default: return state
-  }
-}
-function Toggle() {
-  const [isOpen, dispatch] = useReducer(reducer, false)
-  return <button onClick={() => dispatch({ type: 'toggle' })}>{isOpen ? 'Open' : 'Closed'}</button>
-}
-
-// Simpler and equally correct
-function Toggle() {
-  const [isOpen, setIsOpen] = useState(false)
-  return <button onClick={() => setIsOpen(o => !o)}>{isOpen ? 'Open' : 'Closed'}</button>
+function Counter({ initialCount }) {
+  const [state, dispatch] = useReducer(reducer, initialCount, init)
+  // init(initialCount) runs once on mount → no localStorage read on re-renders.
+  return <div>{state.count}</div>
 }
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Reach for `useReducer` once a component's state involves multiple fields that change together, or once you find yourself writing more than two or three `useState` calls whose updates are logically coupled — centralizing the transitions in one reducer function makes the state machine explicit and testable.
-- **Debug** — A reducer is a pure function with no dependency on React at all — unit test it directly (`expect(reducer(state, action)).toEqual(expected)`) without rendering any component, which is both faster and catches logic bugs closer to their source than a full component test would.
-- **Performance** — Split a reducer's context into a `StateContext` and a `DispatchContext` (as shown above) when dispatch-only consumers (buttons that fire actions but never read state) are common — `dispatch` is referentially stable forever, so those consumers never re-render due to state changes.
-- **Idiom** — Give every action a `type` string and, when needed, a clearly named payload field (`payload`, or an explicit name like `item`/`id`) — consistent action shapes make a reducer's `switch` statement easy to scan and match the conventions of Redux DevTools and Redux Toolkit if you later migrate (chapter 18).
-- **Debug** — Add a `default: throw new Error(...)` branch (rather than silently returning `state`) during development to catch typo'd action types immediately, rather than discovering "nothing happened when I dispatched" through silent, confusing UI inaction.
+::code-wrapper{language="javascript" filename="tips.js"}
+```javascript
+// [Idiom] Extract the reducer and action creators into a separate file for
+// testability. Reducers are PURE functions — you can unit test them in isolation
+// without rendering any React components:
+//   expect(reducer({ count: 0 }, { type: 'increment' })).toEqual({ count: 1 })
+
+// [Idiom] Use a discriminated union for actions (TypeScript) to get autocomplete
+// and exhaustive switch checking:
+//   type Action = { type: 'increment' } | { type: 'setStep', step: number }
+
+// [Debug] If state updates seem wrong, log every action:
+//   function loggingReducer(state, action) { console.log(action); return realReducer(state, action) }
+
+// [Idiom] For truly complex state, consider XState (finite state machine library)
+// — it formalizes states, transitions, and guards. useReducer is a mini-FSM;
+// XState is the full version when transitions have conditions and side effects.
+
+// [Performance] dispatch is GUARANTEED stable (same as useState setters) — no
+// need to useCallback it. Safe to pass dispatch directly to memoized children
+// or include in dependency arrays without causing re-runs.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Reducers must be pure — no side effects, no mutation, no randomness** — calling `fetch`, mutating `state` in place, or reading `Date.now()`/`Math.random()` directly inside a reducer breaks React's ability to reason about state deterministically (especially under Strict Mode's double-invocation or concurrent rendering) — side effects belong in `useEffect`, triggered by the resulting state, not inside the reducer itself.
-- **Returning the same state reference from every branch (including `default`) is required for bail-out optimization** — if a reducer accidentally always returns a new object (e.g., `default: return { ...state }` instead of `default: return state`), React can't detect "nothing changed" and may re-render more than necessary.
-- **Actions dispatched in a loop or rapid succession are still all processed, each against the correct preceding state** — unlike the `useState` value-form pitfall from chapter 4, `dispatch` always queues against the latest pending state, so `dispatch({type:'increment'})` called three times in one handler correctly increments three times — this is one advantage `useReducer` has by construction over naive `useState` value-form updates.
-- **The reducer function itself should be defined outside the component (or memoized) to stay stable** — defining `function reducer(state, action) {...}` inside the component body recreates it every render; while `useReducer` doesn't require the reducer to be referentially stable to function correctly, keeping it outside the component avoids confusion and accidental closures over stale props.
-- **`useReducer`'s initial state argument is only used on mount, just like `useState`** — passing a fresh object as the second argument to `useReducer` on every render does not reset state on every render; React only reads it once, on the initial call, exactly like `useState`'s initial value argument.
+::code-wrapper{language="javascript" filename="edge_cases.js"}
+```javascript
+// [Gotcha] Reducers MUST be pure — no side effects, no async, no mutations.
+// Don't fetch data, set timeouts, or dispatch from inside a reducer. Side effects
+// belong in useEffect (triggered by state changes), not in the reducer itself.
+
+// [Gotcha] Always return a NEW state object — never mutate the existing one.
+// return state with a mutation → React sees the same reference → no re-render.
+// return { ...state, count: state.count + 1 } → new object → re-render.
+
+// [Gotcha] The default case in a switch should return state (not throw) for
+// resilience, OR throw/assert for strictness. Silently returning state on
+// unknown actions can mask typos in action type strings.
+
+// [Gotcha] dispatch is stable but the state value changes. If you pass dispatch
+// to a memoized child, it won't cause re-renders. But if you pass state, the
+// child re-renders whenever state changes — even parts of state it doesn't use.
+// Consider splitting state or using selectors (useSyncExternalStore).
+```
+::
 
 ## 🧠 Spot the Bug
 
-A reducer-based shopping cart is supposed to track a running total, but the total silently falls out of sync with the actual items after several add/remove operations.
+A reducer seems to "lose" other fields when updating one:
 
-::code-wrapper{language="javascript"}
+::code-wrapper{language="javascript" filename="spot_the_bug.js"}
 ```javascript
-function cartReducer(state, action) {
+function settingsReducer(state, action) {
   switch (action.type) {
-    case 'ADD_ITEM': {
-      state.items.push(action.item)
-      state.total += action.item.price
-      return state
-    }
-    case 'REMOVE_ITEM': {
-      state.items = state.items.filter(i => i.id !== action.id)
-      return state
-    }
+    case 'setTheme':
+      return { theme: action.theme }  // ← replaces the entire state object
+    case 'setFontSize':
+      return { fontSize: action.fontSize }  // ← replaces again
     default:
       return state
   }
@@ -328,17 +266,40 @@ function cartReducer(state, action) {
 <details>
 <summary>Answer</summary>
 
-`ADD_ITEM` mutates `state.items` and `state.total` directly and returns the *same* state object reference. React compares the previous and next state by reference (`Object.is`) to decide whether to re-render — since the reducer returns the identical object it was given, React may skip the re-render entirely even though the data technically changed, and any memoized selectors or `React.memo`'d children reading this state see no change at all. Separately, `REMOVE_ITEM` updates `items` but never recomputes `total`, so removing an item leaves the total showing the old, now-incorrect sum.
+Each case returns a **new object** with only one field — `return { theme: action.theme }` **replaces** the entire state, losing `fontSize` (and any other fields). The next `setFontSize` then loses `theme`.
 
-**The lesson**: reducers must return a brand-new state object for every change (`{ ...state, items: [...state.items, action.item], total: state.total + action.item.price }`), both so React's reference-based change detection actually fires, and so every dependent field (like `total`) is recomputed consistently on every relevant action — mutating and returning the same object silently breaks both guarantees.
+**Fix**: spread the previous state and override only the changed field:
+
+```javascript
+case 'setTheme':
+  return { ...state, theme: action.theme }
+case 'setFontSize':
+  return { ...state, fontSize: action.fontSize }
+```
+
+The spread preserves all other fields while updating only the target. This is the same pattern as `useState` with object state (Chapter 4) — always create a new object with the previous fields merged in.
 
 </details>
 
 ## Key Takeaways
 
-- `useReducer` centralizes state transitions into one pure function — `(state, action) => newState` — dispatched via `dispatch(action)` rather than direct setters.
-- Prefer it over multiple `useState` calls once fields update together, transitions depend heavily on prior state, or the component has many distinct "events" (forms, wizards, games).
-- Reducers must be pure: no mutation, no side effects, always return a new state object for any actual change.
-- `dispatch` is referentially stable across renders (like a `useState` setter) — splitting state and dispatch into separate contexts lets dispatch-only consumers avoid re-rendering on state changes.
-- A reducer is trivially unit-testable in isolation, with no component rendering required — a real advantage over logic scattered across several `useState` setters.
-- Don't reach for `useReducer` for simple, independent values — plain `useState` remains simpler and equally correct there.
+::code-wrapper{language="javascript" filename="key_takeaways.js"}
+```javascript
+// 1. useReducer over useState when: state has interdependent fields, complex
+//    transitions, many fields, or a finite set of "modes." Reducers are pure
+//    functions: (state, action) → newState, no side effects.
+
+// 2. Reducers are testable in isolation — no React rendering needed. Extract to
+//    a separate file for unit testing state transitions.
+
+// 3. Always spread previous state in the reducer: { ...state, changedField: value }.
+//    Returning a partial object replaces the entire state — other fields are lost.
+
+// 4. State machines (idle → loading → success/error) make impossible states
+//    unreachable. With separate useStates, you can accidentally set inconsistent
+//    combinations (loading=true + data=stale). A reducer prevents this by design.
+
+// 5. dispatch is guaranteed stable (like useState setters) — safe in dependency
+//    arrays and memoized children. Lazy initialization: useReducer(reducer, arg, initFn).
+```
+::

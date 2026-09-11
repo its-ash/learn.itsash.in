@@ -1,74 +1,141 @@
 # 26 — Performance & Optimization
 
-## Measure First: `cProfile`
+## Profiling Workflow — Measure Before Optimizing
 
 ::code-wrapper{language="python"}
 ```python
+# ── Production profiling workflow: cProfile → identify hotspots → line_profiler → optimize ──
+
 import cProfile
 import pstats
+import time
+from io import StringIO
 
-def slow_fibonacci(n):
-    if n < 2:
-        return n
-    return slow_fibonacci(n - 1) + slow_fibonacci(n - 2)
+def find_primes_below(n: int) -> list[int]:
+    """Sieve of Eratosthenes — a realistic CPU-bound function to profile."""
+    sieve = [True] * n
+    sieve[0] = sieve[1] = False
+    for i in range(2, int(n ** 0.5) + 1):
+        if sieve[i]:
+            for j in range(i * i, n, i):
+                sieve[j] = False
+    return [i for i, is_prime in enumerate(sieve) if is_prime]
 
-def main():
-    result = slow_fibonacci(28)
-    print(result)
+def count_primes_in_ranges(ranges: list[tuple[int, int]]) -> dict[int, int]:
+    """Count primes in multiple ranges — calls find_primes_below repeatedly."""
+    results = {}
+    for range_id, (lo, hi) in enumerate(ranges):
+        primes = find_primes_below(hi)
+        count = sum(1 for p in primes if p >= lo)
+        results[range_id] = count
+    return results
 
-profiler = cProfile.Profile()
-profiler.enable()
-main()
-profiler.disable()
+# ── Step 1: cProfile — identify WHICH function dominates ──
+def profile_with_cprofile():
+    """Run cProfile and print top functions by cumulative time."""
+    ranges = [(0, 100_000), (0, 200_000), (0, 50_000), (0, 300_000)]
 
-stats = pstats.Stats(profiler)
-stats.sort_stats("cumulative").print_stats(5)
-#          832040 function calls (2 primitive calls) in 0.198 seconds
-#    ncalls  tottime  percall  cumtime  percall filename:lineno(function)
-#   832040/1    0.198    0.000    0.198    0.198 fib.py:4(slow_fibonacci)
-```
-::
+    profiler = cProfile.Profile()
+    profiler.enable()
+    result = count_primes_in_ranges(ranges)
+    profiler.disable()
 
-::code-wrapper{language="bash"}
-```bash
-python -m cProfile -s cumulative myscript.py
-```
-::
+    # Sort by cumulative time — shows which functions dominate total runtime
+    stats = pstats.Stats(profiler)
+    stats.sort_stats("cumulative")
+    stats.print_stats(10)   # top 10 functions
 
-`cProfile` is a deterministic, C-implemented profiler shipped with the standard library — it instruments every function call and records exact call counts and time spent, both "total time in this function alone" (`tottime`) and "total time including everything it called" (`cumtime`). **Best practice**: always profile before optimizing — intuition about where a program spends its time is frequently wrong, and optimizing a function that accounts for 2% of runtime wastes effort while the actual 80% bottleneck goes untouched. This is the single most important rule in this entire chapter.
+    # Key columns:
+    #   ncalls    — how many times the function was called
+    #   tottime   — time IN this function alone (excluding sub-calls)
+    #   cumtime   — time including all sub-calls
+    #   percall   — tottime or cumtime / ncalls
 
-### Line-level profiling with `line_profiler`
-
-::code-wrapper{language="bash"}
-```bash
-pip install line_profiler
+profile_with_cprofile()
+# Output reveals: find_primes_below dominates — called 4 times, most cumtime
+# The inner loop `for j in range(i*i, n, i): sieve[j] = False` is the actual hotspot
 ```
 ::
 
 ::code-wrapper{language="python"}
 ```python
-@profile   # only valid when run through kernprof — not a normal decorator otherwise
-def process_orders(orders):
-    total = 0
-    for order in orders:
-        total += order["price"] * order["quantity"]   # line-by-line timing shows THIS line dominates
-    return total
+# ── Memory profiling with tracemalloc — find allocation hotspots ──
+
+import tracemalloc
+
+def memory_inefficient(n: int) -> list[int]:
+    """Builds many intermediate lists — each comprehension allocates a new list."""
+    result = []
+    for i in range(n):
+        squares = [x ** 2 for x in range(i)]   # allocates a new list EACH iteration
+        if squares:
+            result.append(squares[-1])
+    return result
+
+def memory_efficient(n: int) -> list[int]:
+    """Avoids intermediate lists — computes directly, O(1) extra memory per iteration."""
+    return [(i - 1) ** 2 for i in range(1, n)]   # one list, no intermediates
+
+def profile_memory(func, *args):
+    """Snapshot tracemalloc before/after, show top allocation sites."""
+    tracemalloc.start()
+    snapshot_before = tracemalloc.take_snapshot()
+
+    func(*args)
+
+    snapshot_after = tracemalloc.take_snapshot()
+    stats = snapshot_after.compare_to(snapshot_before, "lineno")
+
+    print(f"\\nMemory allocation diff for {func.__name__}:")
+    for stat in stats[:5]:   # top 5 allocation sites
+        print(f"  {stat}")
+
+profile_memory(memory_inefficient, 1000)
+profile_memory(memory_efficient, 1000)
+# memory_inefficient shows many allocations from the inner comprehension line
+# memory_efficient shows a single allocation from the outer comprehension
 ```
 ::
 
-::code-wrapper{language="bash"}
-```bash
-kernprof -l -v myscript.py
-# Line #      Hits         Time  Per Hit   % Time  Line Contents
-# ==============================================================
-#      4                                           def process_orders(orders):
-#      5         1          0.1      0.1      0.0      total = 0
-#      6    100001      15234.0      0.2      12.1      for order in orders:
-#      7    100000     110890.0      1.1      87.9          total += order["price"] * order["quantity"]
+::code-wrapper{language="python"}
+```python
+# ── numpy vectorization: the single biggest performance win in numeric Python ──
+
+import numpy as np
+import time
+
+N = 10_000_000
+
+# ANTI-PATTERN: element-wise Python loop over numpy array — defeats vectorization
+def slow_square(arr: np.ndarray) -> np.ndarray:
+    result = np.empty_like(arr)
+    for i in range(len(arr)):
+        result[i] = arr[i] ** 2   # Python loop, per-element dispatch
+    return result
+
+# CORRECT: vectorized operation — single C call over contiguous memory
+def fast_square(arr: np.ndarray) -> np.ndarray:
+    return arr ** 2   # numpy dispatches to SIMD-optimized C, no Python loop
+
+arr = np.arange(N, dtype=np.float64)
+
+t0 = time.perf_counter()
+_ = fast_square(arr)
+vectorized = time.perf_counter() - t0
+print(f"numpy vectorized: {vectorized:.4f}s  ({N:,} elements, SIMD C)")
+
+# Don't even try the slow version on 10M elements — it would take minutes
+# On 100k elements for comparison:
+small = np.arange(100_000, dtype=np.float64)
+t0 = time.perf_counter()
+_ = slow_square(small)
+python_loop = time.perf_counter() - t0
+t0 = time.perf_counter()
+_ = fast_square(small)
+numpy_fast = time.perf_counter() - t0
+print(f"Python loop (100k): {python_loop:.4f}s vs numpy: {numpy_fast:.4f}s → {python_loop/numpy_fast:.0f}x faster")
 ```
 ::
-
-`cProfile` identifies *which function* is slow; `line_profiler` goes one level deeper, showing *which line inside that function* dominates — invaluable when a function mixes a fast loop setup with one expensive line buried inside it that `cProfile`'s function-level granularity can't isolate.
 
 ## The GIL, `dis`, and Why Python Loops Are Slow
 

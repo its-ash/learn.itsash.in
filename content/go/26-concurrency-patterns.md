@@ -1,171 +1,96 @@
+---
+title: "26 — Concurrency Patterns"
+description: "Worker pool, pipeline, fan-out/fan-in, generator, errgroup bounded concurrency, semaphore, and graceful shutdown patterns."
+---
+
 # 26 — Concurrency Patterns
 
-This chapter collects the standard Go concurrency patterns: worker pools, pipelines, fan-out/fan-in, generators, and graceful shutdown.
-
-## Worker Pool
-
-A fixed number of workers process jobs from a channel — bounded concurrency:
+## Worker Pool — Bounded Concurrency
 
 ::code-wrapper{language="go"}
 ```go
-func worker(id int, jobs <-chan Job, results chan<- Result, wg *sync.WaitGroup) {
+// Worker pool: N goroutines process jobs from a channel.
+// Bounded concurrency — prevents overwhelming downstream resources.
+
+type Job struct {
+	ID    int
+	Input any
+}
+type Result struct {
+	JobID  int
+	Output any
+	Err    error
+}
+
+func worker(ctx context.Context, id int, jobs <-chan Job, results chan<- Result,
+	wg *sync.WaitGroup) {
 	defer wg.Done()
-	for job := range jobs {
-		results <- process(job)
+	for {
+		select {
+		case job, ok := <-jobs:
+			if !ok {
+				return  // jobs channel closed — clean exit
+			}
+			// Process with cancellation:
+			output, err := process(ctx, job.Input)
+			select {
+			case results <- Result{JobID: job.ID, Output: output, Err: err}:
+			case <-ctx.Done():
+				return  // cancelled while sending result
+			}
+		case <-ctx.Done():
+			return  // cancelled
+		}
 	}
 }
 
-func runWorkerPool(jobs []Job, numWorkers int) []Result {
+func runWorkerPool(ctx context.Context, jobs []Job, numWorkers int) []Result {
 	jobCh := make(chan Job, len(jobs))
 	resultCh := make(chan Result, len(jobs))
 	var wg sync.WaitGroup
 
+	// Start workers:
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go worker(i, jobCh, resultCh, &wg)
+		go worker(ctx, i, jobCh, resultCh, &wg)
 	}
 
-	for _, j := range jobs {
-		jobCh <- j
+	// Send jobs (buffered — doesn't block):
+	for _, job := range jobs {
+		jobCh <- job
 	}
-	close(jobCh)   // no more jobs — workers' range loops end
+	close(jobCh)  // signal workers that no more jobs are coming
 
-	wg.Wait()
-	close(resultCh)
+	// Close results after all workers finish:
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
 
-	results := make([]Result, 0, len(jobs))
+	// Collect results:
+	var results []Result
 	for r := range resultCh {
 		results = append(results, r)
 	}
 	return results
 }
 ```
-::
-Use a worker pool when you have many jobs and want to limit concurrency (e.g., to avoid overwhelming a database or API).
 
-## Pipeline
-
-A series of stages, each a goroutine reading from one channel and writing to the next:
+## Pipeline — Stage-by-Stage Processing
 
 ::code-wrapper{language="go"}
 ```go
-func generate(nums ...int) <-chan int {
-	out := make(chan int)
-	go func() {
-		defer close(out)
-		for _, n := range nums {
-			out <- n
-		}
-	}()
-	return out
-}
+// Pipeline: stages connected by channels, each a goroutine.
+// Each stage reads from input, transforms, writes to output.
 
-func square(in <-chan int) <-chan int {
-	out := make(chan int)
-	go func() {
-		defer close(out)
-		for n := range in {
-			out <- n * n
-		}
-	}()
-	return out
-}
-
-func filter(in <-chan int, pred func(int) bool) <-chan int {
-	out := make(chan int)
-	go func() {
-		defer close(out)
-		for n := range in {
-			if pred(n) {
-				out <- n
-			}
-		}
-	}()
-	return out
-}
-
-// Compose
-nums := generate(1, 2, 3, 4, 5)
-squared := square(nums)
-evens := filter(squared, func(n int) bool { return n%2 == 0 })
-for n := range evens {
-	fmt.Println(n)   // 4, 16
-}
-```
-::
-Each stage runs concurrently, processing elements as they arrive. Each stage closes its output channel when the input is exhausted.
-
-## Fan-Out, Fan-In
-
-Fan-out: multiple goroutines read from the same input, processing in parallel. Fan-in: merge their outputs into one channel:
-
-::code-wrapper{language="go"}
-```go
-func fanOutFanIn(ctx context.Context, input <-chan int, workers int) <-chan int {
-	out := make(chan int)
-	var wg sync.WaitGroup
-	wg.Add(workers)
-
-	for i := 0; i < workers; i++ {
-		go func() {
-			defer wg.Done()
-			for v := range input {
-				select {
-				case out <- process(v):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-
-	return out
-}
-```
-::
-Multiple workers process the same input channel (fan-out); their outputs merge into `out` (fan-in, via the shared output channel + WaitGroup).
-
-## Generator (channel-producing function)
-
-A function that returns a channel and emits values:
-
-::code-wrapper{language="go"}
-```go
-func counter(start, end int) <-chan int {
-	out := make(chan int)
-	go func() {
-		defer close(out)
-		for i := start; i < end; i++ {
-			out <- i
-		}
-	}()
-	return out
-}
-
-for n := range counter(0, 5) {
-	fmt.Println(n)   // 0 1 2 3 4
-}
-```
-::
-Generators turn a sequence into a channel, composable with other patterns.
-
-## Done Channel / Cancellation
-
-::code-wrapper{language="go"}
-```go
-func generator(done <-chan struct{}, nums ...int) <-chan int {
+func generate(ctx context.Context, nums ...int) <-chan int {
 	out := make(chan int)
 	go func() {
 		defer close(out)
 		for _, n := range nums {
 			select {
 			case out <- n:
-			case <-done:
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -173,156 +98,317 @@ func generator(done <-chan struct{}, nums ...int) <-chan int {
 	return out
 }
 
-done := make(chan struct{})
-out := generator(done, 1, 2, 3, 4, 5)
-fmt.Println(<-out)   // 1
-fmt.Println(<-out)   // 2
-close(done)          // signal the generator to stop
-```
-::
-Each stage checks `<-done` (or `<-ctx.Done()`) in its `select`, so closing `done` cascades through the pipeline. This is the foundation of graceful shutdown.
+func square(ctx context.Context, in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			select {
+			case out <- n * n:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
 
-## Bounded Parallelism (semaphore with buffered channel)
+func filter(ctx context.Context, in <-chan int, pred func(int) bool) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			if pred(n) {
+				select {
+				case out <- n:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out
+}
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Compose: generate → square → filter evens → print
+	nums := generate(ctx, 1, 2, 3, 4, 5)
+	squared := square(ctx, nums)
+	evens := filter(ctx, squared, func(n int) bool { return n%2 == 0 })
+
+	for n := range evens {
+		fmt.Println(n)  // 4, 16 (2²=4, 4²=16)
+	}
+}
+```
+
+## Fan-Out, Fan-In — Parallel Processing
 
 ::code-wrapper{language="go"}
 ```go
-func boundedParallel(items []Item, maxConcurrency int) {
-	sem := make(chan struct{}, maxConcurrency)
+// Fan-out: distribute work to multiple workers from one input channel.
+// Fan-in: merge multiple output channels into one.
+
+func fanOutFanIn(ctx context.Context, input <-chan int, numWorkers int) <-chan int {
+	// Fan-out: N goroutines read from the same input, process in parallel:
+	workerOutputs := make([]chan int, numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		workerOutputs[i] = make(chan int)
+		go func(out chan<- int) {
+			defer close(out)
+			for v := range input {  // shared input — each value goes to ONE worker
+				select {
+				case out <- process(v):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(workerOutputs[i])
+	}
+
+	// Fan-in: merge all worker outputs into one channel:
+	merged := make(chan int)
 	var wg sync.WaitGroup
+	for _, out := range workerOutputs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for v := range out {
+				merged <- v
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(merged)
+	}()
+
+	return merged
+}
+```
+
+## `errgroup.Group` — Bounded Concurrent with Error Handling
+
+::code-wrapper{language="go"}
+```go
+// import "golang.org/x/sync/errgroup"
+// errgroup runs goroutines, returns the FIRST error, and cancels the context.
+
+func fetchAll(ctx context.Context, urls []string) ([][]byte, error) {
+	g, ctx := errgroup.WithContext(ctx)  // ctx canceled if any goroutine errors
+	g.SetLimit(10)  // at most 10 concurrent goroutines (bounded)
+
+	results := make([][]byte, len(urls))  // each goroutine writes a distinct index
+
+	for i, url := range urls {
+		i, url := i, url  // capture (pre-1.22)
+		g.Go(func() error {
+			data, err := fetch(ctx, url)
+			if err != nil {
+				return err  // cancels ctx → other goroutines exit
+			}
+			results[i] = data  // safe — distinct indices
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err  // first error from any goroutine
+	}
+	return results, nil
+}
+```
+
+## Semaphore — Bounded Concurrency Without a Worker Pool
+
+::code-wrapper{language="go"}
+```go
+// import "golang.org/x/sync/semaphore"
+// A semaphore limits concurrent goroutines without a fixed worker pool.
+// Each goroutine acquires a token; releasing returns it to the pool.
+
+func processWithLimit(ctx context.Context, items []int, maxConcurrent int) error {
+	sem := semaphore.NewWeighted(int64(maxConcurrent))
+	var wg sync.WaitGroup
+
 	for _, item := range items {
 		wg.Add(1)
-		sem <- struct{}{}   // acquire (blocks if full)
-		go func(item Item) {
+		go func(item int) {
 			defer wg.Done()
-			defer func() { <-sem }()   // release
-			process(item)
+
+			// Acquire a token (blocks if maxConcurrent are in use):
+			if err := sem.Acquire(ctx, 1); err != nil {
+				return  // ctx canceled
+			}
+			defer sem.Release(1)
+
+			process(item)  // at most maxConcurrent goroutines here simultaneously
 		}(item)
 	}
 	wg.Wait()
+	return nil
 }
+
+// Use a semaphore when:
+//   - You want bounded concurrency but the "jobs" are dynamically generated
+//   - You don't want to pre-allocate a channel buffer
+//   - Each goroutine needs to do setup/teardown around the work
 ```
-::
-A buffered channel as a semaphore limits concurrent goroutines to `maxConcurrency`. Simpler than a worker pool for one-shot parallelism.
 
-## Or-Done Channel
-
-A helper that returns a channel closed when *any* of the input/done channels closes:
+## Generator — Lazy Stream
 
 ::code-wrapper{language="go"}
 ```go
-func orDone(done <-chan struct{}, c <-chan T) <-chan T {
-	out := make(chan T)
+// Generator: a function that returns a channel, producing values lazily.
+// Values are generated on-demand — the next value isn't computed until
+// someone receives.
+
+func fibonacci(ctx context.Context) <-chan int {
+	out := make(chan int)
 	go func() {
 		defer close(out)
+		a, b := 0, 1
 		for {
 			select {
-			case <-done:
+			case out <- a:
+				a, b = b, a+b
+			case <-ctx.Done():
 				return
-			case v, ok := <-c:
-				if !ok {
-					return
-				}
-				select {
-				case out <- v:
-				case <-done:
-				}
 			}
 		}
 	}()
 	return out
 }
-```
-::
-Wraps a channel so reading from it cancels when `done` closes — used in pipelines to avoid leaking goroutines blocked on a send.
 
-## Rate Limiting
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	for n := range fibonacci(ctx) {
+		fmt.Println(n)
+		// 0 1 1 2 3 5 8 13 21 34 55 ... (stops after 10ms)
+	}
+}
+
+// ⚠️ Generators MUST have an exit path (ctx.Done()) — otherwise
+// the goroutine leaks if the consumer stops reading before the generator
+// is done. The `for n := range` exits when ctx is canceled → out is closed.
+```
+
+## Graceful Shutdown — Production Pattern
 
 ::code-wrapper{language="go"}
 ```go
-import "golang.org/x/time/rate"
+func runServer(ctx context.Context) error {
+	// Start workers:
+	jobs := make(chan Job, 100)
+	go startProducer(ctx, jobs)
 
-limiter := rate.NewLimiter(rate.Every(100*time.Millisecond), 10)   // 10/s, burst 10
-for _, req := range requests {
-	if err := limiter.Wait(ctx); err != nil {
-		return err
+	// Process jobs with a worker pool:
+	results := runWorkerPool(ctx, jobs, 10)
+
+	// Wait for context cancellation (SIGINT/SIGTERM):
+	<-ctx.Done()
+	log.Println("shutdown signal received, draining...")
+
+	// The workers' select includes <-ctx.Done() — they exit cleanly.
+	// Channels are closed by the goroutines, ranges end, results are collected.
+
+	return nil
+}
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := runServer(ctx); err != nil &&
+		!errors.Is(err, context.Canceled) {
+		log.Fatal(err)
 	}
-	handle(req)
+	log.Println("server stopped")
 }
 ```
-::
-`x/time/rate` provides token-bucket rate limiting — `Wait` blocks until a token is available, enforcing a rate limit.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use a worker pool for bounded concurrency with many jobs — a fixed number of workers reading from a jobs channel limits concurrency (e.g., to avoid overwhelming a database), and the pattern scales to any number of jobs without spawning a goroutine per job.
-- **Idiom**: use a pipeline (each stage a goroutine, connected by channels) for stream processing — each stage runs concurrently and processes elements as they arrive, with backpressure via the channels. Close each stage's output when the input is exhausted (so downstream ranges end).
-- **Idiom**: include a `<-done` (or `<-ctx.Done()`) case in every blocking `select` in a concurrent pattern — it provides the exit path so a pipeline/worker/generator can be stopped, preventing leaks. Closing `done` cascades through all stages checking it.
-- **Idiom**: use a buffered channel as a semaphore for one-shot bounded parallelism — `sem := make(chan struct{}, N)`; acquire with `sem <- struct{}{}`, release with `<-sem`. Simpler than a worker pool for "do these N things with at most K concurrent."
-- **Idiom**: use `x/time/rate` for rate limiting — `rate.NewLimiter(rate.Every(d), burst)` + `limiter.Wait(ctx)` enforces a rate limit with a token bucket. Essential for APIs with rate limits or for protecting downstream services.
+- **Idiom**: use a worker pool for bounded concurrency — unbounded `go f()` in a loop can create millions of goroutines, exhausting memory and overwhelming downstream resources (DB connections, API rate limits). A fixed pool of N workers processes jobs from a channel.
+- **Idiom**: each pipeline stage closes its output channel when done — `defer close(out)` in the goroutine. The next stage's `range` exits cleanly when the input channel is closed.
+- **Idiom**: use `errgroup.WithContext` for concurrent error handling — `g.Go` returns an error → the context is canceled → other goroutines see `<-ctx.Done()` and exit. `g.Wait()` returns the first error.
+- **Idiom**: use a semaphore (`golang.org/x/sync/semaphore`) for bounded concurrency without a worker pool — each goroutine acquires a token; `SetLimit` on errgroup is even simpler.
+- **Idiom**: every concurrent goroutine MUST have an exit path (`<-ctx.Done()`) — without it, the goroutine leaks if it blocks forever. Generators, workers, pipelines all need cancellation.
+- **Idiom**: use `signal.NotifyContext` for graceful shutdown — the context is canceled on SIGINT/SIGTERM, propagating to all goroutines that select on `ctx.Done()`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Goroutine leak from unclosed channels**: a pipeline stage blocked on `out <- v` (no receiver) with no `<-done` case is a leak. Always include cancellation and ensure channels are closed or drained.
-- **Closing a channel from the receiver side**: the sender closes, not the receiver. If the receiver closes, the sender may send to a closed channel (panic). Use a `done` channel to signal the sender to stop (and close its output) instead.
-- **Fan-in must close after all senders are done**: use a `WaitGroup` to track senders; a goroutine closes the merged output after `wg.Wait()`. Closing too early panics senders; too late leaks receivers.
-- **Worker pool and `range` on a closed channel**: workers must `range jobs` (ending when `jobs` is closed). If you don't close `jobs`, workers block on `<-jobs` forever (leak).
-- **Pipeline backpressure**: unbuffered channels create backpressure (a slow stage slows upstream). Buffered channels decouple but can hide deadlocks. Size buffers deliberately.
-- **`for range` over a nil channel blocks forever**: if a pipeline stage's input is accidentally nil, it hangs. Ensure channels are initialized.
-- **Generator must close its output**: `defer close(out)` in the generator, so the consumer's `range` ends. Forgetting close leaves the consumer blocked.
-- **Shared state in workers**: workers must not share mutable state without synchronization. If they share a result slice, use a mutex or send results to a channel (the fan-in pattern).
-- **`ctx.Done()` and pipeline shutdown**: pass `ctx` through the pipeline; each stage's `select` includes `<-ctx.Done()`. When `ctx` is canceled, all stages exit, and channels close (via `defer close`), ending downstream ranges.
-- **Deadlock with unbuffered channels**: a pipeline of unbuffered channels where the final consumer is slow can deadlock (each stage blocks on send). Buffer or ensure consumers keep up.
+- **Unbounded fan-out exhausts resources**: `for _, item := range huge { go process(item) }` creates len(huge) goroutines at once. Use a worker pool or semaphore for bounded concurrency.
+- **Pipeline deadlock with unbuffered channels**: if stage A sends and stage B isn't ready, A blocks. Use buffered channels or ensure stages run concurrently.
+- **Forgetting to close the output channel**: `for v := range ch` never returns unless `ch` is closed. The range goroutine leaks. Use `defer close(out)`.
+- **Generator without exit path leaks**: `func gen() <-chan int { ch := make(chan int); go func() { for { ch <- compute() } }(); return ch }` — leaks if the consumer stops reading. Pass `ctx` and `select` on `ctx.Done()`.
+- **`errgroup` cancels on first error**: `g.Go` returning an error cancels the context. Other goroutines see `<-ctx.Done()` and may exit early. This is by design (coordinated failure).
+- **Worker pool with unbuffered results channel**: if no one reads results, workers block on `results <- r` → deadlock. Buffer the results channel or collect in a separate goroutine.
+- **Goroutine leak in fan-in**: if the merged output isn't fully consumed, the fan-in goroutines block on `merged <- v` forever. Ensure the consumer drains the output or provide a cancellation path.
+- **`select` in worker doesn't guarantee fairness**: if multiple cases are ready, `select` picks randomly. A always-ready case can starve others. Use separate goroutines or explicit scheduling.
 
-## 🧠 Spot the Bug
-
-A pipeline has three stages, but the program hangs after processing a few elements:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-func gen(nums ...int) <-chan int {
-	out := make(chan int)
-	go func() {
-		for _, n := range nums {
-			out <- n
-		}
-	}()
-	return out   // out is never closed
+func worker(jobs <-chan int, results chan<- int) {
+	for j := range jobs {
+		results <- j * j
+	}
 }
 
-for v := range gen(1, 2, 3) {
-	fmt.Println(v)
+func main() {
+	jobs := make(chan int, 100)
+	results := make(chan int, 100)
+
+	for w := 0; w < 3; w++ {
+		go worker(jobs, results)
+	}
+
+	for j := 1; j <= 5; j++ {
+		jobs <- j
+	}
+	close(jobs)
+
+	for r := 0; r < 5; r++ {
+		fmt.Println(<-results)
+	}
 }
 ```
+
+Does this program terminate? What's printed (order may vary)?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-The generator's `out` channel is **never closed**. The `for v := range out` loop blocks waiting for more values or for `out` to close — but `out` is never closed (the goroutine sends 1, 2, 3 and exits without closing). The `range` hangs after receiving 3, waiting forever.
+Yes, it terminates. Printed (in some order):
 
-The fix — close the channel when generation is done:
-
-```go
-func gen(nums ...int) <-chan int {
-	out := make(chan int)
-	go func() {
-		defer close(out)   // ✅ close when done
-		for _, n := range nums {
-			out <- n
-		}
-	}()
-	return out
-}
 ```
-::
-Now after sending 1, 2, 3, the goroutine closes `out`, and the `range` loop ends cleanly.
+1
+4
+9
+16
+25
+```
 
-**The lesson**: a `for v := range ch` loop only ends when `ch` is closed. A generator (or any channel-producing function) must close its output when done, or the consumer hangs. Use `defer close(out)` at the top of the producing goroutine.
+The program works because:
+1. 3 workers start, reading from the shared `jobs` channel.
+2. 5 jobs are sent to the buffered `jobs` channel (capacity 100 — no blocking).
+3. `close(jobs)` signals no more jobs. Workers' `range` loops end when jobs is drained.
+4. Workers write results to `results` (buffered, capacity 100 — no blocking).
+5. Main reads 5 results — all 5 are produced.
+
+But the program has a subtle issue: it doesn't `close(results)` or wait for workers to finish. If we changed the buffer to 0 (unbuffered results), and main read fewer than 5 results, workers would block forever. The `WaitGroup` + `close(results)` pattern (from the full worker pool example) is more robust.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now build worker pools (bounded concurrency), pipelines (stream processing), fan-out/fan-in, generators, bounded parallelism (semaphore), and rate-limited concurrency — with cancellation (`done`/`ctx`) and proper channel closing to prevent leaks and deadlocks. Next: profiling and performance.
+→ [27 — Profiling & Performance](/go/27-profiling-and-performance) — pprof, escape analysis, allocation reduction, and benchmark-driven optimization.

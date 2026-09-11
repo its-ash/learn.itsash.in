@@ -1,339 +1,321 @@
-# 09 — Destructuring & Spread
+---
+title: "JavaScript 09 — Destructuring Internals: Pattern Matching, Defaults & the `null` Trap"
+description: "Deep-dive into JavaScript destructuring: array and object pattern matching, default value semantics (undefined triggers, null doesn't), nested destructuring, rest patterns, and the `?? {}` safe destructuring pattern. Code-first reference for senior engineers."
+---
 
-## Array Destructuring
+# 09 — Destructuring Internals: Pattern Matching, Defaults & the `null` Trap
 
-::code-wrapper{language="javascript"}
-```javascript
-const [a, b] = [1, 2]
-console.log(a, b)  // 1, 2
-
-// Skip elements
-const [first, , third] = [1, 2, 3]
-console.log(first, third)  // 1, 3
-
-// Rest pattern
-const [head, ...tail] = [1, 2, 3, 4]
-console.log(head)  // 1
-console.log(tail)  // [2, 3, 4]
-
-// Default values
-const [x = 10, y = 20] = [5]
-console.log(x, y)  // 5, 20
-
-// Swapping variables
-let a = 1, b = 2
-[a, b] = [b, a]
-console.log(a, b)  // 2, 1
-```
-::
-
-### Edge case: destructuring with holes
+## Array Destructuring: Positional Binding
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const [, , c] = [1, 2, 3]
-console.log(c)  // 3
+// ── Basic positional binding ──
+const [a, b, c] = [1, 2, 3];
+console.log(a, b, c);  // 1 2 3
 
-const [a = 1] = []  // a = 1 (default applied)
-const [b = 1] = [undefined]  // b = 1 (undefined triggers default)
-const [c = 1] = [null]  // c = null (null does NOT trigger default)
-```
-::
+// ── Skip elements (holes in the pattern) ──
+const [first, , third] = [1, 2, 3];
+console.log(first, third);  // 1 3 (second element skipped)
 
-## Object Destructuring
+// ── Rest pattern (collect remaining elements) ──
+const [head, ...rest] = [1, 2, 3, 4];
+console.log(head);    // 1
+console.log(rest);   // [2, 3, 4] (real Array)
 
-::code-wrapper{language="javascript"}
-```javascript
-const user = { name: 'Alice', age: 30, email: 'alice@example.com' }
+// ── Default values (used when the element is undefined) ──
+const [x = 10, y = 20] = [5];
+console.log(x, y);  // 5 20 (x got 5, y is undefined → default 20)
 
-const { name, age } = user
-console.log(name, age)  // 'Alice', 30
+// ── Swapping variables (no temp needed) ──
+let left = 1, right = 2;
+[left, right] = [right, left];  // left=2, right=1
 
-// Rename during destructuring
-const { name: fullName, age: years } = user
-console.log(fullName)  // 'Alice'
+// ── Swapping without a temp (engine-level XOR swap is not used — JS creates a temp array) ──
+// [a, b] = [b, a] creates a temporary array [b, a], then destructures it.
+// Not as efficient as a true XOR swap, but clear and idiomatic.
 
-// Default values
-const { name, role = 'user' } = user
-console.log(role)  // 'user'
+// ── Destructuring from a function return ──
+function getCoords() { return [10, 20]; }
+const [x2, y2] = getCoords();  // x2=10, y2=20
 
-// Nested destructuring
-const { address: { city, zip } } = {
-  address: { city: 'NYC', zip: '10001' }
+// ── Destructuring in a for...of loop ──
+const entries = [["a", 1], ["b", 2], ["c", 3]];
+for (const [key, value] of entries) {
+    console.log(key, value);  // "a" 1, "b" 2, "c" 3
 }
-console.log(city, zip)  // 'NYC', '10001'
-
-// Rest in objects
-const { name, ...rest } = user
-console.log(rest)  // { age: 30, email: 'alice@example.com' }
-```
-::
-
-### Edge case: destructuring with optional chaining
-
-::code-wrapper{language="javascript"}
-```javascript
-// Destructuring null/undefined throws
-const { a } = null  // TypeError: Cannot destructure property 'a' of 'null'
-
-// Safe pattern — provide fallback
-const { a } = obj ?? {}  // a = undefined if obj is null
-
-// Or guard with condition
-if (obj) {
-  const { a } = obj
+for (const [index, value] of ["x", "y", "z"].entries()) {
+    console.log(index, value);  // 0 "x", 1 "y", 2 "z"
 }
 ```
 ::
 
-## Function Parameter Destructuring
+## Object Destructuring: Property Binding by Name
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// Object parameters — named args pattern
-function createUser({ name, age, role = 'user', ...extras }) {
-  return { name, age, role, extras }
-}
+// ── Basic property binding (match by property name) ──
+const { name, age } = { name: "Alice", age: 30 };
+console.log(name, age);  // "Alice" 30
 
-createUser({ name: 'Alice', age: 30 })
-// { name: 'Alice', age: 30, role: 'user', extras: {} }
+// ── Rename: bind to a different variable name ──
+const { name: userName, age: userAge } = { name: "Alice", age: 30 };
+console.log(userName, userAge);  // "Alice" 30
+// Syntax: { sourceProperty: targetVariable }
 
-// Array parameters
-function process([first, second], { transform = x => x } = {}) {
-  return [transform(first), transform(second)]
-}
+// ── Default values (used when the property is undefined) ──
+const { port = 3000, host = "localhost" } = { port: 8080 };
+console.log(port, host);  // 8080 "localhost" (host was undefined → default)
 
-process([1, 2], { transform: x => x * 10 })  // [10, 20]
+// ── Rename + default ──
+const { port: p = 3000, host: h = "localhost" } = { port: 8080 };
+console.log(p, h);  // 8080 "localhost"
+
+// ── Nested destructuring ──
+const user = {
+    name: "Alice",
+    profile: {
+        email: "alice@example.com",
+        address: { city: "NYC", zip: "10001" },
+    },
+};
+const { profile: { email, address: { city, zip } } } = user;
+console.log(email, city, zip);  // "alice@example.com" "NYC" "10001"
+// Note: `profile` and `address` are NOT bound — only the leaf properties (email, city, zip).
+
+// ── Rest pattern in object destructuring (collect remaining properties) ──
+const { name: n, ...rest } = { name: "Alice", age: 30, role: "admin" };
+console.log(n);     // "Alice"
+console.log(rest);  // { age: 30, role: "admin" }
+
+// ── Computed property names in destructuring ──
+const key = "name";
+const { [key]: value } = { name: "Alice" };
+console.log(value);  // "Alice"
 ```
 ::
 
-### Best practice: default empty object for destructured params
+## Anti-Pattern: Destructuring `null` Throws
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// ⚠️ Without default — calling with no args throws
-function bad({ name } = {}) { }
-bad()  // OK (default {} applied)
-
-function alsoBad({ name }) { }
-alsoBad()  // TypeError: Cannot destructure property 'name' of 'undefined'
-
-// Pattern: always provide = {} for optional object params
-function config({ timeout = 5000, retries = 3 } = {}) {
-  return { timeout, retries }
+// ❌ NAIVE — destructuring null or undefined throws a TypeError
+function getUserInfo(user) {
+    const { name, email } = user;  // ✗ if user is null → TypeError: Cannot destructure property 'name' of null
+    return { name, email };
 }
-config()  // { timeout: 5000, retries: 3 }
-config({ timeout: 1000 })  // { timeout: 1000, retries: 3 }
+getUserInfo(null);  // TypeError!
+
+// ✅ CORRECT — provide a default empty object
+function getUserInfoSafe(user) {
+    const { name, email } = user ?? {};  // if user is null → {} → name/email are undefined
+    return { name, email };
+}
+getUserInfoSafe(null);  // { name: undefined, email: undefined } (no error)
+
+// ✅ ALSO GOOD — default parameter
+function getUserInfoSafe2({ name, email } = {}) {
+    return { name, email };
+}
+getUserInfoSafe2(null);  // ✗ still throws! The default only applies when NO arg is passed.
+// Default param only triggers on `undefined` (no argument), not on `null`!
+getUserInfoSafe2(undefined);  // ✓ uses default {} (no arg → undefined → default)
+getUserInfoSafe2();          // ✓ uses default {} (no arg → default)
+getUserInfoSafe2(null);      // ✗ TypeError (null is passed, not undefined — no default!)
+
+// ── The null vs undefined distinction in defaults ──
+// Default values trigger ONLY when the value is `undefined`:
+// - undefined → uses default
+// - null → does NOT use default (null is a real value, kept as-is)
+const { x = "default" } = { x: undefined };  // x = "default" (undefined triggers default)
+const { y = "default" } = { y: null };       // y = null (null does NOT trigger default!)
+const { z = "default" } = {};                // z = "default" (missing → undefined → default)
 ```
 ::
 
-## Spread in Arrays
+## Production Pattern: Safe Deep Destructuring
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// Copy
-const copy = [...original]
+// ── Safe deep destructuring with ?? {} at each level ──
+function parseApiResponse(response) {
+    // Each level gets ?? {} so null/undefined at any depth doesn't throw
+    const {
+        data: {
+            user: {
+                name = "Anonymous",
+                profile: {
+                    email = "no-email@example.com",
+                } = {},
+            } = {},
+        } = {},
+    } = response ?? {};
 
-// Concatenate
-const merged = [...arr1, ...arr2, ...arr3]
+    return { name, email };
+}
 
-// Insert at position
-const inserted = [...arr.slice(0, 2), 'new', ...arr.slice(2)]
+// Works with any input:
+parseApiResponse(null);                        // { name: "Anonymous", email: "no-email@example.com" }
+parseApiResponse({});                           // { name: "Anonymous", email: "no-email@example.com" }
+parseApiResponse({ data: null });               // { name: "Anonymous", email: "no-email@example.com" }
+parseApiResponse({ data: { user: null } });      // { name: "Anonymous", email: "no-email@example.com" }
+parseApiResponse({ data: { user: { name: "Alice" } } });  // { name: "Alice", email: "no-email@example.com" }
 
-// Convert iterables to arrays
-const fromString = [...'hello']    // ['h','e','l','l','o']
-const fromSet = [...new Set([1,2,2,3])]  // [1, 2, 3]
-const fromMap = [...new Map([['a',1]])]  // [['a', 1]]
+// ── Alternative: optional chaining + nullish coalescing (no destructuring) ──
+function parseApi2(response) {
+    return {
+        name: response?.data?.user?.name ?? "Anonymous",
+        email: response?.data?.user?.profile?.email ?? "no-email@example.com",
+    };
+}
+// Optional chaining is simpler for read-only access, but destructuring is better
+// when you need to extract many properties from the same object.
 ```
 ::
 
-## Spread in Objects
+## Destructuring in Function Parameters
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// Shallow copy
-const copy = { ...original }
-
-// Merge (later overrides earlier)
-const merged = { ...defaults, ...user }
-
-// Conditional spread
-const config = {
-  apiUrl: 'https://api.example.com',
-  ...(useAuth && { headers: { Authorization: `Bearer ${token}` } })
+// ── Function parameter destructuring with defaults ──
+function configure({
+    host = "localhost",
+    port = 3000,
+    ssl = false,
+    timeout = 30000,
+} = {}) {
+    // The `= {}` default is for the WHOLE parameter (when no arg or undefined is passed)
+    console.log(`${ssl ? "https" : "http"}://${host}:${port} (timeout: ${timeout}ms)`);
 }
 
-// Override specific fields
-const updated = { ...user, age: 31 }
-```
-::
+configure();                          // http://localhost:3000 (timeout: 30000ms)
+configure({ port: 8080 });           // http://localhost:8080 (timeout: 30000ms)
+configure({ ssl: true, host: "api.example.com" });  // https://api.example.com:3000
+configure(undefined);                // http://localhost:3000 (undefined → default {})
+// configure(null);  // ✗ TypeError: Cannot destructure property 'host' of null
+// (null does NOT trigger the `= {}` default — only undefined does)
 
-### Edge case: spread does deep merge? No — it's shallow
-
-::code-wrapper{language="javascript"}
-```javascript
-const defaults = { api: { url: 'localhost', port: 3000 } }
-const overrides = { api: { port: 8080 } }
-
-const merged = { ...defaults, ...overrides }
-// { api: { port: 8080 } } — ⚠️ url is LOST (shallow merge replaces entire nested object)
-
-// Deep merge requires manual handling or a library like lodash.merge
-const deepMerge = (a, b) => {
-  const result = { ...a }
-  for (const key in b) {
-    if (isObject(a[key]) && isObject(b[key])) {
-      result[key] = deepMerge(a[key], b[key])
-    } else {
-      result[key] = b[key]
-    }
-  }
-  return result
+// ── Destructuring with renaming in parameters ──
+function process({ input: source, output: destination, format = "json" }) {
+    console.log(`${source} → ${destination} (${format})`);
 }
-```
-::
+process({ input: "file.txt", output: "file.json" });  // file.txt → file.json (json)
 
-## Spread in Function Calls
-
-::code-wrapper{language="javascript"}
-```javascript
-function sum(...nums) { return nums.reduce((a, b) => a + b, 0) }
-
-const nums = [1, 2, 3, 4]
-sum(...nums)  // 10 — same as sum(1, 2, 3, 4)
-
-// Math.max with array
-Math.max(...[3, 7, 2, 9])  // 9
-// Without spread: Math.max.apply(null, [3, 7, 2, 9]) — old way
-
-// Edge case: spreading into new with arrays
-new Date(...[2024, 7, 5])
-```
-::
-
-## Rest Parameters vs `arguments`
-
-::code-wrapper{language="javascript"}
-```javascript
-// Rest parameters (preferred) — real array, works in arrows
-const sum = (...nums) => nums.reduce((a, b) => a + b, 0)
-
-// arguments object (legacy) — not a real array, no arrow functions
-function legacySum() {
-  const nums = Array.from(arguments)  // convert to array
-  return nums.reduce((a, b) => a + b, 0)
+// ── Mixed positional and destructured parameters ──
+function fetchData(url, { method = "GET", headers = {}, body = null } = {}) {
+    // First param is positional (url), second is destructured (options object)
+    console.log(`${method} ${url}`, { headers, body });
 }
-
-// arguments is NOT available in arrow functions
-const arrow = () => {
-  // console.log(arguments)  // ReferenceError
-}
-```
-::
-
-## Practical Patterns
-
-### Extract subsets
-
-::code-wrapper{language="javascript"}
-```javascript
-// Pick specific fields
-const { name, email } = user
-
-// Omit specific fields
-const { password, ...safeUser } = user
-console.log(safeUser)  // everything except password
-
-// Pick multiple
-function pick(obj, keys) {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([k]) => keys.includes(k))
-  )
-}
-pick(user, ['name', 'email'])
-```
-::
-
-### Loop with destructuring
-
-::code-wrapper{language="javascript"}
-```javascript
-// Object entries
-for (const [key, value] of Object.entries(config)) {
-  console.log(`${key}: ${value}`)
-}
-
-// Array of pairs
-const pairs = [['a', 1], ['b', 2], ['c', 3]]
-for (const [letter, number] of pairs) {
-  console.log(letter, number)
-}
-
-// Map iteration
-for (const [key, value] of myMap) {
-  console.log(key, value)
-}
+fetchData("/api/users", { method: "POST", body: "data" });
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Destructure in function params for cleaner code** — Instead of `function f(user) { const { name, age } = user }`, just `function f({ name, age })` at the signature level.
+::code-wrapper{language="javascript"}
+```javascript
+// ── Destructuring for swapping without a temp ──
+let a = 1, b = 2;
+[a, b] = [b, a];  // a=2, b=1
 
-**Swap variables with destructuring** — `[a, b] = [b, a]` is cleaner than temp variables. Works with any iterable.
+// ── Destructuring for extracting values from regex matches ──
+const [fullMatch, year, month, day] = "2024-01-15".match(/^(\d{4})-(\d{2})-(\d{2})$/);
+console.log(year, month, day);  // "2024" "01" "15"
 
-**Omit multiple fields with rest** — `const { password, ssn, ...safe } = user` collects everything except sensitive fields. Great for logging or API responses.
+// ── Destructuring Map entries ──
+const config = new Map([["host", "localhost"], ["port", "3000"]]);
+for (const [key, value] of config) {
+    console.log(key, value);  // "host" "localhost", "port" "3000"
+}
 
-**Destructure in for...of loops** — `for (const [key, value] of Object.entries(obj))` is cleaner than `.forEach()`.
+// ── Destructuring to pick properties (omit rest) ──
+const user = { id: 1, name: "Alice", email: "a@b.com", password: "secret" };
+const { password, ...safeUser } = user;  // strip password from the rest
+console.log(safeUser);  // { id: 1, name: "Alice", email: "a@b.com" }
 
-**Default values with computed expressions** — `const { timeout = Date.now() + 5000 } = config` evaluates lazily only if needed.
+// ── Destructuring for multiple return values (tuple-like) ──
+function divmod(a, b) {
+    return [Math.trunc(a / b), a % b];  // return [quotient, remainder]
+}
+const [quotient, remainder] = divmod(17, 5);  // 3, 2
+
+// ── Deep default with nullish coalescing ──
+const { deep = { nested: "default" } } = obj ?? {};
+// If obj is null → {} → deep is undefined → default { nested: "default" }
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-**Destructuring null/undefined throws** — `const { x } = null` throws TypeError. Always provide a fallback: `const { x } = obj ?? {}`.
+::code-wrapper{language="javascript"}
+```javascript
+// ── Destructuring null/undefined throws (not like access which returns undefined) ──
+const { x } = null;       // TypeError: Cannot destructure property 'x' of null
+const { y } = undefined;  // TypeError: Cannot destructure property 'y' of undefined
+// Fix: const { x } = obj ?? {};
 
-**Shallow merge only** — `{ ...defaults, ...overrides }` only merges top level. Nested objects are replaced entirely, not merged. For deep merge, use a library.
+// ── Default values trigger on undefined, NOT on null ──
+const { a = "default" } = { a: undefined };  // a = "default" (undefined triggers)
+const { b = "default" } = { b: null };       // b = null (null does NOT trigger default)
+const { c = "default" } = {};                 // c = "default" (missing → undefined → default)
 
-**Rest must be last** — `const [a, ...rest, b] = arr` is a SyntaxError. Rest collects everything remaining, so it can't have items after it.
+// ── Rest must be LAST in destructuring ──
+const [first, ...rest, last] = [1, 2, 3];  // ✗ SyntaxError: Rest element must be last
+const { a, ...rest, b } = obj;  // ✗ SyntaxError: Rest element must be last
+// ✅ Correct: const [first, ...rest] = [1, 2, 3]; rest is [2, 3] (includes last)
 
-**Renaming during destructuring is verbose** — `const { user: { name: fullName } } = data` is confusing. Consider extracting in steps for readability.
+// ── Array destructuring is positional (order matters) ──
+const [a, b] = [1, 2];  // a=1, b=2 (positional — index-based)
+const { a: x, b: y } = { a: 1, b: 2 };  // x=1, y=2 (named — order doesn't matter)
+// Array patterns bind by position; object patterns bind by name.
 
-**Order matters in array destructuring** — `const [, , third] = arr` skips first two elements by position, not by name. Easy to break when array structure changes.
+// ── Destructuring with computed keys requires the property to exist ──
+const key = "dynamic";
+const { [key]: val } = { dynamic: 42 };
+console.log(val);  // 42
+const { [key]: val2 = "default" } = {};
+console.log(val2);  // "default" (property missing → undefined → default)
 
-**Spread doesn't deep-freeze** — `{ ...Object.freeze(obj) }` creates a new object that's NOT frozen. Each level must be frozen separately.
+// ── Function param destructuring with null ──
+function f({ a = 1 } = {}) { console.log(a); }
+f();          // 1 (no arg → undefined → default {} → a defaults to 1)
+f(undefined); // 1 (undefined → default {} → a defaults to 1)
+f(null);      // ✗ TypeError (null does NOT trigger the `= {}` default!)
+f({});        // 1 (empty object → a is undefined → defaults to 1)
+```
+::
 
-## 🧠 Spot the Bug
+## 🧠 Quick Quiz
 
-What does this log?
+What does this output?
 
 ::code-wrapper{language="javascript"}
 ```javascript
-const obj = { a: 1, b: { c: 2 } }
-const copy = { ...obj }
-copy.b.c = 99
-
-const [x = 5, , y = 10] = [1, undefined]
-
-console.log(obj.b.c, copy.b.c, x, y)
+const obj = { a: 1, b: null, c: undefined };
+const { a = "d", b = "d", c = "d", d = "d" } = obj;
+console.log(a, b, c, d);
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Logs `99 99 1 10`. Here's why:
-- Spread is shallow. `copy.b` is the same reference as `obj.b`, so mutating it affects both
-- `[x = 5, , y = 10] = [1, undefined]` skips index 1 entirely. `x` is 1, index 1 is ignored, index 2 is `undefined`, so `y = 10` (default applied)
+```javascript
+1 "d" "d" "d"
+```
 
-**The lesson**: Spread doesn't deep-copy. `undefined` triggers defaults, but skipped positions don't.
+- `a` = `1` — property exists with value `1` (not undefined, so no default)
+- `b` = `"d"` — property is `null`. Wait... `null` does NOT trigger defaults! So `b` should be `null`...
+
+Let me re-check: `null` does NOT trigger the default. The default only triggers for `undefined`.
+
+So:
+- `a` = `1` — exists, value is `1`, not undefined → keeps `1`
+- `b` = `null` — exists, value is `null`, NOT undefined → keeps `null` (no default!)
+- `c` = `"d"` — exists, value is `undefined` → triggers default `"d"`
+- `d` = `"d"` — doesn't exist (missing) → equivalent to undefined → triggers default `"d"`
+
+Output: `1 null "d" "d"`
+
+**The lesson**: default values in destructuring trigger **only** when the value is `undefined` (explicitly or because the property is missing). `null` is a real value and does NOT trigger defaults. This is the #1 destructuring gotcha.
 
 </details>
-
-## Key Takeaways
-
-- Destructuring extracts values from arrays (by position) and objects (by key).
-- Use `=` for defaults, `:` for renaming during destructuring.
-- Object spread `{ ...obj }` is a **shallow** copy/merge — nested objects share references.
-- Always provide `= {}` default for destructured function parameters.
-- Use rest `...rest` to collect remaining elements; spread `...arr` to expand them.
-- Conditional spread `...(cond && { key: value })` is a clean pattern for optional config.

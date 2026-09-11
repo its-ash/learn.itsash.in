@@ -1,75 +1,36 @@
-# 21 — Preprocessors & Build Tools
+---
+title: "21 — Preprocessors & Build Tools: Sass, PostCSS, Vite & CSS Modules"
+description: "Sass @use vs deprecated @import, compile-time Sass variables vs runtime CSS variables, PostCSS plugin chains, CSS Modules scoping, and the Sass-variable-in-@media trap. Code-first reference for the modern build pipeline."
+---
 
-CSS preprocessors (Sass, Less, Stylus) and build tools (PostCSS, Vite, webpack) extend CSS with variables, nesting, mixins, and functions — then compile to standard CSS.
+# 21 — Preprocessors & Build Tools: Sass, PostCSS, Vite & CSS Modules
 
-## Sass (SCSS)
+Sass extends CSS with compile-time variables, nesting, mixins, and loops. PostCSS transforms standard CSS with plugins. CSS Modules scope class names per file. The modern pipeline: CSS variables (runtime) + a build tool (Vite) + PostCSS (prefixes/minify). Add Sass only if you need mixins/loops.
 
-Sass is the most popular preprocessor. SCSS is its CSS-compatible syntax (`.scss`):
+## Sass (SCSS) — variables, nesting, mixins, loops
 
 ::code-wrapper{language="scss"}
 ```scss
-// Variables
-$primary: #3498db;
+$primary: #3498db;   // compile-time constant → becomes #3498db in the output. Not runtime.
 $spacing: 1rem;
 
-// Nesting
 .card {
-	padding: $spacing;
-	background: white;
-
-	&__title {
-		font-size: 1.5rem;
-		color: $primary;
-	}
-
-	&--featured {
-		border-color: $primary;
-	}
+  padding: $spacing;
+  &__title { font-size: 1.5rem; color: $primary; }   // BEM with nesting
+  &--featured { border-color: $primary; }
 }
 
-// Mixins
-@mixin flex-center {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
+@mixin flex-center { display: flex; align-items: center; justify-content: center; }
+.hero { @include flex-center; min-height: 100vh; }
 
-.hero {
-	@include flex-center;
-	min-height: 100vh;
-}
+@function rem($px) { @return $px / 16px * 1rem; }   // build-time function
+.title { font-size: rem(24px); }                   // → 1.5rem
 
-// Functions and operations
-@function rem($px) {
-	@return $px / 16px * 1rem;
-}
-
-.title { font-size: rem(24px); }   /* 1.5rem */
-
-// Loops
-@for $i from 1 through 12 {
-	.col-#{$i} { width: ($i / 12) * 100%; }
-}
-
-// Conditionals
-@mixin theme($mode) {
-	@if $mode == dark {
-		background: #222;
-		color: #eee;
-	} @else {
-		background: #fff;
-		color: #333;
-	}
-}
+@for $i from 1 through 12 { .col-#{$i} { width: ($i / 12) * 100%; } }  // loop → 12 classes
 ```
 ::
-### Sass vs CSS variables
 
-Sass variables (`$var`) are compile-time constants — they can't change at runtime or respond to media queries (the compiled CSS has the final value). CSS variables (`--var`) are runtime and cascading.
-
-Use **CSS variables** for theming (runtime, JS-accessible, media-query-responsive). Use **Sass variables** for build-time math, loops, and mixins (compiled away).
-
-### `@use` and `@forward` (modern Sass)
+## `@use` (modern) vs `@import` (deprecated)
 
 ::code-wrapper{language="scss"}
 ```scss
@@ -77,226 +38,132 @@ Use **CSS variables** for theming (runtime, JS-accessible, media-query-responsiv
 $primary: #3498db;
 
 // main.scss
-@use 'variables' as *;   // imports $primary
+@use 'variables' as *;   // imports $primary into scope. Scoped, loads once.
 // or
-@use 'variables';        // access as variables.$primary
+@use 'variables';        // access as variables.$primary (namespaced)
 
 // _index.scss (barrel)
 @forward 'variables';
 @forward 'mixins';
 ```
 ::
-`@use` replaces `@import` (which is deprecated in Sass) — it's scoped (no global pollution) and loads once. `@forward` re-exports from a barrel file.
 
-## Less
+## The Sass-vs-CSS-Variables Trap — compile-time ≠ runtime
 
-Less is similar to Sass, with a JS-like syntax:
+### Anti-pattern: Sass variable in @media can't change
 
-::code-wrapper{language="less"}
-```less
-@primary: #3498db;
-@spacing: 1rem;
-
-.card {
-	padding: @spacing;
-	.title { font-size: 1.5rem; }
-}
-
-.mixin() { display: flex; }
-.hero { .mixin(); }
+::code-wrapper{language="scss"}
+```scss
+// ❌ Sass variables are COMPILE-TIME. $primary: red inside @media changes it only within that
+// block's scope. By the time .button is compiled, $primary is blue (the main-scope value).
+$primary: blue;
+@media (max-width: 768px) { $primary: red; }  // scoped to the @media block, doesn't persist
+.button { background: $primary; }  // → background: blue; (no media query, no change)
 ```
 ::
-Less compiles in the browser (via less.js) or via build tools. Less popular than Sass now.
 
-## Stylus
-
-Stylus has the most flexible syntax (brackets/colons/semicolons optional):
-
-::code-wrapper{language="stylus"}
-```stylus
-primary = #3498db
-spacing = 1rem
-
-.card
-	padding spacing
-	.title
-		font-size 1.5rem
+::code-wrapper{language="scss"}
+```scss
+// ✓ CSS variables are RUNTIME — they respond to @media at runtime.
+:root { --primary: blue; }
+@media (max-width: 768px) { :root { --primary: red; } }
+.button { background: var(--primary); }  // blue desktop, red mobile — at runtime
 ```
 ::
-Niche but has its fans for the terse syntax.
 
-## PostCSS
-
-PostCSS is a CSS transformer — it runs plugins on your CSS. Unlike Sass (a language), PostCSS works on standard CSS:
-
-### Common PostCSS plugins
-- **Autoprefixer** — adds vendor prefixes (chapter 20).
-- **postcss-preset-env** — lets you use future CSS today (compiles `@custom-media`, custom selectors, etc. to today's CSS).
-- **cssnano** — minifies CSS.
-- **postcss-nested** — adds nesting (like Sass, but for standard CSS).
-- **Tailwind CSS** — a PostCSS plugin that generates utility classes.
+## PostCSS — the plugin pipeline
 
 ::code-wrapper{language="javascript"}
 ```javascript
 // postcss.config.js
 module.exports = {
-	plugins: [
-		require('autoprefixer'),
-		require('postcss-preset-env')({ stage: 2 }),
-		require('cssnano')({ preset: 'default' }),
-	],
+  plugins: [
+    require('autoprefixer'),                      // vendor prefixes (browserslist-driven)
+    require('postcss-preset-env')({ stage: 2 }),  // future CSS → today's CSS
+    require('cssnano')({ preset: 'default' }),     // minify
+  ],
 };
 ```
 ::
-PostCSS is composable — pick the plugins for your needs. Many tools (Vite, Tailwind) use PostCSS under the hood.
 
-## Build Tools
-
-### Vite
-
-Vite is the modern build tool — it uses native ES modules in dev (instant startup) and bundles for production (Rollup):
+## Vite — the modern build tool
 
 ::code-wrapper{language="javascript"}
 ```javascript
-// vite.config.js
+// vite.config.js — handles CSS/SCSS/PostCSS out of the box.
 export default {
-	css: {
-		preprocessorOptions: {
-			scss: { additionalData: `@use "variables" as *;` },  // auto-import
-		},
-	},
+  css: {
+    preprocessorOptions: {
+      scss: { additionalData: `@use "variables" as *;` },  // auto-import for every SCSS file
+    },
+  },
 };
 ```
 ::
-Vite supports CSS, SCSS, Less, PostCSS out of the box — just install the preprocessor and import the file.
 
-### webpack
-
-::code-wrapper{language="javascript"}
-```javascript
-// webpack.config.js
-module.exports = {
-	module: {
-		rules: [
-			{
-				test: /\.scss$/,
-				use: ['style-loader', 'css-loader', 'postcss-loader', 'sass-loader'],
-			},
-		],
-	},
-};
-```
-::
-webpack uses loaders to chain CSS processing — `sass-loader` (SCSS → CSS), `postcss-loader` (PostCSS), `css-loader` (resolve imports), `style-loader` (inject into DOM).
-
-### Lightning CSS
-
-Lightning CSS (formerly Parcel CSS) is a fast CSS parser/transformer/minifier written in Rust — an alternative to PostCSS for some tasks (nesting, prefixes, minification). Used by Tailwind 4.
-
-## CSS Modules
-
-CSS Modules scope class names locally (by file), avoiding collisions:
+## CSS Modules — scoped class names
 
 ::code-wrapper{language="css"}
 ```css
-/* Button.module.css */
+/* Button.module.css — class names are scoped to this file (compiled to unique names). */
 .btn { padding: 0.5rem 1rem; }
 .primary { background: blue; }
 ```
 ::
+
 ::code-wrapper{language="javascript"}
 ```javascript
 import styles from './Button.module.css';
-
 <button className={`${styles.btn} ${styles.primary}`}>Click</button>
+// Compiled: class="Button_btn__3a2f1 Button_primary__9b1c4" — no collisions, no BEM needed.
 ```
 ::
-The compiled class names are unique (`Button_btn__3a2f1`), scoping styles to the component. Popular with React.
 
 ## When to Use What
 
-| Tool | Use for |
-|---|---|
-| Sass | Variables, nesting, mixins, loops (build-time) |
-| PostCSS | Prefixes, future CSS, minification, Tailwind |
-| CSS Modules | Scoped component styles (React) |
-| Tailwind | Utility-first design system |
-| Vite/webpack | Bundling and dev server |
-
-**Modern recommendation**: use CSS variables (runtime theming) + a build tool (Vite) + PostCSS (prefixes/minification). Add Sass if you need mixins/loops. Add Tailwind if you prefer utility-first.
+::code-wrapper{language="text"}
+```text
+Tool             Use for
+CSS variables     Runtime theming, JS-accessible, @media-responsive
+Sass variables    Build-time math, loops, mixins (compiled away)
+PostCSS           Prefixes, future CSS, minification, Tailwind
+CSS Modules       Scoped component styles (React)
+Tailwind          Utility-first design system
+Vite              Dev server + bundling (modern default)
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use CSS variables for theming (runtime, JS-accessible, media-query-responsive) and Sass variables for build-time math/mixins — they're complementary. `--primary` changes at runtime; `$breakpoint` is a compile-time constant for loops.
-- **Idiom**: use `@use` (not `@import`) in modern Sass — `@import` is deprecated. `@use` is scoped (no global pollution) and loads once. `@forward` re-exports from a barrel file.
-- **Idiom**: use PostCSS for prefixes and minification (Autoprefixer + cssnano) — it works on standard CSS, composable with other plugins. Vite/webpack integrate it; configure once and forget.
-- **Idiom**: use CSS Modules for scoped component styles in React — `import styles from './Button.module.css'` gives locally-scoped class names (no collisions, no BEM needed). Popular with React; for Vue, use `<style scoped>`.
-- **Idiom**: use Vite for new projects — it handles CSS/SCSS/PostCSS out of the box (install the preprocessor, import the file). Dev uses native ES modules (instant startup); production bundles with Rollup. Faster and simpler than webpack for most apps.
+- **Idiom**: CSS variables for theming (runtime, JS-accessible, @media-responsive) + Sass variables for build-time math/mixins — they're complementary. `--primary` changes at runtime; `$breakpoint` is a compile-time constant for loops.
+- **Idiom**: `@use` (not `@import`) in modern Sass — `@import` is deprecated (pollutes global scope, loads multiple times). `@use` is scoped and loads once. `@forward` re-exports from a barrel.
+- **Idiom**: PostCSS for prefixes + minification (Autoprefixer + cssnano) — configure once, forget. Vite/webpack integrate it.
+- **Idiom**: CSS Modules for scoped component styles in React — `import styles from './X.module.css'` gives locally-scoped names (no collisions, no BEM). For Vue, use `<style scoped>`.
+- **Idiom**: Vite for new projects — handles CSS/SCSS/PostCSS out of the box, native ES modules in dev (instant startup), Rollup for production. Faster and simpler than webpack.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Sass `@import` is deprecated**: use `@use`/`@forward`. `@import` pollutes the global namespace and loads the file multiple times. `@use` is scoped and loads once.
-- **Sass variables are compile-time**: `$primary: blue` becomes `blue` in the compiled CSS — it can't change at runtime or in media queries. Use CSS variables (`--primary`) for runtime theming.
-- **`@use` namespaces by default**: `@use 'variables'` accesses as `variables.$primary`. Use `@use 'variables' as *` for no namespace, or `@use 'variables' as v` for a shorter one.
-- **CSS Modules need a framework**: CSS Modules work with React/Vue/Next.js via the bundler. A plain `.html` file can't use them (no scoping mechanism).
-- **`@apply` in Tailwind couples to Tailwind**: `@apply mt-4;` in a CSS file makes your CSS dependent on Tailwind's utilities. Use sparingly; prefer composing utilities in JSX/HTML.
-- **PostCSS plugins have config**: `postcss-preset-env` has stages (0-4); stage 2 is a common default. Autoprefixer needs `browserslist`. Misconfigured plugins can produce unexpected output.
-- **Order matters in webpack loaders**: `use: ['style-loader', 'css-loader', 'postcss-loader', 'sass-loader']` — loaders execute right-to-left. `sass-loader` first (SCSS→CSS), then `postcss-loader`, then `css-loader`, then `style-loader` (inject).
-- **Vite preprocessor auto-import**: `css.preprocessorOptions.scss.additionalData` prepends to every SCSS file (useful for `@use 'variables'`). But it can cause "already imported" errors if a file also imports — use `@use` (idempotent) not `@import`.
-- **Lightning CSS vs PostCSS**: Lightning CSS is faster (Rust) but has fewer plugins. PostCSS has a richer ecosystem. Tailwind 4 uses Lightning CSS; many setups still use PostCSS.
-- **Minification can change behavior**: aggressive minification (shortening class names, removing "unused" CSS) can break things if it misidentifies used classes (dynamic class names in JS). Configure carefully.
+- **Sass `@import` is deprecated**: use `@use`/`@forward`. `@import` pollutes the global namespace and loads files multiple times.
+- **Sass variables are compile-time**: `$primary: blue` becomes `blue` in the compiled CSS — can't change at runtime or per media query. Use CSS variables (`--primary`) for runtime theming.
+- **`@use` namespaces by default**: `@use 'variables'` → `variables.$primary`. Use `@use 'variables' as *` for no namespace, or `as v` for a short one.
+- **CSS Modules need a framework**: they work via the bundler (React/Vue/Next.js). A plain `.html` file can't use them (no scoping mechanism).
+- **`@apply` in Tailwind couples CSS to Tailwind**: `@apply mt-4;` makes your CSS dependent on Tailwind's utilities. Use sparingly; prefer composing in JSX/HTML.
+- **webpack loaders execute right-to-left**: `['style-loader', 'css-loader', 'postcss-loader', 'sass-loader']` → sass-loader first (SCSS→CSS), then postcss-loader, then css-loader, then style-loader (inject).
+- **Minification can break dynamic class names**: aggressive minification that removes "unused" CSS can misidentify JS-generated classes. Configure PurgeCSS/Tailwind safelist carefully.
 
 ## 🧠 Spot the Bug
-
-A developer uses a Sass variable for the primary color and a media query to change it, but the color doesn't change on smaller screens:
 
 ::code-wrapper{language="scss"}
 ```scss
 $primary: blue;
-
-@media (max-width: 768px) {
-	$primary: red;
-}
-
+@media (max-width: 768px) { $primary: red; }
 .button { background: $primary; }
 ```
 ::
 
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-Sass variables are **compile-time** — the `@media` block's `$primary: red` changes the variable's value *during compilation*, but only within that block's scope. By the time `.button { background: $primary; }` is compiled, `$primary` is `blue` (the last assignment in the main scope, outside the `@media` block).
-
-The compiled CSS is:
-
-```css
-.button { background: blue; }
-```
-::
-There's no media query — the `$primary: red` inside `@media` didn't persist outside it (Sass `@media` blocks have their own scope for variables), and even if it did, it's compile-time, so you can't have a different value at a different viewport.
-
-The fix — use CSS variables (runtime, media-query-responsive):
-
-```scss
-:root {
-	--primary: blue;
-}
-@media (max-width: 768px) {
-	:root {
-		--primary: red;
-	}
-}
-.button { background: var(--primary); }
-```
-::
-Now `--primary` is `blue` on desktop and `red` on mobile (≤768px), at runtime. The browser applies the right value based on the viewport.
-
-**The lesson**: Sass variables are compile-time constants — they can't change at runtime or per media query. Use CSS variables (`--var`) for runtime theming and media-query-responsive values. Use Sass variables only for build-time math, loops, and mixins.
+Sass variables are **compile-time**. `$primary: red` inside the `@media` block changes the variable only within that block's scope. By the time `.button { background: $primary; }` is compiled, `$primary` is `blue` (the main-scope value). The compiled CSS is `background: blue;` with no media query — the red never applies. Sass variables can't change at runtime or per viewport. Fix: use CSS variables — `:root { --primary: blue; }` + `@media (max-width: 768px) { :root { --primary: red; } }` + `background: var(--primary)`. CSS variables are runtime and @media-responsive.
 
 </details>
-
-## Summary
-
-You know Sass (variables, nesting, mixins, functions, loops, `@use`/`@forward`), Less, Stylus, PostCSS (Autoprefixer, preset-env, cssnano), build tools (Vite, webpack, Lightning CSS), and CSS Modules — and when to use CSS variables (runtime) vs Sass variables (compile-time), with the `@media`-can't-change-Sass-variable trap avoided. Next: exercises and projects.

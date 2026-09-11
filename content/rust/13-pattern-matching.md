@@ -1,384 +1,438 @@
 # 13 — Pattern Matching (Deep Dive)
 
-Pattern matching is Rust's most expressive control-flow construct. This chapter covers every pattern form, the binding rules, and the gotchas.
+Pattern matching is not "a nicer switch statement" — it's a structural matching algorithm with real codegen consequences, a formally checked exhaustiveness proof, and a binding-mode system that decides move/copy/borrow for you.
 
-## Where Patterns Appear
+## Under-the-Hood Mechanics
 
-### Why patterns are so pervasive
+### `match` lowers to a decision tree, not a sequence of `if`s
 
-Rust treats **destructuring as a first-class operation** that works uniformly across `match`, `let`, function parameters, and `if let`. The same pattern language — literal matching, binding, destructuring structs/tuples/enums, ranges, guards — applies in every context. This is why you can write `let (a, b) = pair;` and `match pair { (a, b) => ... }` with the same syntax. The unification exists because destructuring is the primary way Rust takes composite values apart, and the designers chose one consistent pattern grammar rather than per-context dialects. Patterns are *declarative shape-matchers*: they describe the shape of data, not the steps to extract it.
+Arms are not tested in source order like an `if`/`else if` chain — the compiler builds a decision tree that shares tests across arms. Overlapping patterns (`Some(0)` before `Some(_)`) still preserve source order, since overlap makes order semantically meaningful.
 
-- `match` arms
-- `if let` / `while let`
-- `let` declarations (destructure)
-- `let-else`
-- Function parameters (limited)
-- `for`/`while` loops (destructure each item)
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let (a, b) = (1, 2);
-fn first((a, _): (i32, i32)) -> i32 { a }
-for (i, v) in vec.iter().enumerate() { /* ... */ }
-```
-::
-::
-
-## Pattern Forms
-
-### Literals
-
-::code-wrapper{language="rust"}
-```rust
-match x { 0 => "zero", 1 => "one", _ => "many" }
-match c { 'a'..='z' | 'A'..='Z' => "letter", _ => "other" }
-```
-::
-
-### Wildcards `_`
-
-Matches anything, doesn't bind. Use to ignore.
-
-### Variables
-
-::code-wrapper{language="rust"}
-```rust
-match opt {
-    Some(x) => println!("{x}"),   // binds x
-    None => {},
-}
-```
-::
-
-A bare identifier binds the value. `_x` also binds but signals "intentionally unused" (suppresses warnings).
-
-### Or-Patterns `|`
-
-::code-wrapper{language="rust"}
-```rust
-match x {
-    1 | 2 | 3 => "small",
-    4 | 5 | 6 => "medium",
-    _ => "big",
-}
-```
-::
-
-Can bind in all alternatives with the same name (or-pattern binding, edition 2021+):
-
-::code-wrapper{language="rust"}
-```rust
-let (Ok(n) | Err(n)) = result.map(|n| n + 1).map_err(|e| 0);
-```
-::
-
-### Ranges `..=`
-
-::code-wrapper{language="rust"}
-```rust
-match x {
-    0..=9 => "digit",
-    10..=99 => "tens",
-    100.. => "big",     // open-ended (unstable on stable for match arms in some forms)
-}
-```
-::
-
-Ranges work for `char` and numeric types. Use `..` for exclusive range in slice patterns.
-
-### Destructuring Structs
-
-::code-wrapper{language="rust"}
-```rust
-struct P { x: i32, y: i32 }
-match p {
-    P { x, y } => println!("{x},{y}"),     // shorthand
-    P { x: a, y: b } => println!("{a},{b}"),
-    P { x, .. } => println!("only x"),     // ignore rest
-}
-```
-::
-
-### Destructuring Tuples
-
-::code-wrapper{language="rust"}
-```rust
-match t {
-    (0, _) => "first zero",
-    (a, b) if a < b => "ascending",
-    _ => "other",
-}
-let (x, ..) = (1, 2, 3);    // first element only
-let (.., z) = (1, 2, 3);    // last element only
-```
-::
-
-### Destructuring Enums
-
-::code-wrapper{language="rust"}
-```rust
-match e {
-    Message::Quit => {},
-    Message::Move { x: 0, y } => println!("zero-x, y={y}"),
-    Message::Move { x, y } => println!("{x},{y}"),
-    Message::Write(s) if s.is_empty() => "empty",
-    Message::Write(s) => s,
-    Message::ChangeColor(r, g, b) => println!("{r},{g},{b}"),
-}
-```
-::
-
-### Slice Patterns
-
-::code-wrapper{language="rust"}
-```rust
-match slice {
-    [] => "empty",
-    [a] => "one: {a}",
-    [a, b] => "two: {a},{b}",
-    [first, .., last] => "first={first} last={last}",   // subslice pattern
-    [a, b, c @ ..] => println!("{a}, {b}, rest={:?}", c),
-}
-```
-::
-
-`..` in slice patterns matches the middle (any length). Limited stable support; `c @ ..` binds the subslice.
-
-### Reference Patterns
-
-::code-wrapper{language="rust"}
-```rust
-match &x {
-    &0 => "ref to zero",      // matches &0
-    0 => "deref zero",         // auto-deref (binding mode)
-}
-let &y = &5;                  // matches the reference, y is i32 (Copy)
-let ref r = x;               // r: &i32 — borrow pattern
-let mut z = 0;
-match z {
-    ref mut r => *r += 1,    // r: &mut i32
-}
-```
-::
-
-### Binding Modes (2021)
-
-::code-wrapper{language="rust"}
-```rust
-match &opt {
-    Some(x) => println!("{x}"),   // x: &i32 — auto-ref
-    None => {}
-}
-match &mut opt {
-    Some(x) => *x += 1,           // x: &mut i32
-    None => {}
-}
-```
-::
-
-The 2021 edition simplified this — you no longer sprinkle `&`/`&mut` everywhere. The compiler inserts references as needed based on what you match against.
-
-### `@` Bindings
-
-::code-wrapper{language="rust"}
-```rust
-match n {
-    x @ 0..=9 => "small: {x}",
-    x @ (10..=99) => "medium: {x}",
-    _ => "big",
-}
-```
-::
-
-`@` binds the value while also constraining it with a pattern.
-
-### Match Guards
-
-::code-wrapper{language="rust"}
-```rust
-match opt {
-    Some(x) if x > 0 => "positive",
-    Some(_) => "non-positive",
-    None => "none",
-}
-```
-::
-
-Guards let you add boolean conditions. They *can* prevent exhaustiveness checking — the compiler considers guards potentially false even for matched patterns, so you often need `_ =>` arms.
-
-## `ref` and `ref mut`
-
-Old-school (pre-2021) way to borrow in patterns:
-
-::code-wrapper{language="rust"}
-```rust
-match opt {
-    Some(ref x) => ...,    // x: &i32
-    None => ...,
-}
-```
-::
-
-Still useful when the default binding mode doesn't fit (e.g., matching by value where you want a ref to one field). Modern Rust mostly auto-borrows.
-
-## Destructuring with `..`
-
-`..` ignores remaining fields/elements:
-
-::code-wrapper{language="rust"}
-```rust
-let P { x, .. } = p;     // ignore y
-let (a, .., z) = tuple;  // ignore middle
-```
-::
-
-`..` can appear once in a struct pattern and once in a tuple/slice pattern. Multiple `..` is an error.
-
-## Patterns Don't Allow Expressions
-
-You can't write `Some(x + 1)` as a pattern. Guards exist for that. Patterns are structural; conditions go in guards.
-
-## Exhaustiveness
-
-### Why exhaustiveness is enforced
-
-The compiler **guarantees** your `match` handles every possible variant — this eliminates an entire class of "forgot a case" bugs that plague languages with switch statements that silently fall through or default. When you add a new variant to an enum later, every `match` on it becomes a compile error until you handle the new case, which makes enum evolution *safe*: the compiler tells you every place that needs updating. This is one of Rust's headline safety guarantees and a major reason enums + `match` replace inheritance hierarchies in many designs.
-
-::code-wrapper{language="rust"}
-```rust
-fn classify(c: Color) -> &'static str {
-    match c {
-        Color::Red => "red",
-        // ERROR if missing Green/Blue
+fn classify(x: Option<i32>) -> &'static str {
+    match x {
+        Some(0) => "zero",
+        Some(n) if n > 0 => "positive",
+        Some(_) => "negative",
+        None => "absent",
     }
 }
 ```
 ::
 
-The compiler lists the missing patterns. Add `_` if you genuinely don't care, but be explicit when you can — exhaustiveness is a feature.
-
-## `matches!` Macro
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let is_some = matches!(opt, Some(_));
-let in_range = matches!(n, 0..=9 | 100..=199);
+// Dense, guard-free enum match: compiles toward a jump table — O(1) dispatch.
+enum Opcode { Add, Sub, Mul, Div }
+
+fn eval(op: Opcode, a: i32, b: i32) -> i32 {
+    match op {
+        Opcode::Add => a + b,
+        Opcode::Sub => a - b,
+        Opcode::Mul => a * b,
+        Opcode::Div => a / b, // single top-level branch on the discriminant, not 4 checks
+    }
+}
 ```
 ::
 
-Concise one-arm matcher returning `bool`.
+### Binding modes: move, copy, or borrow — decided for you
 
-## Common Pitfalls
+Since edition 2018's "default binding modes," matching a `&T`/`&mut T` against a pattern without a leading `&` shifts the binding mode automatically.
 
-- **Variable shadowing in pattern**: `match x { Some(x) => x, None => 0 }` — the inner `x` shadows the outer; usually what you want, but easy to misread.
-- **`_` vs `_x`**: `_` doesn't bind (drops the value), `_x` binds (must be used or it warns).
-- **Binding mode surprises**: when matching `&Option<i32>`, the bound variable is `&i32`. The compiler prints the inferred type — read the error carefully.
-- **Match guard + exhaustiveness**: guards make the compiler treat arms as non-exhaustive. Always have a final `_` or cover every variant.
-- **Move-out in pattern**: matching `Some(s)` on a `String`-carrying enum by value moves the `String`; matching `&Some(s)` borrows it.
-- **Range patterns need contiguous types**: `..=` works for `char` and integers; `String` can't be range-matched.
-- **Nested patterns**: `Some((Ok(x), _))` is valid; patterns nest arbitrarily.
-- **Tuple struct variants**: `Message::Move { x, y }` (struct form) vs `Message::Write(s)` (tuple form) — must use the form matching the variant.
-
-## `let` Patterns and Refutability
-
-### Why `let` requires irrefutable patterns
-
-A `let` binding has **no failure path** — it must always succeed — so the pattern must be *irrefutable* (match every possible value of its type). `let (a, b) = tuple` always matches because every 2-tuple has two components. But `let Some(x) = opt` is *refutable*: if `opt` is `None`, what would `x` be? There's no answer, so the compiler rejects it. This is why `if let` (which has an `else` path) and `let-else` (which has a divergence path like `return`/`break`) accept refutable patterns — they have somewhere to go when the pattern fails. The rule exists to make "this binding always succeeds" a guarantee you can rely on, rather than a hidden runtime check.
-
-- `let PATTERN = expr` requires PATTERN to be **irrefutable** (always matches): `let (a, b) = tuple` is fine; `let Some(x) = opt` is an error (refutable).
-- `if let` and `while let` accept refutable patterns.
-- `let-else` bridges: `let Some(x) = opt else { return; };`.
-
-## Pattern Matching Tricks & Idioms
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-// Trick: use if let for single-pattern matching
-if let Some(x) = opt { println!("{x}"); }
+fn main() {
+    let opt: Option<String> = Some(String::from("hi"));
 
-// Trick: use while let for pattern-based looping
-let mut it = vec![1, 2, 3].into_iter();
-while let Some(x) = it.next() { println!("{x}"); }
+    // Matching &opt (a reference) against Some(x) (no leading &):
+    // compiler shifts to "ref" binding mode automatically — x: &String.
+    if let Some(x) = &opt {
+        println!("{x}"); // x is &String; opt is NOT moved
+    }
+    println!("{opt:?}"); // still valid
 
-// Trick: destructure in for loops
-for (i, v) in vec.iter().enumerate() { }
-for (k, v) in &map { }
+    // Matching an owned Option<String> BY VALUE moves the payload:
+    if let Some(x) = opt {
+        println!("{x}"); // x is String, owned — opt is moved
+    }
+    // println!("{opt:?}"); // ERROR: opt was consumed above
+}
+```
+::
 
-// Trick: use patterns in function arguments
-fn print_pair((a, b): (i32, i32)) { println!("{a}, {b}"); }
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn main() {
+    let mut opt = Some(10);
 
-// Trick: or-patterns with multiple variants
-match e {
-    Color::Red | Color::Green | Color::Blue => "primary",
-    _ => "other",
+    // &mut scrutinee -> x: &mut i32
+    if let Some(x) = &mut opt {
+        *x += 1;
+    }
+    assert_eq!(opt, Some(11));
+
+    // Copy type + shared reference -> x is a COPY, not a reference,
+    // if the pattern itself doesn't bind by-ref explicitly.
+    let n = 5i32;
+    let r = &n;
+    match r {
+        &val => assert_eq!(val, 5), // val: i32, copied out
+    }
+}
+```
+::
+
+### Exhaustiveness checking is blind to guard logic
+
+The checker only understands pattern *shape*. A guard is an opaque `bool`-returning function to it — this is why any guarded arm forces a fallback arm.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn classify(n: i32) -> &'static str {
+    match n {
+        x if x > 0 => "positive",
+        x if x < 0 => "negative",
+        0 => "zero",
+        // Remove this arm: E0004 non-exhaustive patterns, even though
+        // (x>0) | (x<0) | (x==0) covers all of i32 mathematically.
+    }
+}
+```
+::
+
+## Cost, Performance, and Trade-Offs
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Dense enum, no guards -> single indexed jump, O(1) regardless of variant count.
+enum State { Idle, Running, Paused, Stopped }
+
+fn tick(s: State) -> State {
+    match s {
+        State::Idle => State::Running,
+        State::Running => State::Paused,
+        State::Paused => State::Running,
+        State::Stopped => State::Stopped,
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Guards defeat exhaustiveness AND often defeat decision-tree sharing.
+fn tier_guarded(n: u32) -> &'static str {
+    match n {
+        n if n <= 10 => "free",       // guard forces a wildcard arm below
+        n if n <= 100 => "standard",
+        _ => "pro",
+    }
 }
 
-// Trick: binding in or-patterns (2021+)
-let (Ok(n) | Err(n)) = result.map(|x| x).map_err(|_| 0);
+// Prefer structural range patterns — exhaustively verifiable, better optimized.
+fn tier_structural(n: u32) -> &'static str {
+    match n {
+        0..=10 => "free",
+        11..=100 => "standard",
+        101.. => "pro",
+    }
+}
+```
+::
 
-// Trick: use @ to bind and check
-match n {
-    x @ 0..=9 => println!("digit: {x}"),
-    x @ 10..=99 => println!("two-digit: {x}"),
-    _ => println!("big"),
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Binding-mode mistakes don't error — they silently change runtime behavior.
+struct Big { data: Vec<u8> }
+
+fn touch_wrong(b: Big) -> usize {
+    match b {
+        Big { data } => data.len(), // moved and dropped `b` just to read a length
+    }
 }
 
-// Trick: slice patterns for destructuring
-match v.as_slice() {
-    [] => println!("empty"),
-    [first] => println!("one: {first}"),
-    [first, .., last] => println!("{first}..{last}"),
-    _ => println!("multiple"),
+fn touch_right(b: &Big) -> usize {
+    match b {
+        Big { data } => data.len(), // data: &Vec<u8>, zero-cost
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// matches! vs. hand-written if/else — identical codegen, different bug surface.
+fn is_even(n: i32) -> bool {
+    matches!(n, n if n % 2 == 0) // can't be left with a stale/inverted else branch
 }
 
-// Trick: use nested patterns for complex data
-match opt {
-    Some((Ok(x), Some(y))) => println!("{x}, {y}"),
-    _ => println!("nope"),
+fn is_even_manual(n: i32) -> bool {
+    if n % 2 == 0 { true } else { false } // clippy::match_like_matches_macro
+}
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: guard-covered "exhaustive" match with a silent gap
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// naive: looks exhaustive, only correct because the bounds were hand-verified
+fn classify_naive(rpm: u32) -> &'static str {
+    match rpm {
+        n if n <= 10 => "free",
+        n if n <= 100 => "standard",
+        n if n <= 1000 => "pro",
+        n => "enterprise",
+    }
+}
+```
+::
+
+A later refactor changing `n <= 1000` to `n < 1000` opens a silent gap at `n == 1000` — no compile error, since the catch-all still absorbs it.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// right: compiler-verified exhaustive, gaps become compile errors
+fn classify_right(rpm: u32) -> &'static str {
+    match rpm {
+        0..=10 => "free",
+        11..=100 => "standard",
+        101..=1000 => "pro",
+        1001.. => "enterprise",
+    }
+}
+```
+::
+
+### Anti-pattern: matching by value, silently moving data out of a struct
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Request {
+    id: u64,
+    payload: Vec<u8>,
 }
 
-// Trick: guard with additional conditions
-match x {
-    n if n > 0 && n < 10 => "positive digit",
-    n if n == 0 => "zero",
-    _ => "other",
+// naive: wants to log size without consuming req, matches by value instead
+fn handle_naive(req: Request) -> Request {
+    match req {
+        Request { payload, .. } => {
+            println!("payload size: {}", payload.len()); // moves payload out
+        }
+    }
+    // return req; // ERROR: req.payload moved
+    req
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// right: match &req instead of req — free, no clone, no move
+fn handle_right(req: Request) -> Request {
+    match &req {
+        Request { payload, .. } => {
+            println!("payload size: {}", payload.len()); // payload: &Vec<u8>
+        }
+    }
+    req // never moved
+}
+```
+::
+
+### Anti-pattern: or-pattern binding masking different error-handling paths
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+enum FetchError {
+    Timeout(u64),      // ms elapsed
+    RateLimited(u64),  // retry-after seconds
 }
 
-// Trick: use ref patterns for borrowing
-match &Some("hello") {
-    Some(ref s) => println!("{s}"), // s: &str
-    None => {}
+// naive: collapses two units into one binding — wrong unit for RateLimited!
+fn handle_naive(err: FetchError) {
+    let (FetchError::Timeout(n) | FetchError::RateLimited(n)) = err;
+    std::thread::sleep(std::time::Duration::from_millis(n));
 }
+```
+::
 
-// Trick: matches! macro for one-liner boolean checks
-if matches!(opt, Some(0)) { }
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// right: separate arms preserve the distinct semantics
+fn handle_right(err: FetchError) {
+    match err {
+        FetchError::Timeout(elapsed_ms) => {
+            eprintln!("timed out after {elapsed_ms}ms, retrying immediately");
+        }
+        FetchError::RateLimited(retry_after_secs) => {
+            std::thread::sleep(std::time::Duration::from_secs(retry_after_secs));
+        }
+    }
+}
+```
+::
+
+## Architectural Application
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Enums + match make exhaustiveness a refactor-safety tool: adding a variant
+// forces a compile error at every call site that needs updating.
+enum ConnState { Connecting, Connected, Draining, Closed }
+
+fn on_event(s: ConnState) -> ConnState {
+    match s {
+        ConnState::Connecting => ConnState::Connected,
+        ConnState::Connected => ConnState::Draining,
+        ConnState::Draining => ConnState::Closed,
+        ConnState::Closed => ConnState::Closed,
+        // add a new variant above -> every match like this fails to compile
+        // until handled. Trait-object polymorphism gives no such guarantee.
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// let-else flattens validation pipelines instead of nesting if-let/else.
+struct RawRequest { auth: Option<String>, body: Option<Vec<u8>> }
+
+fn handle(req: RawRequest) -> Result<(), &'static str> {
+    let Some(auth) = req.auth else { return Err("missing auth") };
+    let Some(body) = req.body else { return Err("missing body") };
+    if auth.is_empty() { return Err("empty auth") };
+    println!("processing {} bytes", body.len());
+    Ok(())
+}
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `let-else` (`let Some(x) = opt else { return; };`) instead of an `if let ... else { return }` block when you want the happy-path variable available for the rest of the function without nesting.
-- **Debug**: `dbg!(&value)` right before a `match` is a quick way to confirm which arm you expect to fire, especially with reference patterns where the bound type isn't obvious from the source.
-- **Clippy**: `clippy::match_like_matches_macro` suggests collapsing a two-armed boolean `match` into `matches!`; `clippy::single_match` suggests `if let` when only one arm does anything.
-- **Performance**: exhaustive `match` on an enum compiles to a jump table (like a C `switch`) when the discriminants are dense, making it as fast as (often faster than) a chain of `if`/`else if`.
-- **Idiom**: combine `@` bindings with guards for readable range checks with a captured value: `n @ 1..=9 if n % 2 == 0 => ...` reads better than re-deriving `n` inside the guard.
-- **Debug**: when a binding-mode error says "expected `i32`, found `&i32`" inside a `match` arm, it's telling you exactly what the auto-ref inserted — read the *found* type, don't guess.
+- **Idiom**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn first_word(s: &str) -> &str {
+    let Some(w) = s.split_whitespace().next() else { return "" };
+    w // happy path stays flat, no nested if-let
+}
+```
+::
+- **Debug**: `dbg!(&value)` before a `match` never moves `value` — it takes a reference:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let x = Some(3);
+match dbg!(&x) {
+    Some(n) => println!("{n}"),
+    None => {}
+}
+```
+::
+- **Clippy**: `clippy::single_match` flags a one-armed `match` that should be `if let`:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// flagged
+match Some(3) { Some(n) => println!("{n}"), _ => {} }
+// preferred
+if let Some(n) = Some(3) { println!("{n}"); }
+```
+::
+- **Performance**: verify guard-heavy matches in generated assembly if they're in a hot loop — guards can defeat jump-table codegen.
+- **Idiom**: `@` bindings avoid re-deriving a value inside a guard:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+match 4 {
+    n @ 1..=9 if n % 2 == 0 => println!("small even: {n}"),
+    _ => {}
+}
+```
+::
+- **Debug**: an error like `expected i32, found &i32` inside an arm tells you exactly what auto-ref inserted — check whether the scrutinee was `&value` or `value`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Guards re-evaluate on every check, and can have side effects**: `Some(x) if side_effecting_check(x) =>` runs `side_effecting_check` only if the pattern matches structurally first, but if multiple guarded arms share a pattern, a failing guard on one still lets the compiler try the next identical pattern — surprising if the guard isn't pure.
-- **Or-patterns with different bound types don't compile**: `Ok(n) | Err(n)` requires `n` to have the *same type* in both alternatives — `Result<i32, String>` can't or-pattern bind a single `n` across `Ok`/`Err` because `i32 != String`.
-- **`..` can only appear once per pattern level**: `[a, .., b, .., c]` is a compile error even though it looks like it should mean "match ends and any two gaps" — a single `..` must unambiguously bind a length.
-- **Range patterns silently require `PartialOrd`/step behavior**: `'a'..='z'` works char-by-char, but a range pattern like `1.5..=2.5` on floats is a hard compile error — float ranges are not allowed as match patterns because equality/step is ill-defined for `NaN`.
-- **Refutability errors point at the wrong line**: `let Some(x) = opt;` (no `else`) fails with "refutable pattern in local binding" — the fix is `let-else`, `if let`, or `.unwrap()`, but newcomers often try to "fix" the type instead of the binding form.
-- **Binding modes silently change mutability expectations**: matching `&mut Some(x)` binds `x: &mut T`, but matching `&Some(x)` where `T: Copy` binds `x: T` (a copy) — swap `&mut` for `&` in a diff and a previously-mutating arm silently becomes a no-op that still compiles.
-- **Platform-independent gotcha — non-exhaustive integer ranges**: `match byte { 0..=254 => ..., 255 => ... }` for a `u8` is exhaustive, but the same pattern on `i32` is not (many more values exist), so the identical-looking match arms compile in one case and require a wildcard in the other.
+- **Guards with side effects can double-execute**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn check(n: i32) -> bool { println!("checking {n}"); n > 0 }
+
+fn demo(n: i32) {
+    match n {
+        x if check(x) => println!("positive"),
+        x if check(x) => println!("non-positive"), // check() may run twice for n<=0
+        _ => {}
+    }
+}
+```
+::
+- **Or-patterns require identical bound types**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn f(r: Result<i32, i32>) {
+    let (Ok(n) | Err(n)) = r; // OK: both i32
+}
+// Result<i32, String>: `Ok(n) | Err(n)` is a compile error — i32 != String
+```
+::
+- **`..` can only appear once per pattern level**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let arr = [1, 2, 3, 4, 5];
+// let [a, .., b, .., c] = arr; // ERROR: `..` used twice
+let [a, .., c] = arr; // OK
+```
+::
+- **Float range patterns don't compile**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let score = 1.8_f64;
+match score {
+    // 1.5..=2.5 => println!("mid"), // ERROR: floating-point range pattern
+    _ if (1.5..=2.5).contains(&score) => println!("mid"), // use a guard instead
+    _ => {}
+}
+```
+::
+- **Refutability errors point at the binding form, not the type**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let opt = Some(5);
+// let Some(x) = opt; // ERROR: refutable pattern in local binding
+let Some(x) = opt else { return }; // fix: let-else
+```
+::
+- **`&mut` vs `&` in a diff silently changes mutation into a no-op**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let mut opt = Some(5);
+if let Some(x) = &mut opt { *x += 1; }   // mutates opt
+if let Some(x) = &opt { let _x = x + 1; } // x: &i32 copied out, opt untouched — compiles fine
+```
+::
+- **A `u8` match that "looks" exhaustive doesn't generalize to `i32`**:
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn f_u8(b: u8) -> &'static str {
+    match b { 0..=254 => "low", 255 => "max" } // exhaustive: u8 has no other values
+}
+// Copy-pasted onto i32 needs a wildcard arm — far more values exist outside 0..=255.
+fn f_i32(n: i32) -> &'static str {
+    match n { 0..=254 => "low", 255 => "max", _ => "other" }
+}
+```
+::
 
 ## 🧠 Spot the Bug
 
 Will this compile? If so, what does `classify(5)` print?
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 fn classify(n: i32) -> &'static str {
     match n {
@@ -399,14 +453,45 @@ fn main() {
 
 It does **not** compile: `error[E0004]: non-exhaustive patterns`.
 
-Every arm here uses a match guard (`if x > 0`, `if x < 0`) except the last. The compiler cannot prove that `x if x > 0` and `x if x < 0` together cover "every `i32` except `0`" — guards are arbitrary boolean expressions evaluated at runtime, so exhaustiveness checking (which works on pattern *shape*, not guard logic) treats both guarded arms as only *potentially* matching. From the checker's point of view, an `i32` could in principle satisfy none of the three arms (if some future refactor changed the conditions), so a bare `_ =>` or truly irrefutable final arm is required — the literal `0` arm without a guard doesn't retroactively make the earlier guarded arms "safe" in the compiler's eyes for every input, and more importantly `0` alone still leaves the guard-covered ranges unproven exhaustive. The fix is to add a final `_ => unreachable!()` or restructure the guards into structural range patterns (`1.. => "positive"`, `..0 => "negative"`, `0 => "zero"`), which the checker *can* verify exhaustively without guards.
+Guards are opaque booleans to the exhaustiveness checker — it can't prove `x > 0`, `x < 0`, and the literal `0` together cover all of `i32`. Fix with an explicit catch-all or, better, structural ranges:
 
-**The lesson**: match guards are invisible to the exhaustiveness checker — always end guarded matches with an unconditional catch-all arm.
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+fn classify_fixed(n: i32) -> &'static str {
+    match n {
+        1.. => "positive",
+        ..0 => "negative",
+        0 => "zero",
+    }
+}
+```
+::
+
+**The lesson**: guards are invisible to exhaustiveness checking — always end guarded matches with a catch-all, or replace guards with structural patterns so the compiler verifies completeness for you.
 
 </details>
 
 ## Summary
 
-Patterns are structural, support literals, ranges, or-patterns, destructuring, `@` bindings, and guards. The 2021 binding modes reduced noise. Exhaustiveness is enforced. `ref`/`ref mut` are escape hatches for older patterns. `matches!` is a tiny match for booleans. Use patterns everywhere: function parameters, for loops, let declarations, match arms, and conditionals.
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// match -> decision tree / jump table, not sequential ifs
+match Some(1) { Some(0) => {}, Some(_) => {}, None => {} }
 
-Next: Collections (`Vec`, `String`, `HashMap`, etc.).
+// binding modes: match &value to borrow, match value to move
+if let Some(x) = &Some(1) { let _: &i32 = x; }
+
+// structural patterns are exhaustively checked; guards are not
+match 5u32 { 0..=10 => {}, 11.. => {} }
+
+// or-pattern binding only for genuinely fungible alternatives
+let (Ok(n) | Err(n)): Result<i32, i32> = Ok(1);
+```
+::
+
+- `match` compiles to a decision tree/jump table — arm order rarely affects performance unless patterns overlap.
+- Binding modes decide move/copy/borrow silently — `match &value` is the usual free fix.
+- Exhaustiveness is structural, blind to guards — prefer ranges/or-patterns over guards.
+- Or-pattern binding only for truly interchangeable variants — same type, different meaning is a bug magnet.
+
+Next: Collections — `Vec`, `String`, `HashMap`, and the allocation/amortization trade-offs behind Rust's standard containers.

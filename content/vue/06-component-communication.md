@@ -1,353 +1,390 @@
+---
+title: Vue 3 Engineering Reference — Component Communication
+description: Props down/events up contract, provide/inject dependency injection with typed symbols, $attrs forwarding, event bus alternatives, and v-model component patterns for production forms.
+---
+
 # 06 — Component Communication
 
-## Props Down, Events Up — the Core Pattern
+## Props Down, Events Up — The Unidirectional Contract
 
-The default, recommended communication pattern in Vue is unidirectional: parents pass data to children via **props**, and children notify parents of things that happened via **emitted events**. This keeps data flow traceable — for any piece of state, there's exactly one owner, and everyone else either reads a copy passed down or asks the owner to change it.
-
-::code-wrapper{language="vue" filename="TodoItem.vue"}
+::code-wrapper{language="vue" filename="Parent.vue"}
 ```vue
-<script setup>
-defineProps({
-  todo: { type: Object, required: true }
-})
-
-const emit = defineEmits(['toggle', 'delete'])
-</script>
-
-<template>
-  <li>
-    <input type="checkbox" :checked="todo.done" @change="emit('toggle', todo.id)" />
-    <span :class="{ done: todo.done }">{{ todo.text }}</span>
-    <button @click="emit('delete', todo.id)">×</button>
-  </li>
-</template>
-```
-::
-
-::code-wrapper{language="vue" filename="TodoList.vue"}
-```vue
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue'
-import TodoItem from './TodoItem.vue'
+import UserForm from './UserForm.vue'
 
-const todos = ref([
-  { id: 1, text: 'Learn Vue', done: false },
-  { id: 2, text: 'Build something', done: false }
-])
+const user = ref({ name: '', email: '' })
 
-function toggleTodo(id) {
-  const todo = todos.value.find(t => t.id === id)
-  if (todo) todo.done = !todo.done
-}
+// ── One-way data flow: ────────────────────────────────
+// Parent → Child: props (read-only in child)
+// Child → Parent: events (child emits, parent handles)
+// Child never mutates props directly — emits event, parent updates state.
+// This ensures a single source of truth and traceable data flow.
+</script>
 
-function deleteTodo(id) {
-  todos.value = todos.value.filter(t => t.id !== id)
+<template>
+  <!-- Pass data down as props -->
+  <UserForm
+    :model-value="user"
+    @update:model-value="user = $event"
+    @submit="handleSubmit"
+  />
+  <!-- v-model is sugar for the above two-way binding pattern -->
+</template>
+```
+
+::code-wrapper{language="vue" filename="UserForm.vue"}
+```vue
+<script setup lang="ts">
+// ── Props are READ-ONLY — mutating a prop is a dev-mode warning ──
+// Vue's one-way flow: if parent changes the prop, child re-renders with new value.
+// If child mutated it, the next parent update would overwrite the mutation.
+
+const props = defineProps<{
+  modelValue: { name: string; email: string }
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: { name: string; email: string }): void
+  (e: 'submit'): void
+}>()
+
+// ── Correct pattern: emit a new object, don't mutate the prop ──
+function updateField(field: 'name' | 'email', value: string) {
+  emit('update:modelValue', { ...props.modelValue, [field]: value })
 }
 </script>
 
 <template>
-  <ul>
-    <TodoItem
-      v-for="todo in todos"
-      :key="todo.id"
-      :todo="todo"
-      @toggle="toggleTodo"
-      @delete="deleteTodo"
-    />
-  </ul>
+  <input
+    :value="modelValue.name"
+    @input="updateField('name', $event.target.value)"
+  />
+  <button @click="emit('submit')">Submit</button>
 </template>
 ```
 ::
 
-`TodoList` owns `todos` and is the only place that mutates it. `TodoItem` never touches `todos` directly — it just renders what it's given and emits intent ("toggle this", "delete this"), leaving the decision of *how* to respond entirely to the parent.
+### Anti-Pattern: Mutating Props Directly
 
-## `v-model` on Components
-
-`v-model` on a native input is sugar for a value binding plus a change listener (chapter 02). The exact same pattern works on custom components, using the `modelValue` prop and `update:modelValue` event convention:
-
-::code-wrapper{language="vue" filename="CurrencyInput.vue"}
+::code-wrapper{language="vue" filename="MutateProp.vue"}
 ```vue
 <script setup>
+const props = defineProps(['user'])
+</script>
+
+<template>
+  <!-- ❌ WRONG: mutating a prop directly — Vue warns in dev mode -->
+  <input v-model="props.user.name" />
+  <!-- Why it breaks: parent owns `user`. If parent re-renders with a new
+       user object, this component's mutation is lost (overwritten by new prop).
+       Also makes data flow untraceable — who changed `user.name`? -->
+</template>
+```
+
+::code-wrapper{language="vue" filename="FixedProp.vue"}
+```vue
+<script setup>
+const props = defineProps(['user'])
+const emit = defineEmits(['update:user'])
+</script>
+
+<template>
+  <!-- ✅ CORRECT: emit the update, parent owns the mutation -->
+  <input
+    :value="user.name"
+    @input="emit('update:user', { ...user, name: $event.target.value })"
+  />
+</template>
+```
+::
+
+## provide/inject — Typed Dependency Injection
+
+::code-wrapper{language="typescript" filename="provide-inject.ts"}
+```typescript
+import { provide, inject, ref, type InjectionKey, type Ref } from 'vue'
+
+// ── InjectionKey: typed symbol that carries the TypeScript type ──
+// Using a symbol (not a string) prevents naming collisions across libraries.
+// The type is: Ref<User | null> — injected values are typed correctly.
+export const USER_KEY: InjectionKey<Ref<User | null>> = Symbol('user')
+
+// ── Provider: parent or app-level ──
+export function provideUser() {
+  const user = ref<User | null>(null)
+  provide(USER_KEY, user)  // provide the ref — child gets the ref, not just the value
+  return user
+}
+
+// ── Consumer: any descendant component ──
+export function useUser() {
+  const user = inject(USER_KEY)
+  if (!user) throw new Error('useUser() must be used within a provider for USER_KEY')
+  // ⚠️ inject() returns undefined if no provider found — always guard.
+  return user
+}
+
+// ── Without InjectionKey: string key, no type safety ──
+provide('theme', 'dark')
+const theme = inject('theme', 'light')  // second arg = default if not provided
+// String keys work but have no type inference — InjectionKey is preferred.
+```
+::
+
+## Production Pattern — Composable with provide/inject
+
+::code-wrapper{language="typescript" filename="useTheme.ts"}
+```typescript
+import { provide, inject, ref, readonly, computed, type InjectionKey } from 'vue'
+
+// ── Full composable: provider sets up state, consumer accesses via inject ──
+// Separates "create" (provider) from "use" (consumer) for clean DI.
+
+interface ThemeContext {
+  theme: Readonly<Ref<string>>
+  isDark: Readonly<Ref<boolean>>
+  setTheme: (t: string) => void
+  toggle: () => void
+}
+
+const THEME_KEY: InjectionKey<ThemeContext> = Symbol('theme')
+
+// ── Provider: called once in the root component ──
+export function provideTheme(initial = 'light') {
+  const theme = ref(initial)
+  const isDark = computed(() => theme.value === 'dark')
+
+  const context: ThemeContext = {
+    theme: readonly(theme),  // expose read-only — consumers can't mutate directly
+    isDark: readonly(isDark),
+    setTheme: (t: string) => { theme.value = t },
+    toggle: () => { theme.value = theme.value === 'dark' ? 'light' : 'dark' },
+  }
+
+  provide(THEME_KEY, context)
+  return context  // provider also gets the mutable API
+}
+
+// ── Consumer: called in any descendant ──
+export function useTheme() {
+  const ctx = inject(THEME_KEY)
+  if (!ctx) throw new Error('useTheme() called outside of provideTheme()')
+  return ctx
+}
+
+// ── Why readonly on injected state: ──────────────────────
+// Forces consumers to use the provided mutation functions (setTheme, toggle)
+// instead of directly writing to the ref. Centralizes mutation logic, makes
+// state changes traceable and debuggable (all mutations go through one path).
+```
+::
+
+## v-model on Components — Custom Modifiers
+
+::code-wrapper{language="vue" filename="PhoneNumberInput.vue"}
+```vue
+<script setup>
+import { computed } from 'vue'
+
+// ── v-model with built-in modifiers: modelModifiers ──
+// Parent: <PhoneInput v-model.trim="phone" />
+// → modelModifiers = { trim: true }
 const props = defineProps({
-  modelValue: { type: Number, required: true }
+  modelValue: String,
+  modelModifiers: { default: () => ({}) },
 })
+
 const emit = defineEmits(['update:modelValue'])
 
-function onInput(event) {
-  const parsed = parseFloat(event.target.value)
-  emit('update:modelValue', Number.isNaN(parsed) ? 0 : parsed)
-}
-</script>
-
-<template>
-  <input type="number" :value="modelValue" @input="onInput" />
-</template>
-```
-::
-
-::code-wrapper{language="vue"}
-```vue
-<script setup>
-import { ref } from 'vue'
-import CurrencyInput from './CurrencyInput.vue'
-
-const price = ref(19.99)
-</script>
-
-<template>
-  <!-- expands to :model-value="price" @update:model-value="price = $event" -->
-  <CurrencyInput v-model="price" />
-  <p>Price: ${{ price.toFixed(2) }}</p>
-</template>
-```
-::
-
-### Named `v-model`s — multiple bindings on one component
-
-A single component can expose more than one `v-model` by naming the argument:
-
-::code-wrapper{language="vue" filename="UserNameFields.vue"}
-```vue
-<script setup>
-defineProps({
-  firstName: String,
-  lastName: String
-})
-defineEmits(['update:firstName', 'update:lastName'])
-</script>
-
-<template>
-  <input :value="firstName" @input="$emit('update:firstName', $event.target.value)" />
-  <input :value="lastName" @input="$emit('update:lastName', $event.target.value)" />
-</template>
-```
-::
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <UserNameFields v-model:first-name="first" v-model:last-name="last" />
-</template>
-```
-::
-
-This replaces the deprecated Vue 2 `.sync` modifier entirely — named `v-model` arguments are the single, unified mechanism for both the default model and any number of additional two-way bindings.
-
-## Provide / Inject
-
-Props work well for one or two levels of nesting, but passing data through five intermediate components that don't themselves need it ("prop drilling") is painful to write and to refactor. `provide`/`inject` lets an ancestor make a value available to *any* descendant, at any depth, without threading it through every component in between:
-
-::code-wrapper{language="vue" filename="App.vue"}
-```vue
-<script setup>
-import { provide, ref, readonly } from 'vue'
-
-const theme = ref('dark')
-
-function setTheme(newTheme) {
-  theme.value = newTheme
+// ── Custom modifier: format phone numbers as (XXX) XXX-XXXX ──
+function formatPhone(value) {
+  const digits = value.replace(/\D/g, '').slice(0, 10)
+  if (digits.length <= 3) return digits
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
 }
 
-// Providing a readonly ref plus a dedicated setter function is the
-// recommended pattern — it keeps the "who can change this" contract
-// explicit, rather than letting any descendant mutate theme.value directly
-provide('theme', readonly(theme))
-provide('setTheme', setTheme)
-</script>
-```
-::
-
-::code-wrapper{language="vue" filename="DeeplyNestedWidget.vue"}
-```vue
-<script setup>
-import { inject } from 'vue'
-
-// second argument is a default value, used if no ancestor provided this key
-const theme = inject('theme', 'light')
-const setTheme = inject('setTheme', () => {})
-</script>
-
-<template>
-  <div :class="theme">
-    <button @click="setTheme('light')">Light</button>
-    <button @click="setTheme('dark')">Dark</button>
-  </div>
-</template>
-```
-::
-
-`DeeplyNestedWidget` never received `theme` as a prop — it could be nested ten levels deep under `App.vue` and this still works, with zero changes needed to any component in between.
-
-### Provide/inject and the reactivity-loss trap
-
-::code-wrapper{language="javascript"}
-```javascript
-import { provide, ref } from 'vue'
-
-const count = ref(0)
-
-// WRONG — provides the CURRENT number, not a live reactive reference
-provide('count', count.value)
-
-// RIGHT — provides the ref itself; consumers can read count.value reactively
-provide('count', count)
-```
-::
-
-Just like the destructuring trap in chapter 03, `provide('count', count.value)` unwraps the ref at the moment `provide` runs and hands descendants a frozen snapshot — later changes to `count.value` never reach anything that already injected it. Always provide the `ref`/`reactive` object itself, not an already-unwrapped value read out of it.
-
-## Slots — Passing Template Content Down
-
-Props pass data; **slots** pass template content — actual markup a parent wants rendered inside a child's layout. This is Vue's equivalent of React's `children` (default slot) or render props (scoped slots), and is covered in full depth in chapter 13. Here's the essential shape:
-
-::code-wrapper{language="vue" filename="Card.vue"}
-```vue
-<template>
-  <div class="card">
-    <header v-if="$slots.header"><slot name="header" /></header>
-    <div class="card-body"><slot /></div>
-    <footer v-if="$slots.footer"><slot name="footer" /></footer>
-  </div>
-</template>
-```
-::
-
-::code-wrapper{language="vue"}
-```vue
-<template>
-  <Card>
-    <template #header>
-      <h3>Order #4471</h3>
-    </template>
-
-    <p>3 items, shipping to New York.</p>
-
-    <template #footer>
-      <button>Track Order</button>
-    </template>
-  </Card>
-</template>
-```
-::
-
-`Card` decides the *structure* (a header, a body, a footer); the parent decides the *content* that fills each slot. This is a fundamentally different axis of communication than props — it's the child delegating rendering control back to the parent for specific regions, rather than the parent handing the child raw data to render itself.
-
-## Choosing the Right Communication Mechanism
-
-| Mechanism | Direction | Best for |
-|---|---|---|
-| Props | Parent → child | Passing data a child needs to render or compute with. |
-| Emits | Child → parent | Notifying a parent that something happened (click, submit, delete). |
-| `v-model` | Two-way | A component that wraps and edits a single value the parent owns. |
-| Provide/Inject | Ancestor → any descendant | Deeply-nested shared context (theme, current user, i18n) without prop drilling. |
-| Slots | Parent → child (content, not data) | Letting a parent customize *what renders*, not just what data is used. |
-| Pinia (chapter 10) | Global | State genuinely shared across unrelated parts of the app, not just an ancestor/descendant relationship. |
-
-A common mistake is reaching for provide/inject (or Pinia) as a shortcut past normal prop drilling for state that's really only shared between a parent and its direct child — if the component tree is only one or two levels deep, plain props/emits are simpler to trace and should be preferred; provide/inject earns its complexity when the depth or breadth of prop drilling becomes the actual problem.
-
-## Options API Equivalents
-
-::code-wrapper{language="vue"}
-```vue
-<script>
-export default {
-  provide() {
-    return { theme: this.theme }   // NOTE: loses reactivity unless using computed()
-  },
-  data() {
-    return { theme: 'dark' }
+function onInput(e) {
+  let value = e.target.value
+  // Apply custom modifier if present
+  if (props.modelModifiers.format) {
+    value = formatPhone(value)
   }
+  emit('update:modelValue', value)
 }
 </script>
+
+<template>
+  <input :value="modelValue" @input="onInput" />
+</template>
 ```
 ::
 
-::code-wrapper{language="vue"}
+## Multiple v-model with Named Bindings
+
+::code-wrapper{language="vue" filename="DateRangePicker.vue"}
 ```vue
-<script>
-export default {
-  inject: ['theme'],
-  emits: ['toggle', 'delete'],
-  props: {
-    todo: { type: Object, required: true }
-  },
-  methods: {
-    onToggle() {
-      this.$emit('toggle', this.todo.id)
+<script setup>
+// ── Named v-models: v-model:startDate and v-model:endDate ──
+// Parent: <DateRange v-model:start="start" v-model:end="end" />
+// Each named v-model gets its own prop + modifier prop:
+//   start, startModifiers, end, endModifiers
+
+defineProps({
+  start: String,
+  end: String,
+})
+
+const emit = defineEmits(['update:start', 'update:end'])
+</script>
+
+<template>
+  <input type="date" :value="start" @input="emit('update:start', $event.target.value)" />
+  <input type="date" :value="end" @input="emit('update:end', $event.target.value)" />
+</template>
+```
+::
+
+## Event Payload Validation and v-model on Custom Components
+
+::code-wrapper{language="vue" filename="ValidatedInput.vue"}
+```vue
+<script setup>
+import { ref, computed } from 'vue'
+
+const props = defineProps({
+  modelValue: String,
+  rules: { type: Array, default: () => [] },  // validation rules array
+})
+
+const emit = defineEmits(['update:modelValue', 'validate'])
+
+const error = ref('')
+
+// ── Computed validation — re-runs when modelValue or rules change ──
+const isValid = computed(() => {
+  for (const rule of props.rules) {
+    const result = rule(props.modelValue)
+    if (typeof result === 'string') {
+      error.value = result
+      return false
     }
   }
+  error.value = ''
+  return true
+})
+
+function onInput(e) {
+  const value = e.target.value
+  emit('update:modelValue', value)
+  // Emit validation result after the value update — parent can react
+  emit('validate', isValid.value)
 }
 </script>
+
+<template>
+  <input :value="modelValue" @input="onInput" />
+  <span v-if="error" class="error">{{ error }}</span>
+</template>
 ```
 ::
-
-The Options API's `provide()` option is a common source of the same reactivity-loss bug shown above — `this.theme` inside `provide()` reads the plain current value at component creation time; you must explicitly wrap it (`provide() { return { theme: computed(() => this.theme) } }`) to keep it reactive, which is easy to forget since it looks like ordinary property access.
 
 ## 💡 Tips & Tricks
 
-- **Idiom** — Use Symbol keys instead of string keys for `provide`/`inject` in larger codebases (`export const ThemeKey = Symbol('theme')`) — it avoids silent key collisions between unrelated features that happened to both choose the string `'theme'`, and gives you a single importable source of truth for the key.
-- **Debug** — Vue DevTools doesn't show provide/inject relationships as clearly as props — if a deeply nested component's injected value seems wrong, temporarily log it at both the `provide()` call site and the `inject()` call site to confirm which ancestor is actually supplying it (there could be more than one provider of the same key at different levels).
-- **Idiom** — For a component library's public API, prefer named `v-model`s over an ad-hoc mix of custom props/events for anything that's fundamentally "the value this component represents" — it signals two-way-bindability to the consumer through a syntax they already know from native inputs.
-- **Idiom** — Always provide a default value as `inject`'s second argument (`inject('theme', 'light')`) for anything not guaranteed to have a provider — omitting it throws no error but yields `undefined`, which can propagate confusingly far before surfacing as a bug.
-- **Debug** — When a slot conditionally renders based on whether content was passed (`v-if="$slots.header"`), remember `$slots` reflects the *current* render — a `v-if` on the parent's slot content toggling on and off is exactly the case this check is designed to handle.
+::code-wrapper{language="typescript" filename="tips.ts"}
+```typescript
+// ── 1. provide/inject with factory default ──
+const config = inject(CONFIG_KEY, () => createDefaultConfig(), true)
+// 3rd arg true: treat the 2nd arg as a factory function (like prop defaults)
+
+// ── 2. Reactive provide — pass the ref, not the value ──
+// ✅ provide(KEY, myRef) — child injects the ref, stays reactive
+// ❌ provide(KEY, myRef.value) — child gets a static value, no reactivity
+
+// ── 3. Event naming: kebab-case in template, camelCase in emit ──
+// emit('update:modelValue') → parent listens: @update:model-value
+// Vue auto-converts camelCase emits to kebab-case in templates.
+
+// ── 4. useAttrs() — access fallthrough attrs in script ──
+const attrs = useAttrs()
+// Equivalent to $attrs in template, but accessible in <script setup>.
+// Useful for forwarding attrs to specific children in wrapper components.
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Providing `ref.value` instead of `ref` freezes a snapshot** — Exactly like destructuring a `reactive` object, `provide('key', someRef.value)` hands descendants a plain, disconnected value. Always `provide('key', someRef)` (or a `computed`) so injectors read through to live updates.
-- **`provide`/`inject` isn't reactive by nature — you have to provide reactive sources** — `provide` itself doesn't add reactivity; it's a dependency-injection mechanism. If what you provide is already reactive (a `ref`, a `reactive` object, a `computed`), consumers get live updates; if you provide a plain value, they get a frozen snapshot, full stop.
-- **Multiple providers of the same key shadow each other by proximity, not by "first" or "last" in some global sense** — `inject('theme')` resolves to the *nearest* ancestor that called `provide('theme', ...)`, walking up the component tree from the injecting component — a component can be nested under two different providers of the same key at different levels, and only the closer one wins.
-- **`v-model` without an argument defaults to `modelValue`/`update:modelValue` — mixing it with a manually-named prop called `modelValue` elsewhere is a common naming collision** — if a component already has an unrelated `modelValue` prop for some other purpose, adding standard `v-model` support to the same component requires renaming one of them via a named `v-model` argument to avoid the two colliding.
-- **Emitting an event with the same name as a native DOM event without declaring `emits` can double-fire** — If a component emits a custom `click` event that isn't declared in `emits`, and a parent listens with `@click`, Vue can't distinguish "this is the component's custom emit" from "this is a native DOM click bubbling from inside the component" — declaring `emits: ['click']` tells Vue to treat it purely as a component event, not a native listener.
+::code-wrapper{language="typescript" filename="edge-cases.ts"}
+```typescript
+// ── 1. Injecting a non-provided key returns undefined, not an error ──
+const user = inject(USER_KEY)  // undefined if no provider — always guard
+if (!user) throw new Error('USER_KEY not provided')
+// Or use a default: inject(USER_KEY, ref(null))
+
+// ── 2. provide/inject is NOT reactive across component boundaries ──
+// If you provide a plain value (not a ref), changes to it in the provider
+// do NOT update consumers. Always provide refs or reactive objects.
+
+// ── 3. Prop mutation in child — silent failure in production ──
+// Dev mode: Vue warns "Avoid mutating prop directly."
+// Prod mode: mutation works... until parent re-renders and overwrites it.
+// This causes "works in dev, breaks in prod" bugs.
+
+// ── 4. Event names must match exactly (case-sensitive in emit) ──
+// emit('update:modelValue') + parent @update:model-value → ✅ (auto kebab)
+// emit('updateModelValue') + parent @update-model-value → ❌ (no match)
+
+// ── 5. provide/inject is hierarchical — not broadcast ──
+// Only DESCENDANT components can inject. Siblings cannot.
+// For cross-tree communication, use a Pinia store or event bus pattern.
+
+// ── 6. v-model modifiers prop is always an object ──
+// modelModifiers default is () => ({}) — never undefined.
+// Check with: if (props.modelModifiers.trim) { ... }
+```
+::
 
 ## 🧠 Spot the Bug
 
-A settings sidebar provides the current user to every descendant. A profile badge three levels down never updates when the user's name changes elsewhere in the app.
+A child component mutates a prop object's nested property, but the parent's state doesn't update.
 
-::code-wrapper{language="vue" filename="AppShell.vue"}
+::code-wrapper{language="vue" filename="PropMutationBug.vue"}
 ```vue
 <script setup>
-import { provide, reactive } from 'vue'
-
-const currentUser = reactive({ name: 'Ada', avatar: '/ada.png' })
-
-provide('currentUser', { ...currentUser })
-
-function renameUser(newName) {
-  currentUser.name = newName
-}
+const props = defineProps({ user: Object })
 </script>
+
+<template>
+  <!-- Mutating a nested property of a prop object -->
+  <input v-model="props.user.name" />
+</template>
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`{ ...currentUser }` spreads `currentUser`'s properties into a brand-new plain object at the moment `provide` runs — this is the object-spread equivalent of destructuring, and it produces the same disconnection: a one-time copy with no live link back to the reactive source. When `renameUser` later mutates `currentUser.name`, the spread copy already handed to every descendant via `provide` is untouched.
+Mutating a prop object's nested property *appears* to work (the object is passed by reference), but it violates Vue's one-way data flow. The parent doesn't know the object changed, so it won't trigger any watchers or re-renders in the parent. If the parent later replaces the `user` object (e.g., after a fetch), the child's mutation is silently lost.
 
-::code-wrapper{language="javascript"}
-```javascript
-import { provide, reactive } from 'vue'
+**Fix** — emit the update, parent owns the mutation:
 
-const currentUser = reactive({ name: 'Ada', avatar: '/ada.png' })
+::code-wrapper{language="vue" filename="PropMutationFixed.vue"}
+```vue
+<script setup>
+const props = defineProps({ user: Object })
+const emit = defineEmits(['update:user'])
+</script>
 
-// RIGHT — provide the reactive object itself, not a spread copy
-provide('currentUser', currentUser)
-
-function renameUser(newName) {
-  currentUser.name = newName
-}
+<template>
+  <input
+    :value="user.name"
+    @input="emit('update:user', { ...user, name: $event.target.value })"
+  />
+</template>
 ```
 ::
 
-**The lesson**: any operation that reads properties out of a reactive source and builds a new plain object or array from them — destructuring, spreading, `Object.assign({}, reactiveObj)` — severs the reactive link. `provide`, like function returns and template refs, must be handed the reactive source directly to stay live.
+**The lesson**: props are read-only contracts. Even nested mutations work at the JS level but break Vue's reactivity tracking. Always emit updates — the parent is the single source of truth.
 
 </details>
-
-## Key Takeaways
-
-- Props flow down, events flow up — this remains the default, most traceable communication pattern for parent/child relationships.
-- `v-model` on a component is sugar for a `modelValue` prop plus an `update:modelValue` emit; named arguments (`v-model:first-name`) support multiple independent two-way bindings on one component.
-- `provide`/`inject` avoids prop drilling for deeply-shared context, but only stays reactive if you provide the reactive source itself (a `ref`/`reactive`/`computed`), never an already-unwrapped snapshot.
-- Slots pass template content, not data — a fundamentally different axis of parent/child communication from props, letting a parent control what renders inside a child's structure.
-- `inject` resolves to the nearest matching ancestor `provide` call, not a single global registry — the same key can mean different things at different points in the tree.
-- Reach for provide/inject or Pinia only once plain props/emits genuinely become unwieldy — for shallow trees, explicit prop drilling is easier to trace than implicit injection.

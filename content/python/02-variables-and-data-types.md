@@ -1,20 +1,65 @@
 # 02 — Variables & Data Types
 
-## Names Are Bindings, Not Boxes
-
-In C or Java, a variable is a labeled box holding a value. In Python, a **name is a reference to an object living on the heap**. Assignment binds a name to an object; it never copies the object.
+## The Object Model — Every Value Is a Heap-Allocated `PyObject`
 
 ::code-wrapper{language="python"}
 ```python
-a = [1, 2, 3]
-b = a            # b and a now refer to the SAME list object
-b.append(4)
-print(a)         # [1, 2, 3, 4]  <- a changed too!
-print(a is b)    # True — same object identity
+# Every Python object starts with a C-level PyObject header:
+#   struct PyObject { Py_ssize_t ob_refcnt; PyTypeObject *ob_type; }
+# `id()` returns the address of this struct — that's why `is` is a pointer compare.
+
+import sys, ctypes
+
+# ── Refcount introspection ──
+# Every object tracks how many names/containers reference it.
+# When refcnt hits 0, CPython IMMEDIATELY deallocates (no GC pause needed).
+obj = [1, 2, 3]
+print(sys.getrefcount(obj))   # 2 — `obj` + the temporary arg passed to getrefcount
+
+alias = obj                    # refcnt → 3
+print(sys.getrefcount(obj))   # 3
+
+import weakref
+weak = weakref.ref(obj)       # weakref does NOT increment refcnt
+print(sys.getrefcount(obj))   # still 3 — weak references don't keep objects alive
+
+# ── The cycle-collecting generational GC ──
+# Refcounting can't handle reference cycles. A separate 3-generation GC handles those.
+import gc
+gc.disable()                  # pause GC to observe refcount-only behavior
+
+a = {}; b = {}
+a["link"] = b                 # a → b: b.refcnt = 2 (b + a['link'])
+b["link"] = a                 # b → a: a.refcnt = 2 (a + b['link'])
+del a; del b                   # both refcnts are now 1 — they reference EACH OTHER but nothing references them
+                               # refcounting can't free them — only the cycle GC can
+gc.enable()
+collected = gc.collect()       # manually triggers cycle detection — frees the orphaned cycle
+print(f"GC collected {collected} objects in cycles")
 ```
 ::
 
-This single fact underlies most of Python's "surprising" mutation behavior. Chapter 07 covers the mutable-default-argument and shallow-copy consequences in depth.
+::code-wrapper{language="python"}
+```python
+# ── Production: zero-copy data exchange via the buffer protocol ──
+# Different types (bytes, bytearray, array.array, numpy.ndarray, memoryview)
+# can share raw memory without copying — the buffer protocol exposes the C-level pointer.
+
+import array, struct
+
+# Pack binary data into an array — contiguous C memory, not Python int objects
+buf = array.array('I', [0xDEADBEEF, 0xCAFEBABE, 0x12345678])
+view = memoryview(buf)          # zero-copy view — no data copied, just a pointer + length
+
+# Cast the view to bytes to inspect raw memory layout (little-endian on x86)
+raw = view.cast('B')            # reinterpret as unsigned bytes
+print(bytes(raw[:4]))           # b'\xef\xbe\xad\xde' — DEADBEEF in LE
+
+# Modify through the view — original buffer changes, no copy
+view[0] = 0xFFFFFFFF
+print(buf[0])                   # 4294967295 — mutated through the view
+```
+::
 
 ## Dynamic Typing
 
@@ -46,32 +91,61 @@ int("3") + 3      # 6
 ```
 ::
 
-## The Built-in Scalar Types
-
-| Type | Example | Notes |
-|---|---|---|
-| `int` | `42`, `-7`, `0x1A`, `0b101`, `1_000_000` | **Arbitrary precision** — no overflow, ever. `2 ** 1000` just works. |
-| `float` | `3.14`, `1e10`, `float('inf')` | IEEE-754 double precision (64-bit). Subject to the usual binary floating-point rounding. |
-| `complex` | `3 + 4j` | Native complex number support; `.real` and `.imag` attributes. |
-| `bool` | `True`, `False` | A **subclass of `int`** — `True == 1` and `False == 0` are both `True`. |
-| `str` | `"hello"`, `'hello'`, `"""multi\nline"""` | Immutable sequence of Unicode code points. |
-| `NoneType` | `None` | The one and only instance representing "no value." Not `0`, not `""`, not `undefined`. |
+## Scalar Type Internals — What's Actually in Memory
 
 ::code-wrapper{language="python"}
 ```python
-# int has no fixed width — this does not overflow
-huge = 2 ** 200
-print(huge)
-# 1606938044258990275541962092341162602522202993782792835301376
+import sys, struct, ctypes
 
-# bool is int in disguise
-print(True + True)        # 2
-print(isinstance(True, int))  # True
-print(True == 1, False == 0)  # True True
+# ── int: arbitrary precision via digit arrays ──
+# Small ints (-5..256) are pre-allocated singletons — `is` accidentally works.
+# Large ints are PyLongObject with an array of 30-bit digits.
+print(sys.getsizeof(0))           # 24 bytes — base PyObject overhead
+print(sys.getsizeof(1))           # 28 bytes — one digit
+print(sys.getsizeof(2**30))       # 32 bytes — one 30-bit digit
+print(sys.getsizeof(2**60))       # 36 bytes — two 30-bit digits
+print(sys.getsizeof(2**1000))     # 160 bytes — ~34 digits, no overflow ever
 
-# complex numbers, natively
-z = 3 + 4j
-print(abs(z))              # 5.0  (magnitude, via Pythagorean theorem)
+# The small-int cache is observable — and is a CPython implementation detail, not a guarantee
+a, b = 256, 256
+print(a is b)                     # True — both resolve to the cached singleton
+a, b = 257, 257
+print(a is b)                     # False (usually) — separate allocations outside cache range
+# NEVER use `is` for value comparison — use `==`. `is` on ints is a latent bug.
+
+# ── float: IEEE-754 binary64, 8 bytes ──
+# Sign(1) + exponent(11) + mantissa(52) = 64 bits
+x = -0.0
+packed = struct.pack('>d', x)     # big-endian IEEE-754 bytes
+print(packed.hex())               # 8000000000000000 — sign bit set, rest zero
+print(x == 0.0)                   # True — -0.0 == 0.0 per IEEE-754
+print(struct.pack('>d', 0.0).hex())  # 0000000000000000 — different bit pattern, same value
+
+# float('inf'), float('nan') are valid IEEE-754 special values
+inf = float('inf')
+print(inf > 1e308)                # True
+print(inf + 1 == inf)             # True — infinity absorbs addition
+nan = float('nan')
+print(nan == nan)                 # False! NaN is never equal to itself — use math.isnan()
+print(nan is nan)                 # True — same object, but == is False
+
+# ── bool: a subclass of int with singleton instances ──
+# True and False are the ONLY two bool instances. bool inherits ALL int operations.
+print(isinstance(True, int))      # True — bool IS-A int in the type hierarchy
+print(True + True + True)         # 3 — bool arithmetic produces int
+print(sum([True, False, True]))   # 2 — bools are 1/0 in numeric contexts
+
+# ANTI-PATTERN: using `isinstance(x, int)` to validate a "count" — bools pass!
+def bad_count_validator(x):
+    if isinstance(x, int):
+        return x               # True/False silently accepted as 1/0
+    raise TypeError
+
+# CORRECT: exclude bool explicitly when the distinction matters
+def good_count_validator(x):
+    if isinstance(x, int) and not isinstance(x, bool):
+        return x
+    raise TypeError(f"expected int, got {type(x).__name__}")
 ```
 ::
 

@@ -1,251 +1,338 @@
+---
+title: "20 — Context"
+description: "Cancellation trees, deadlines, request-scoped values, the cancel-leak pattern, and context propagation through API boundaries."
+---
+
 # 20 — Context
 
-The `context` package is Go's mechanism for **cancellation, deadlines, and request-scoped values** across API boundaries and goroutines. It's the standard way to propagate "stop" signals and per-request data.
+The `context` package is Go's mechanism for **cancellation, deadlines, and request-scoped values** across API boundaries and goroutines.
 
-## The Three Responsibilities
-
-1. **Cancellation** — signal goroutines to stop early (user canceled, parent operation done).
-2. **Deadlines** — a time by which the operation should be cancelled.
-3. **Values** — request-scoped data (request ID, user ID) carried through the call chain.
-
-## Creating Contexts
+## The Context Tree
 
 ::code-wrapper{language="go"}
 ```go
-ctx := context.Background()   // the root, never canceled, no deadline
-ctx := context.TODO()         // placeholder when you're not sure which to use
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ Contexts form a TREE:                                                │
+// │                                                                      │
+// │   context.Background()  (root, never canceled, no deadline)         │
+// │       ├── WithCancel(ctx)  → child1 (canceled when cancel() called)│
+// │       ├── WithTimeout(ctx, 5s) → child2 (canceled at 5s)            │
+// │       │       └── WithValue(child2, key, val) → child3              │
+// │       └── WithDeadline(ctx, t) → child4                             │
+// │                                                                      │
+// │ Canceling a parent cancels ALL children (and their children).       │
+// │ Canceling a child does NOT affect the parent or siblings.           │
+// │                                                                      │
+// │ ctx.Done() returns a channel closed when the context is canceled    │
+// │   or times out. ctx.Err() returns the reason.                       │
+// └──────────────────────────────────────────────────────────────────────┘
 
-ctx, cancel := context.WithCancel(parent)
-defer cancel()   // always call cancel to release resources
+func treeDemo() {
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()  // ✅ always cancel to release resources
 
-ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-defer cancel()
+	child, cancelChild := context.WithTimeout(root, 5*time.Second)
+	defer cancelChild()
 
-ctx, cancel := context.WithDeadline(parent, time.Now().Add(5*time.Second))
-defer cancel()
+	grandchild, _ := context.WithValue(child, "userID", 42)
+	// Canceling root cancels child AND grandchild.
+	// Canceling child cancels grandchild but NOT root.
+	_ = grandchild
+}
+```
 
-ctx = context.WithValue(parent, "requestID", "abc123")
-``
-::
-
-Every context is derived from a **parent** — they form a tree. Canceling a parent cancels all its children.
-
-### The `cancel` function
-
-`WithCancel`/`WithTimeout`/`WithDeadline` return a context and a `cancel` function. **Always call `cancel`** (typically `defer cancel()`) to release resources (timers, goroutines) — even if the operation completes normally. Forgetting `cancel` leaks.
-
-## Checking for Cancellation
+## The `cancel` Leak — The #1 Context Bug
 
 ::code-wrapper{language="go"}
 ```go
-select {
-case <-ctx.Done():
-	return ctx.Err()   // context.Canceled or context.DeadlineExceeded
-default:
-	// continue
+// ❌ ANTI-PATTERN: not calling cancel — leaks the timer (and goroutine)
+func leakyFetch(url string) (*http.Response, error) {
+	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	// ⚠️ cancel is discarded — the timer runs for 5 seconds even if the
+	// request completes in 100ms. Each call leaks a timer goroutine.
+	return http.Get(url)  // not using ctx anyway — double bad
 }
 
-// Or in a blocking wait
-<-ctx.Done()
-err := ctx.Err()   // why it was canceled
-``
-::
+// ✅ CORRECT: always defer cancel()
+func goodFetch(ctx context.Context, url string) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()  // ✅ releases the timer immediately when we return
 
-`ctx.Done()` returns a channel that's closed when the context is canceled or times out. `ctx.Err()` returns the reason (`context.Canceled` or `context.DeadlineExceeded`).
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}
 
-## Passing Context to Functions
+// ⚠️ Even if the operation completes successfully, you MUST call cancel.
+// WithTimeout/WithDeadline allocate a timer goroutine. cancel() stops it.
+// Without cancel, the timer lives until the deadline, leaking resources.
+```
 
-The convention: the first parameter is `ctx context.Context`:
+## Cancellation Propagation
 
 ::code-wrapper{language="go"}
 ```go
-func fetchUser(ctx context.Context, id int) (*User, error) {
+// ─── HTTP server: client disconnect cancels the context ───
+func handler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()  // canceled when the client disconnects
+
+	// Pass ctx to downstream calls — they're canceled when the client goes away:
+	user, err := fetchUser(ctx, userID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Println("client disconnected")
+			return
+		}
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	// Long-running operation that respects cancellation:
+	if err := processBatch(ctx, user); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+}
+
+// ─── Downstream function checks ctx.Done() ───
+func fetchUser(ctx context.Context, id int64) (*User, error) {
+	// Quick check before work:
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, ctx.Err()  // already canceled
 	default:
 	}
-	// ... do work, checking ctx periodically ...
-	return db.GetUser(ctx, id)
+
+	req, _ := http.NewRequestWithContext(ctx, "GET",
+		fmt.Sprintf("https://api.example.com/users/%d", id), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch user %d: %w", id, err)
+	}
+	defer resp.Body.Close()
+
+	var u User
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return nil, fmt.Errorf("decode user %d: %w", id, err)
+	}
+	return &u, nil
 }
-``
-::
+```
 
-Libraries that do I/O (database, HTTP, gRPC) accept a `context.Context` and respect cancellation — propagating `ctx` lets a user cancel propagate all the way down to the network call.
-
-## Propagating Cancellation to Goroutines
+## Worker Goroutine with Cancellation
 
 ::code-wrapper{language="go"}
 ```go
-func worker(ctx context.Context, input <-chan int) error {
+func worker(ctx context.Context, input <-chan int, output chan<- int) error {
 	for {
 		select {
 		case v, ok := <-input:
 			if !ok {
-				return nil
+				return nil  // input closed — clean exit
 			}
-			if err := process(ctx, v); err != nil {
+			// Pass ctx to process so it can be canceled mid-computation:
+			result, err := process(ctx, v)
+			if err != nil {
 				return err
 			}
+			select {
+			case output <- result:
+			case <-ctx.Done():
+				return ctx.Err()  // canceled while sending
+			}
 		case <-ctx.Done():
-			return ctx.Err()   // stop when canceled
+			return ctx.Err()  // canceled — exit cleanly
 		}
 	}
 }
-``
-::
 
-Pass `ctx` to spawned goroutines so cancellation propagates. Each goroutine's `select` includes `<-ctx.Done()`.
-
-## HTTP Server Context
-
-`net/http` automatically creates a context per request, canceled when the client disconnects:
-
-::code-wrapper{language="go"}
-```go
-func handler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()   // canceled when the client disconnects
-	select {
-	case <-time.After(5 * time.Second):
-		fmt.Fprintln(w, "done")
-	case <-ctx.Done():
-		log.Println("client disconnected:", ctx.Err())
+// ─── CPU-bound loop with periodic cancellation checks ───
+func computeIntensive(ctx context.Context, data []int) (int, error) {
+	total := 0
+	for i, v := range data {
+		// Check for cancellation every 1000 iterations (cheap):
+		if i%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			default:
+			}
+		}
+		total += expensiveOp(v)
 	}
+	return total, nil
 }
-``
-::
+```
 
-`r.Context()` is the idiomatic way to get cancellation from client disconnects. Pass it to downstream calls (database, APIs) so they're canceled when the client goes away.
-
-## HTTP Client Context
+## Request-Scoped Values — Use Sparingly
 
 ::code-wrapper{language="go"}
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
+// WithValue carries request-scoped data (request ID, trace ID, user ID).
+// ⚠️ Use ONLY for cross-cutting concerns that flow through every function
+// without explicit threading. Prefer explicit parameters for most data.
 
-req, _ := http.NewRequestWithContext(ctx, "GET", "https://example.com", nil)
-resp, err := http.DefaultClient.Do(req)
-if err != nil {
-	// includes context.DeadlineExceeded if it timed out
+// ✅ Type-safe keys (custom type prevents collisions):
+type ctxKey int  // unexported type — other packages can't collide
+
+const (
+	keyRequestID ctxKey = iota
+	keyUserID
+	keyTraceID
+)
+
+func withRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, keyRequestID, id)
 }
-``
-::
 
-`http.NewRequestWithContext` attaches the context — the request is canceled when `ctx` is. This is how you add timeouts to HTTP client calls.
-
-## Request-Scoped Values
-
-::code-wrapper{language="go"}
-```go
-ctx = context.WithValue(ctx, "requestID", "abc123")
-
-// Retrieve
-if v, ok := ctx.Value("requestID").(string); ok {
-	fmt.Println(v)   // "abc123"
+func requestIDFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(keyRequestID).(string); ok {
+		return v
+	}
+	return ""  // no request ID in context
 }
-``
-::
 
-⚠️ **Use values sparingly** — they're not typed (must type-assert), and they encourage hidden coupling. Prefer explicit function parameters for most data. Reserve `WithValue` for cross-cutting concerns (request ID, trace ID) that truly need to flow through every function without explicit threading.
+// ❌ ANTI-PATTERN: using string keys (collision risk)
+// ctx = context.WithValue(ctx, "userID", 42)
+// Another package might use "userID" for something else → collision
 
-### Type-safe value keys
+// ❌ ANTI-PATTERN: using WithValue for business data (not cross-cutting)
+// ctx = context.WithValue(ctx, "user", user)  // pass user as a parameter!
+```
 
-Use a custom type for keys to avoid collisions:
+## Production Pattern — Request ID Middleware
 
 ::code-wrapper{language="go"}
 ```go
 type ctxKey int
-const (
-	keyRequestID ctxKey = iota
-	keyUserID
-)
+const keyRequestID ctxKey = 0
 
-ctx = context.WithValue(ctx, keyRequestID, "abc123")
-id := ctx.Value(keyRequestID).(string)
-``
-::
+func RequestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Generate or extract request ID:
+		reqID := r.Header.Get("X-Request-ID")
+		if reqID == "" {
+			reqID = uuid.NewString()
+		}
 
-Using a custom type prevents string-key collisions with other packages.
+		// Add to context for downstream handlers:
+		ctx := context.WithValue(r.Context(), keyRequestID, reqID)
 
-## Context Tree and Cancellation
+		// Add to response header for client correlation:
+		w.Header().Set("X-Request-ID", reqID)
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Downstream handlers extract the request ID for logging:
+func myHandler(w http.ResponseWriter, r *http.Request) {
+	reqID := r.Context().Value(keyRequestID).(string)
+	log.Printf("[%s] handling request", reqID)
+	// ...
+}
+```
+
+## `errgroup.Group` — Bounded Concurrent Error Handling
 
 ::code-wrapper{language="go"}
 ```go
-ctx, cancel := context.WithCancel(context.Background())
-defer cancel()
+// import "golang.org/x/sync/errgroup"
+// errgroup.Group runs goroutines and returns the FIRST error.
+// It also provides bounded concurrency via SetLimit.
 
-child, cancelChild := context.WithCancel(ctx)
-defer cancelChild()
+func fetchAll(ctx context.Context, urls []string) ([][]byte, error) {
+	g, ctx := errgroup.WithContext(ctx)  // ctx canceled if any goroutine errors
 
-// Canceling ctx cancels child too (parent cancels children)
-// Canceling child doesn't affect ctx or siblings
-``
-::
+	results := make([][]byte, len(urls))
+	g.SetLimit(10)  // at most 10 concurrent goroutines
 
-The tree structure means: cancel a parent, all children are canceled. Cancel a child, only its subtree is affected. This lets a request-scoped context cancel all its sub-operations.
+	for i, url := range urls {
+		i, url := i, url  // capture (pre-1.22; 1.22+ doesn't need this)
+		g.Go(func() error {
+			data, err := fetch(ctx, url)
+			if err != nil {
+				return err  // cancels ctx and stops other goroutines
+			}
+			results[i] = data  // safe — each goroutine writes a distinct index
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err  // first error from any goroutine
+	}
+	return results, nil
+}
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: always `defer cancel()` when using `WithCancel`/`WithTimeout`/`WithDeadline` — it releases resources (timers, goroutines) even if the operation completes normally. Forgetting `cancel` leaks. The `cancel` is also what propagates cancellation to children.
-- **Idiom**: pass `context.Context` as the first parameter of every function that does I/O or can be canceled — `func f(ctx context.Context, ...)`. This is the universal Go convention; libraries expect it. Don't store contexts in structs (they're for flowing through call chains, not fields).
-- **Idiom**: use `context.Background()` at the top level (main, tests) and `r.Context()` in HTTP handlers — `Background` is the root that's never canceled; `r.Context()` is canceled when the client disconnects. Derive timeouts/branches from these.
+- **Idiom**: always `defer cancel()` when using `WithCancel`/`WithTimeout`/`WithDeadline` — releases resources (timers, goroutines) even if the operation completes normally. Forgetting `cancel` leaks.
+- **Idiom**: pass `context.Context` as the FIRST parameter of every function that does I/O or can be canceled — `func f(ctx context.Context, ...)`. This is the universal Go convention; libraries expect it.
+- **Idiom**: use `context.Background()` at the top level (main, tests) and `r.Context()` in HTTP handlers — `Background` is the root; `r.Context()` is canceled when the client disconnects.
 - **Idiom**: include `<-ctx.Done()` in every long-running goroutine's `select` — it provides the exit path when the parent cancels. A goroutine that never checks `ctx.Done()` can't be canceled (leak).
-- **Idiom**: use `WithValue` sparingly and only for cross-cutting concerns (request ID, trace ID) — it's untyped (requires type assertion) and encourages hidden coupling. Prefer explicit parameters for most data. Use a custom key type (`type ctxKey int`) to avoid string-key collisions.
+- **Idiom**: use `WithValue` sparingly and only for cross-cutting concerns (request ID, trace ID) — it's untyped and encourages hidden coupling. Use a custom key type to avoid string collisions.
+- **Idiom**: don't store contexts in structs — they're for flowing through call chains, not fields. A struct with a `ctx` field breaks cancellation propagation.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Forgetting `cancel` leaks**: `WithTimeout`/`WithDeadline` start a timer; not calling `cancel` leaves the timer and context alive until the deadline. `defer cancel()` is the fix.
-- **Don't store contexts in structs**: contexts are for passing through call chains, not for keeping in fields. A struct with a `ctx` field breaks cancellation propagation and is a code smell.
+- **Forgetting `cancel` leaks**: `WithTimeout`/`WithDeadline` start a timer; not calling `cancel` leaves the timer alive until the deadline. `defer cancel()` is the fix.
+- **Don't store contexts in structs**: contexts are for passing through call chains, not for keeping in fields. A struct with a `ctx` field is a code smell.
 - **`ctx.Done()` is a channel, not a value**: `<-ctx.Done()` blocks until canceled; `ctx.Err()` gives the reason. Don't poll `Done()` — `select` on it.
-- **`context.Background()` is never canceled**: it's the root. Don't use it where you want cancellation (e.g., in a handler — use `r.Context()`).
-- **`WithValue` is untyped**: `ctx.Value(key)` returns `any` — you must type-assert. Mismatched key types (string vs custom type) silently miss. Use a custom key type.
-- **Parent cancels children, not vice versa**: canceling a child context doesn't cancel the parent or siblings. The tree flows downward.
-- **Don't pass `nil` context**: `func f(ctx context.Context)` with `ctx == nil` panics in some stdlib functions. Use `context.TODO()` as a placeholder if you don't have one.
-- **`context.TODO()` vs `context.Background()`**: both are never-canceled roots; `TODO` signals "I haven't decided which context to use yet" (for work-in-progress). Use `Background` when you intentionally want the root.
-- **`ctx.Err()` after `Done()`**: `ctx.Err()` returns `context.Canceled` (explicit cancel) or `context.DeadlineExceeded` (timeout). Before `Done()`, it returns `nil`.
-- **Goroutines don't inherit context automatically**: `go f()` doesn't pass the current context — you must pass it explicitly (`go f(ctx)`). A goroutine without a context can't be canceled by the parent's context.
+- **`context.Background()` is never canceled**: it's the root. Derive from it with `WithCancel`/`WithTimeout` for cancellation.
+- **Canceling a parent cancels children**: but canceling a child doesn't affect the parent or siblings. This is the tree structure.
+- **`WithValue` is untyped**: `ctx.Value(key)` returns `any` — must type-assert. Use a custom key type to avoid collisions.
+- **`context.TODO()` vs `context.Background()`**: `TODO` signals "I haven't decided which context to use yet" — it's a placeholder. Use `Background` for the actual root.
+- **Nil context is a panic**: `var ctx context.Context; ctx.Done()` panics. Always pass a real context (Background at minimum).
+- **`errgroup.WithContext` cancels on first error**: `g.Go` returns an error → the derived context is canceled → other goroutines see `<-ctx.Done()` and exit. This is coordinated error handling.
 
-## 🧠 Spot the Bug
-
-A developer sets a timeout on an HTTP call, but it leaks goroutines:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-func fetch(ctx context.Context, url string) (*http.Response, error) {
-	ctx, _ = context.WithTimeout(ctx, 5*time.Second)   // ❌ cancel discarded
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	return http.DefaultClient.Do(req)
+func handler(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// ⚠️ no defer cancel()
+
+	doWork(ctx)
+}
+
+func doWork(ctx context.Context) {
+	time.Sleep(10 * time.Second)
 }
 ```
+
+What's the problem?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`context.WithTimeout` returns a context and a `cancel` function. The developer discards `cancel` (`ctx, _ = ...`), so it's never called. This leaks the timer (and the context's resources) — the timer runs for 5 seconds even if the HTTP call returns immediately, and the context isn't cleaned up until the deadline.
+The `cancel` function is never called — the timer leaks.
 
-For a single call, the leak is brief (5 seconds). But in a hot loop (thousands of calls per second), the leaked timers accumulate — each holds a goroutine and a timer until its deadline.
+Even though `doWork` runs for 10 seconds (exceeding the 5-second timeout), the timer goroutine started by `WithTimeout` lives until one of:
+1. `cancel()` is called (never — it's discarded)
+2. The deadline elapses (5 seconds)
 
-The fix — `defer cancel()`:
+So the timer stops after 5 seconds (the deadline fires). But this is by luck — if the work had completed in 100ms, the timer would linger for 4.9 seconds, wasting resources.
+
+The real problem: if `handler` is called thousands of times per second (it's an HTTP handler), each call starts a timer. Without `cancel`, thousands of timer goroutines accumulate.
+
+The fix:
 
 ```go
-func fetch(ctx context.Context, url string) (*http.Response, error) {
+func handler(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()   // release the timer immediately when fetch returns
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	return http.DefaultClient.Do(req)
+	defer cancel()  // ✅ releases the timer immediately when handler returns
+
+	doWork(ctx)
 }
 ```
-::
-Now the timer is stopped as soon as `fetch` returns (whether the call succeeded, failed, or timed out), preventing the leak.
-
-**The lesson**: always `defer cancel()` for `WithTimeout`/`WithDeadline`/`WithCancel`. Discarding `cancel` leaks the timer and context resources. `go vet` and `govet` (with the `lostcancel` analyzer) flag this.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now create contexts (`Background`/`TODO`/`WithCancel`/`WithTimeout`/`WithDeadline`/`WithValue`), propagate cancellation through call chains and goroutines, use `r.Context()` in handlers and `NewRequestWithContext` in clients, check `<-ctx.Done()`, and use values sparingly with custom key types — while always `defer cancel()`ing to prevent leaks. Next: packages and modules.
+→ [21 — Packages & Modules](/go/21-packages-and-modules) — module versioning, `internal/` enforcement, workspaces, and versioning semantics.

@@ -1,267 +1,183 @@
-# 17 — Modern CSS Features (2023+)
+---
+title: "17 — Modern CSS (2023+): Nesting, :has(), Layers, Style Queries & color-mix"
+description: "Native nesting with &, :has() the parent selector, cascade layer precedence, container style queries, color-mix() for derived palettes, text-wrap balance/pretty, scroll-driven animations, and view transitions. Code-first reference for post-2023 CSS."
+---
 
-Modern CSS (2023+) added features that replace JavaScript and preprocessor workarounds — nesting, `:has()`, cascade layers, container style queries, and more.
+# 17 — Modern CSS (2023+): Nesting, :has(), Layers, Style Queries & color-mix
 
-## Native Nesting
+CSS post-2023 replaced JavaScript and preprocessor workarounds with native features. Nesting, `:has()` (the parent selector), cascade layers, container style queries, `color-mix()`, and scroll-driven animations are now shipping in all major browsers. This chapter covers the features that change how you architect CSS.
 
-::code-wrapper{language="css"}
-```css
-.card {
-	padding: 1rem;
-
-	& .title { font-size: 1.5rem; }
-	& p { line-height: 1.6; }
-
-	&:hover { background: #f0f0f0; }
-
-	@media (min-width: 768px) {
-		& { padding: 2rem; }
-	}
-}
-```
-::
-Native nesting (like Sass) — `&` refers to the parent selector. Browser support: 2023 in all major browsers.
-
-### Rules
-
-- `&` is the parent selector. Without `&`, the nested selector is a descendant (`.title` = `& .title`).
-- Use `&` for compound selectors: `&:hover`, `&.active`, `& + .sibling`.
-- Nesting `@media` inside a rule is allowed.
-- Specificity: `& .title` has the specificity of `.card .title`.
+## Native Nesting — `&` is the parent selector
 
 ::code-wrapper{language="css"}
 ```css
 .card {
-	&.active { ... }     /* .card.active */
-	& > .title { ... }   /* .card > .title */
-	&:not(.open) { ... } /* .card:not(.open) */
+  padding: 1rem;
+  & .title { font-size: 1.5rem; }      /* = .card .title (descendant) */
+  & p { line-height: 1.6; }            /* = .card p */
+  &:hover { background: #f0f0f0; }     /* = .card:hover (compound — needs &) */
+  &.active { border-color: red; }      /* = .card.active */
+  @media (min-width: 768px) { & { padding: 2rem; } }  /* nesting @media inside rules */
 }
+/* Without &, a nested selector is a DESCENDANT: .title inside .card = .card .title.
+   Use & for compound selectors (&:hover, &.active, & + .sibling). */
 ```
 ::
-## `:has()` (the "parent selector")
 
-`:has()` selects an element based on its *descendants* — the long-requested "parent selector":
+## `:has()` — the relational pseudo-class (parent selector)
 
 ::code-wrapper{language="css"}
 ```css
-/* Style a card differently if it has an image */
-.card:has(img) { padding-top: 0; }
+/* Style a card based on its DESCENDANTS — the long-requested "parent selector". */
+.card:has(img) { padding-block-start: 0; }           /* card with an image */
+.form-section:has(.error) { border-color: red; }      /* section containing an error */
+li:has(ul) { font-weight: bold; }                    /* list item that has a nested list */
+.card:not(:has(img)) { padding: 2rem; }               /* card WITHOUT an image */
+h2:has(+ p) { margin-block-end: 0; }                 /* heading directly followed by a paragraph */
 
-/* A form section with an error */
-.form-section:has(.error) { border-color: red; }
-
-/* A list item that has a nested list (a parent) */
-li:has(ul) { font-weight: bold; }
-
-/* A card that *doesn't* have an image */
-.card:not(:has(img)) { padding: 2rem; }
-
-/* A paragraph directly followed by a heading (no margin) */
-h2:has(+ p) { margin-bottom: 0; }
+/* Specificity: :has() adds its ARGUMENT's specificity. .card:has(.error) = .card + .error = (0,2,0). */
 ```
 ::
-`:has()` is a relational pseudo-class — it checks if the element has matching descendants/siblings. Powerful for state-based styling without JS classes.
 
-### `:has()` specificity
-
-`:has()` adds its argument's specificity, not `:has()`'s. `.card:has(.error)` has the specificity of `.card` + `.error` (0,2,0).
-
-## Cascade Layers (`@layer`)
-
-`@layer` creates explicit layers, controlling which styles win regardless of specificity:
+### Anti-pattern: :has() rule ordering
 
 ::code-wrapper{language="css"}
 ```css
-@layer reset, base, components, utilities;
-
-@layer reset {
-	* { margin: 0; padding: 0; box-sizing: border-box; }
-}
-
-@layer base {
-	body { font-size: 16px; line-height: 1.6; }
-}
-
-@layer components {
-	.btn { padding: 0.5rem 1rem; }
-}
-
-@layer utilities {
-	.text-center { text-align: center; }
-}
+/* If the :has() rule comes BEFORE the base rule and specificity is equal, source order may bite.
+   Put the :has() override AFTER the base for clarity. */
+.form-section { border: 2px solid #ccc; }              /* base FIRST */
+.form-section:has(.error) { border-color: red; }      /* override AFTER — clear intent */
 ```
 ::
-The layer order (declared first) sets priority — later layers win. `utilities` (last) beats `components` beats `base` beats `reset`, *regardless of specificity*. A `.text-center` utility (0,1,0) beats a `.btn .text-center` component (0,2,0) because `utilities` is a later layer.
 
-### Unlayered styles
-
-Unlayered styles (outside any `@layer`) win over layered styles. This lets you add overrides without a layer:
+## Cascade Layers — `@layer` for precedence control
 
 ::code-wrapper{language="css"}
 ```css
-@layer base, components;
-@layer base { p { color: black; } }
-@layer components { .card p { color: #333; } }
-p { color: darkgray; }  /* unlayered, wins over both layers */
+@layer reset, base, components, utilities;  /* order declared FIRST → fixes precedence */
+
+@layer reset { * { box-sizing: border-box; margin: 0; } }
+@layer base { body { font-size: 16px; } }
+@layer components { .btn { padding: 0.5rem 1rem; } }
+@layer utilities { .text-center { text-align: center; } }
+
+/* Layer order sets precedence: utilities (last) beats components beats base, REGARDLESS of specificity.
+   A .text-center utility (0,0,1,0) beats .btn .text-center (0,0,2,0) because utilities is a later layer. */
+/* Unlayered rules beat ALL layered rules — the escape hatch. */
 ```
 ::
-### When to use layers
-
-- Large codebases with multiple sources (framework, components, utilities).
-- When you want utilities to always beat components (Tailwind-style).
-- To manage third-party CSS (put it in an early layer, your code in a later layer).
 
 ## Container Style Queries (2023+)
 
 ::code-wrapper{language="css"}
 ```css
+/* Query a container's custom PROPERTIES (not just size). A card adapts to its container's --theme. */
 @container style(--theme: dark) {
-	.card { background: #222; color: #eee; }
+  .card { background: #222; color: #eee; }
 }
+/* You can query custom properties, not standard properties (like color). Support: Chrome 111+, Safari 17.4+. */
 ```
 ::
-Style queries check a container's *custom properties* (not just size). A card can adapt its style based on its container's `--theme` variable — without the card itself reading the variable.
 
-Support: Chrome 111+, Safari 17.4+. Still newer than size queries — check support.
-
-## `accent-color`
+## `color-mix()` — derive shades at runtime
 
 ::code-wrapper{language="css"}
 ```css
-input[type="checkbox"], input[type="radio"] {
-	accent-color: #3498db;   /* colors the native control */
+:root {
+  --primary: oklch(0.62 0.18 245);
+  --primary-hover: color-mix(in oklch, var(--primary) 85%, white);   /* lighter shade */
+  --primary-press: color-mix(in oklch, var(--primary) 75%, black);   /* darker shade */
+  /* No preprocessor needed — derive tints/shades from one token, at runtime, cascading. */
 }
 ```
 ::
-A simple way to theme native form controls (checkboxes, radios, range sliders, progress bars) without custom widgets.
-
-## `color-mix()`
-
-::code-wrapper{language="css"}
-```css
---button-bg: color-mix(in srgb, var(--primary) 80%, white);
---hover-bg: color-mix(in srgb, var(--primary) 60%, black);
-```
-::
-`color-mix()` mixes two colors — useful for deriving shades/tints from a base color. No preprocessor needed.
 
 ## `text-wrap: balance` / `pretty`
 
 ::code-wrapper{language="css"}
 ```css
-h1, h2 { text-wrap: balance; }   /* balance line lengths */
-p { text-wrap: pretty; }         /* avoid orphans (single word on last line) }
+h1, h2 { text-wrap: balance; }  /* even line lengths for headings — no manual <br> */
+p { text-wrap: pretty; }        /* avoid a single word on the last line (orphans) */
+/* Free typography polish. The browser optimizes wrapping. */
 ```
 ::
-- `balance` — evens out line lengths (for headings).
-- `pretty` — avoids a single word on the last line (for paragraphs).
 
-No `max-width` tuning needed — the browser optimizes the wrapping.
-
-## `aspect-ratio` (recap)
-
-::code-wrapper{language="css"}
-```css
-.img { aspect-ratio: 16/9; width: 100%; object-fit: cover; }
-```
-::
 ## Scroll-Driven Animations (2023+)
 
 ::code-wrapper{language="css"}
 ```css
-@keyframes progress {
-	from { transform: scaleX(0); }
-	to { transform: scaleX(1); }
-}
+@keyframes progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .progress-bar {
-	animation: progress linear;
-	animation-timeline: scroll(root block);
+  animation: progress linear;
+  animation-timeline: scroll(root block);  /* driven by scroll position, no JS */
+  transform-origin: inline-start;
 }
+/* A progress bar that fills as you scroll — pure CSS. Support: Chrome 115+, Safari 17.4+. */
 ```
 ::
-`animation-timeline: scroll(...)` drives an animation by scroll position — a progress bar that fills as you scroll, parallax, scroll-reveal — all without JS. Support: Chrome 115+, Safari 17.4+ (partial).
 
 ## View Transitions API
 
 ::code-wrapper{language="css"}
 ```css
-::view-transition-old(root),
-::view-transition-new(root) {
-	animation-duration: 0.3s;
-}
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.3s; }
 ```
 ::
+
 ::code-wrapper{language="javascript"}
 ```javascript
-document.startViewTransition(() => { /* DOM update */ });
+document.startViewTransition(() => { /* DOM update — API captures old/new, animates between them */ });
 ```
 ::
-View transitions smoothly animate between two DOM states — cross-fade, or named transitions for shared elements. Support: Chrome 111+, Safari 17.4+ (partial). For SPAs, this replaces many animation libraries.
 
-## 💡 Tips & Tricks
-
-- **Idiom**: use `:has()` for state-based styling without JS — `.card:has(.error) { border-color: red; }` styles a card based on its contents, no JS class toggling. The "parent selector" finally exists; use it for forms, lists, conditional layouts.
-- **Idiom**: use cascade layers (`@layer`) to control precedence in large codebases — declare the layer order upfront (`@layer reset, base, components, utilities`), then later layers win regardless of specificity. This makes utilities reliably beat components, and manages third-party CSS.
-- **Idiom**: use native nesting (`&`) for component-scoped styles — `.card { & .title { ... } &:hover { ... } }` is Sass-like nesting, native in 2023+. Reduces repetition and keeps related styles together. Use `&` for compound selectors (`&:hover`, `&.active`).
-- **Idiom**: use `color-mix()` to derive shades/tints from a base color — `color-mix(in srgb, var(--primary) 80%, white)` gives a lighter shade, no preprocessor. Useful for hover/active states from a single token.
-- **Idiom**: use `text-wrap: balance` for headings and `pretty` for paragraphs — `balance` evens heading line lengths (no manual `<br>`), `pretty` avoids a single word on the last paragraph line. Free typography polish, no JS.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **`:has()` is not a performance problem anymore**: early concerns about `:has()` performance have been addressed in modern browsers. But very deep `:has()` (checking many descendants) can still be slower than a simple class — use judiciously.
-- **`:has()` can't be nested inside itself in all engines**: `:has(:has(...))` has limited support. Avoid deep nesting.
-- **Cascade layer order is set by the *first* declaration**: `@layer reset, base;` sets the order. Later `@layer base { ... }` adds to the existing `base` layer, in its position. If you `@layer` without a prior order declaration, the order is by first appearance.
-- **Unlayered styles beat layered styles**: a rule outside any `@layer` wins over all layered rules (regardless of specificity). This is why you might put utilities in a layer (to be beatable by unlayered overrides) or keep your custom CSS unlayered.
-- **Nesting `&` specificity**: `& .title` = `.card .title` (0,2,0). `&.active` = `.card.active` (0,2,0). The `&` is substituted, so the specificity is the combined selector's.
-- **Nesting without `&` is a descendant**: `.title` inside `.card` (no `&`) = `.card .title`. Use `&` for compound (`&:hover`, `&.active`) and when you need the parent at a non-start position (`& + .sibling`).
-- **Container style queries check *custom properties***: `@container style(--theme: dark)` checks the container's `--theme` variable. You can't query standard properties (like `color`) in a style query — only custom properties.
-- **`text-wrap: balance` on long text**: it's for short text (headings). On long paragraphs, `balance` can look worse (uneven). Use `pretty` for paragraphs.
-- **View transitions need a DOM update**: `document.startViewTransition(() => { /* update DOM */ })` — the callback updates the DOM, and the API animates between the old and new states. The old state is captured before the callback.
-- **Scroll-driven animations are newer**: `animation-timeline: scroll()` is Chrome 115+/Safari 17.4+. Provide a JS fallback for older browsers (or accept no animation).
-
-## 🧠 Spot the Bug
-
-A developer uses `:has()` to style a form section with an error, but it's not working:
+## `accent-color` — theme native form controls
 
 ::code-wrapper{language="css"}
 ```css
-.form-section:has(.error) {
-	border-color: red;
-}
-.form-section {
-	border: 2px solid #ccc;
+input[type="checkbox"], input[type="radio"], input[type="range"] {
+  accent-color: var(--primary);  /* colors the native control — no custom widget needed */
 }
 ```
 ::
 
-What's wrong?
+## 💡 Tips & Tricks
+
+- **Idiom**: `:has()` for state-based styling without JS — `.card:has(.error) { border-color: red; }` styles a card based on its contents, no JS class toggling. The "parent selector" finally exists.
+- **Idiom**: `@layer` to control precedence in large codebases — `@layer reset, base, components, utilities;` makes utilities reliably beat components regardless of specificity. The end of `!important` wars.
+- **Idiom**: native nesting (`&`) for component-scoped styles — reduces repetition, keeps related styles together. Use `&` for compound selectors (`&:hover`, `&.active`); without `&` it's a descendant.
+- **Idiom**: `color-mix(in oklch, var(--c) 80%, white)` to derive tints/shades from one token — no preprocessor, cascades, runtime.
+- **Idiom**: `text-wrap: balance` for headings, `pretty` for paragraphs — free typography polish, no JS or manual `<br>`.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`:has()` specificity = its argument's specificity**: `.card:has(.error)` = (0,2,0), `.card:has(#x)` = (0,1,1,0). A `:has()` with an ID inside is ID-strength.
+- **`:has()` can't be nested in itself in all engines**: `:has(:has(...))` has limited support. Avoid deep nesting.
+- **Cascade layer order is set by the FIRST declaration**: `@layer reset, base;` fixes the order. Later `@layer base { }` appends to the existing `base` in its position.
+- **Unlayered rules beat layered rules**: a rule outside any `@layer` wins over all layered rules regardless of specificity. Layer everything or nothing for predictable precedence.
+- **Nesting `&` specificity is the combined selector's**: `& .title` = `.card .title` (0,2,0). `&.active` = `.card.active` (0,2,0).
+- **Container style queries query custom properties only**: `@container style(--theme: dark)` works; `@container style(color: red)` doesn't.
+- **`text-wrap: balance` is for short text** (headings): on long paragraphs, it can look worse. Use `pretty` for paragraphs.
+- **Scroll-driven animations and view transitions are newer** (2023+): provide a JS fallback or accept no animation on older browsers.
+
+## 🧠 Spot the Bug
+
+::code-wrapper{language="css"}
+```css
+.form-section:has(.error) { border-color: red; }
+.form-section { border: 2px solid #ccc; }
+```
+::
 
 <details>
 <summary>Answer</summary>
 
-Specificity and source order. `.form-section:has(.error)` has specificity (0,2,0) — `.form-section` (0,1,0) + `.error` (0,1,0) inside `:has()`. `.form-section` alone is (0,1,0). So the `:has()` rule has *higher* specificity and should win...
-
-The actual bug is **source order**: `.form-section:has(.error)` comes *before* `.form-section`. Both set `border-color` (well, the second sets `border`, which is a shorthand that includes `border-color`). `.form-section { border: 2px solid #ccc; }` sets `border-color: #ccc` (via the shorthand). Since `.form-section:has(.error)` is (0,2,0) and `.form-section` is (0,1,0), the `:has()` rule wins — so `border-color: red` should apply...
-
-Hmm, actually the `:has()` rule *should* work. Let me reconsider. The issue might be that `.error` is not a *direct* child but a deeper descendant — `:has()` checks all descendants, so that's fine.
-
-The real bug: **the second rule `.form-section { border: 2px solid #ccc; }` comes *after* the `:has()` rule, and the `border` shorthand *resets* `border-color`**. Even though `.form-section:has(.error)` has higher specificity (0,2,0 > 0,1,0), the shorthand `border` in the second rule sets `border-color: #ccc` with specificity (0,1,0). Specificity wins over source order, so the `:has()` rule (0,2,0) should still win...
-
-Actually, the `:has()` rule *does* win by specificity. So if it's "not working," the likely cause is **`:has()` browser support** (older browsers) or **the `.error` element isn't a descendant of `.form-section`** (maybe a sibling or in a different container).
-
-The most pragmatic fix — ensure source order and specificity are clear:
+The `:has()` rule comes *before* the base rule. `.form-section:has(.error)` has specificity (0,2,0) — it beats `.form-section` (0,1,0) by specificity, so it *should* win regardless of order. But the base rule uses the `border` *shorthand*, which resets `border-color` to `#ccc`. If the `:has()` rule only sets `border-color` (not the full shorthand), and the base comes after, the shorthand's `border-color: #ccc` could interfere at equal or higher specificity. The clearer fix: put the base rule first, the `:has()` override after — source order expresses intent even when specificity would win:
 
 ```css
-.form-section { border: 2px solid #ccc; }  /* base, first */
-.form-section:has(.error) { border-color: red; }  /* override, after */
+.form-section { border: 2px solid #ccc; }           /* base first */
+.form-section:has(.error) { border-color: red; }   /* override after */
 ```
-::
-And verify in a `:has()`-supporting browser (Chrome 105+, Safari 15.4+, Firefox 121+) that `.error` is a descendant.
 
-**The lesson**: when `:has()` "doesn't work," check (1) browser support, (2) that the matched element is actually a descendant, (3) source order — put the `:has()` rule *after* the base rule. Specificity (0,2,0 > 0,1,0) should win, but source order is a clearer intent.
+Also verify `:has()` browser support (Chrome 105+, Safari 15.4+, Firefox 121+) and that `.error` is actually a descendant of `.form-section`.
 
 </details>
-
-## Summary
-
-You can now use native nesting (`&`), `:has()` (the parent selector), cascade layers (`@layer`), container style queries (`@container style(--var: ...)`), `accent-color`, `color-mix()`, `text-wrap: balance`/`pretty`, scroll-driven animations, and view transitions — the modern CSS features that replace JS and preprocessor workarounds. Next: architecture and methodology.

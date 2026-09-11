@@ -1,392 +1,299 @@
-# 06 — Classes & Objects
+---
+title: Scala — Classes, Traits & the Object Model
+description: Deep-dive into Scala's OOP: trait linearization, super calls, self types, open classes, universal equality, and the JVM representation of traits and objects.
+---
 
-## Class Basics
+# 06 — Classes, Traits & the Object Model
+
+## Class Construction — Constructor & Fields
 
 ::code-wrapper{language="scala"}
 ```scala
-// Class definition
-class Person(val name: String, val age: Int) {
-  // Constructor body (optional)
-  require(age >= 0, "age must be non-negative")
-  
-  def greet(): String = s"Hello, I'm $name"
-  
-  def birthday(): Unit = {
-    // this.age += 1  // ERROR: val is immutable
+// Scala 3: primary constructor parameters are in the class signature.
+// `val` params become fields with getters. Bare params are local to constructor body.
+final class Server(val host: String, val port: Int, config: Config):
+  require(port > 0 && port <= 65535, s"invalid port: $port")  // precondition → IllegalArgumentException
+  require(host.nonEmpty, "host must not be empty")
+
+  // Constructor body — runs during instantiation, before any method can be called
+  private val startTime: Long = System.nanoTime()  // private field, no setter
+  private var requestCount: Long = 0L              // private mutable, no external setter
+
+  // Public method returning a field (JIT inlines this to a direct field read)
+  def uptimeMs: Long = (System.nanoTime() - startTime) / 1_000_000
+
+  // Synchronized increment — but NOT atomic! See concurrency chapter.
+  def recordRequest(): Unit = synchronized {
+    requestCount += 1
   }
-}
 
-// Instantiate
-val alice = Person("Alice", 30)
-println(alice.name)         // "Alice"
-println(alice.greet())      // "Hello, I'm Alice"
+  // Override toString — auto-generated for case classes, manual for regular classes
+  override def toString: String = s"Server($host:$port, requests=$requestCount)"
 
-// Constructor parameters become properties (with val/var)
-val bob = Person("Bob", 25)
-// bob.name is accessible
-// bob.age is accessible
+// Instantiation — no 'new' needed in Scala 3 for classes with companion apply
+val server = Server("api.example.com", 443, defaultConfig)
+// JVM: Server.<init>(String, int, Config) — parameters are fields, not a separate init block
 ```
 ::
 
-## Constructor Parameters
-
-Constructor parameters can be:
-- `val` — immutable property
-- `var` — mutable property
-- No prefix — just parameter (not accessible outside)
+## Traits & Linearization — The Diamond Resolution
 
 ::code-wrapper{language="scala"}
 ```scala
-class Dog(
-  val name: String,           // public immutable property
-  var age: Int,               // public mutable property
-  breed: String               // private parameter (not accessible)
-) {
-  // Can access breed inside class
-  def describe() = s"$name is a $breed"
-}
+// Traits can have concrete methods, fields, and initialization logic.
+// When multiple traits are mixed in, Scala uses LINEARIZATION to resolve
+// method dispatch — rightmost trait wins, `super` calls chain up.
 
-val d = Dog("Buddy", 5, "Golden")
-println(d.name)              // "Buddy"
-d.age = 6                    // OK, age is var
-// d.breed                   // ERROR: not accessible
-```
-::
-
-## Methods
-
-::code-wrapper{language="scala"}
-```scala
-class Calculator {
-  // Method with parameters
-  def add(a: Int, b: Int): Int = a + b
-  
-  // Method with default parameters
-  def multiply(a: Int, b: Int = 2): Int = a * b
-  
-  // Method with no return (returns Unit)
-  def print_result(x: Int): Unit = println(x)
-  
-  // Varargs method
-  def sum(nums: Int*): Int = nums.sum
-  
-  // Method returning Unit (can omit return type)
-  def sideEffect() { println("doing something") }
-}
-
-val calc = Calculator()
-calc.add(2, 3)              // 5
-calc.multiply(5)            // 10
-calc.multiply(5, 3)         // 15
-calc.sum(1, 2, 3)           // 6
-```
-::
-
-## Objects (Singletons)
-
-`object` defines a singleton (one instance per JVM):
-
-::code-wrapper{language="scala"}
-```scala
-object Config {
-  val api_url = "https://api.example.com"
-  val timeout = 5000
-  
-  def load_from_file(path: String): Config = {
-    // load and return config
-    this
-  }
-}
-
-// Access (no instantiation needed)
-println(Config.api_url)     // "https://api.example.com"
-
-// Comparison
-val c1 = Config
-val c2 = Config
-c1 eq c2                    // true (same instance)
-```
-::
-
-## Companion Objects
-
-Pair a class with an object of the same name:
-
-::code-wrapper{language="scala"}
-```scala
-class User(val id: Int, val name: String)
-
-object User {
-  def newWithId(id: Int, name: String): User = new User(id, name)
-  
-  def adminUser(): User = new User(0, "Admin")
-}
-
-// Use companion for factory methods
-val user = User.newWithId(1, "Alice")
-val admin = User.adminUser()
-```
-::
-
-## Inheritance
-
-::code-wrapper{language="scala"}
-```scala
-// Parent class
-class Animal(val name: String) {
-  def speak(): String = "sound"
-  def move(): String = "moving"
-}
-
-// Child class
-class Dog(name: String, val breed: String) extends Animal(name) {
-  // Override method
-  override def speak(): String = s"$name barks!"
-  
-  // New method
-  def fetch(): String = "fetching ball"
-}
-
-val dog = Dog("Buddy", "Golden")
-println(dog.speak())        // "Buddy barks!"
-println(dog.move())         // "moving" (inherited)
-
-// Type checking
-dog.isInstanceOf[Animal]    // true
-dog.asInstanceOf[Animal].speak()  // "Buddy barks!"
-```
-::
-
-## Traits (Interfaces + Mixins)
-
-Traits provide interface-like contracts and code reuse:
-
-::code-wrapper{language="scala"}
-```scala
-// Trait (interface)
-trait Drawable {
-  def draw(): String
-}
-
-trait Named {
-  val name: String
-  def getName(): String = name
-}
-
-// Implement multiple traits
-class Circle(val name: String, val radius: Double) extends Drawable with Named {
-  override def draw(): String = s"Drawing $name circle with radius $radius"
-}
-
-val circle = Circle("Red", 5.0)
-println(circle.draw())      // "Drawing Red circle with radius 5.0"
-println(circle.getName())   // "Red"
-```
-::
-
-### Trait methods
-
-Traits can have concrete methods:
-
-::code-wrapper{language="scala"}
-```scala
-trait Logger {
+trait Logger:
   def log(msg: String): Unit = println(s"[LOG] $msg")
-  def error(msg: String): Unit = println(s"[ERROR] $msg")
-}
 
-class App extends Logger {
-  def run() = {
-    log("Starting app")
-    error("Something went wrong")
-  }
-}
+trait TimestampedLogger extends Logger:
+  override def log(msg: String): Unit =
+    super.log(s"${System.currentTimeMillis()} | $msg")  // super → next in linearization
 
-App().run()
+trait JsonLogger extends Logger:
+  override def log(msg: String): Unit =
+    super.log(s"""{"msg":"$msg"}""")          // super → next in linearization
+
+// Linearization order (right-to-left, depth-first):
+//   new Logger with TimestampedLogger with JsonLogger
+//   → JsonLogger → TimestampedLogger → Logger → AnyRef → Any
+//
+// JsonLogger.log calls super.log → TimestampedLogger.log calls super.log → Logger.log
+// Result: {"msg":"1234567890 | original message"}  (JSON wrapping timestamp wrapping plain)
+
+class App extends TimestampedLogger with JsonLogger:
+  def run(): Unit = log("starting")
+// App linearization: App → JsonLogger → TimestampedLogger → Logger → AnyRef
+// 'super' in JsonLogger.log → TimestampedLogger.log (NOT Logger.log directly)
+
+// ❌ ANTI-PATTERN: relying on trait init order for mutable state
+trait A:
+  val baseValue: Int = 10
+trait B extends A:
+  val doubled: Int = baseValue * 2         // baseValue might be 0 if init order is wrong!
+class C extends B:
+  override val baseValue = 20              // B.doubled initialized BEFORE C.baseValue → doubled = 0!
+
+// ✅ CORRECT: use lazy val or def for derived values
+trait BSafe extends A:
+  lazy val doubled: Int = baseValue * 2    // evaluated on first access, after C is fully init
 ```
 ::
 
-## Abstract Classes
+## Self Types — Dependency Without Inheritance
 
 ::code-wrapper{language="scala"}
 ```scala
-abstract class Shape {
-  def area(): Double  // abstract method (no implementation)
-  
-  def describe(): String = s"Area: ${area()}"  // concrete method
-}
+// Self type: "I require this trait to be mixed in, but I don't inherit from it."
+// Unlike `extends`, self type does NOT make the trait a subtype.
+// The compiler ensures any class mixing in this trait ALSO has the required trait.
 
-class Rectangle(val width: Double, val height: Double) extends Shape {
-  override def area(): Double = width * height
-}
+trait HasConfig:
+  def config: Config
 
-val rect = Rectangle(4, 5)
-println(rect.area())        // 20.0
-println(rect.describe())    // "Area: 20.0"
+trait HasDatabase:
+  def db: Database
 
-// Can't instantiate abstract class
-// val s = Shape()  // ERROR
+// Service requires both Config and Database at mixin time
+trait UserService:
+  this: HasConfig & HasDatabase =>          // intersection self type (Scala 3)
+  def findUser(id: Long): Option[User] =
+    db.query(config.userQuery, id)          // can call config and db — guaranteed present
+
+// ❌ class BadService extends UserService  // ERROR: doesn't have HasConfig & HasDatabase
+// ✅ Must mix in all required traits:
+class ProdService extends UserService with HasConfig with HasDatabase:
+  val config: Config = loadConfig()
+  val db: Database = Database.connect(config.dbUrl)
+
+// Use self types for:
+//   - Dependency injection (compile-time enforcement)
+//   - Cake pattern — traits that require other traits from the same "cake"
+//   - Avoiding inheritance when you only need access to methods, not IS-A relationship
 ```
 ::
 
-## Visibility Modifiers
+## `open` Classes & Sealed Hierarchies — Scala 3
 
 ::code-wrapper{language="scala"}
 ```scala
-class MyClass {
-  public val public_var = 1     // accessible everywhere
-  val default_var = 2            // package-scoped (default public in Scala)
-  protected val protected_var = 3  // accessible in subclasses
-  private val private_var = 4    // not accessible outside class
-  
-  private def private_method() = "private"
-  protected def protected_method() = "protected"
-  def public_method() = "public"
-}
+// Scala 3: classes are CLOSED by default (cannot be subclassed outside the file).
+// Must explicitly mark `open` to allow inheritance.
+
+open class BaseRepository[T](val tableName: String):
+  def find(id: Long): Option[T] = ???      // subclasses CAN override
+  def save(t: T): Unit = ???
+
+class UserRepository extends BaseRepository[User]("users"):
+  override def find(id: Long): Option[User] = ???  // open allows this
+
+// sealed: all subtypes MUST be in the same file → exhaustiveness checking
+sealed trait Result[+T]:
+  def map[U](f: T => U): Result[U] = this match
+    case Ok(v)    => Ok(f(v))
+    case Err(msg) => Err(msg)               // sealed → compiler knows these are the only cases
+
+object Result:
+  case class Ok[T](value: T) extends Result[T]
+  case class Err(msg: String) extends Result[Nothing]  // Nothing is bottom type → covariant OK
+
+// Adding a new subtype (e.g., Pending) → ALL match expressions get compile errors
+// This is the strongest form of "closed for modification" — the compiler enforces it.
 ```
 ::
 
-## Case Classes (Special Classes)
-
-Case classes are optimized for data containers:
+## Universal Equality & `canEqual`
 
 ::code-wrapper{language="scala"}
 ```scala
-// Case class (like data class in Kotlin)
-case class Person(name: String, age: Int)
+// Scala 3: `==` calls `equals()`. For case classes, equals is auto-generated (field-by-field).
+// For regular classes, you must override equals yourself — and do it correctly.
 
-// Auto-generated: copy, equals, hashCode, toString
-val alice = Person("Alice", 30)
-val bob = alice.copy(name = "Bob")
+final class Money(val cents: Long) extends Equals:
+  override def equals(other: Any): Boolean = other match
+    case that: Money =>
+      that.canEqual(this) && this.cents == that.cents
+    case _ => false
 
-alice == Person("Alice", 30)    // true (value equality)
-alice.toString                  // "Person(Alice,30)"
+  // canEqual: allows subclasses to opt out of equality with parent
+  override def canEqual(other: Any): Boolean = other.isInstanceOf[Money]
 
-// Pattern matching support
-alice match {
-  case Person(n, a) => s"$n is $a"
-}
+  // hashCode MUST be consistent with equals — same cents → same hashCode
+  override def hashCode: Int = cents.hashCode
+
+  // Scala 3: derive equals/hashCode via @alpha or use case classes instead
+// Money(100) == Money(100) → true (value equality, not reference)
+
+// ❌ ANTI-PATTERN: equals without hashCode (breaks HashMap/HashSet)
+// If a.equals(b) then a.hashCode must == b.hashCode — ALWAYS.
+// Case classes get this right for free. Prefer case classes for value types.
+
+// Scala 3: `==` is universal equality. `eq` is reference equality (only for AnyRef).
+//   Some(1) == Some(1)    → true  (case class equals)
+//   Some(1) eq Some(1)    → false (different object instances)
 ```
 ::
 
-## Class Methods (Static)
-
-Define "static" methods in companion objects:
+## Companion Objects & Factory Patterns
 
 ::code-wrapper{language="scala"}
 ```scala
-class Math private() {
-  // private constructor prevents instantiation
-}
+// Companion: class + object with same name in same file.
+// Object can access private members of class and vice versa.
 
-object Math {
-  def add(a: Int, b: Int): Int = a + b
-  def subtract(a: Int, b: Int): Int = a - b
-}
+final class Connection private (val url: String, val timeoutMs: Int):
+  def execute(query: String): Result[Array[Byte]] = ???
 
-Math.add(2, 3)              // 5
-// new Math()  // ERROR: private constructor
+object Connection:
+  // Smart constructor — validates input, returns Either for failure
+  def create(url: String, timeoutMs: Int = 5000): Either[String, Connection] =
+    if url.isBlank then Left("URL must not be empty")
+    else if timeoutMs < 0 then Left("timeout must be non-negative")
+    else Right(new Connection(url, timeoutMs))  // private constructor — only companion can call
+
+  // Factory from config — common pattern for dependency injection
+  def fromConfig(cfg: Config): Connection =
+    new Connection(cfg.getString("db.url"), cfg.getInt("db.timeout"))
+
+  // Apply with default — sugar for Connection(...)
+  def apply(url: String): Connection = new Connection(url, 5000)
+
+// Usage:
+Connection.create("jdbc:postgres://...") match
+  case Right(conn) => conn.execute("SELECT 1")
+  case Left(err)   => println(s"Failed: $err")
+
+// Private constructor: `new Connection(...)` is illegal outside the companion
+// This is the standard "smart constructor" pattern — control all instantiation.
+```
+::
+
+## Abstract Types & Path-Dependent Types
+
+::code-wrapper{language="scala"}
+```scala
+// Abstract type member — declared in trait, implemented in subclass.
+// Unlike generics, the type is "attached" to the instance, not the call site.
+
+trait Database:
+  type Conn                            // abstract type — each DB impl defines its own connection type
+  def connect(): Conn
+  def query(c: Conn, sql: String): Result[Array[Byte]]
+
+class PostgresDB extends Database:
+  type Conn = java.sql.Connection      // concrete: Conn is a JDBC Connection
+  def connect(): Conn = DriverManager.getConnection(url)
+  def query(c: Conn, sql: String): Result[Array[Byte]] = ???
+
+class RedisDB extends Database:
+  type Conn = redis.api.Connection     // completely different type
+  def connect(): Conn = Redis.connect()
+  def query(c: Conn, sql: String): Result[Array[Byte]] = ???
+
+// Path-dependent: db.Conn is specific to the db instance's type
+def use(db: Database)(conn: db.Conn): Unit = ???  // conn must match THIS db's Conn type
+// This prevents passing a Postgres connection to a Redis database — type-safe at compile time!
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-**Use `val` by default for properties**: Immutability is safer. Switch to `var` only if needed.
+**`final class` by default**: Mark classes `final` unless you intend them to be subclassed. The JIT can inline through final methods — measurable perf win.
 
-**Constructor parameters with `val`/`var` are concise**: `class User(val id: Int, val name: String)` is cleaner than storing separately.
-
-**Companion objects for factories**: Cleaner than multiple constructors.
+**`enum` for ADTs in Scala 3**: Replace `sealed trait + case class/object` with `enum` for simpler syntax.
 
 ::code-wrapper{language="scala"}
 ```scala
-case class User(id: Int, name: String)
-object User {
-  def fromString(s: String): User = {
-    val Array(id, name) = s.split(",")
-    User(id.toInt, name)
-  }
-}
+enum Tree[+T]:
+  case Leaf(value: T)
+  case Node(left: Tree[T], right: Tree[T])
+// Auto-generates: apply, unapply, toString, equals, hashCode, ordinal, values
+// All variants are in the same file → exhaustiveness checking works
 ```
 ::
 
-**Traits for behavior, classes for data**: Traits mix in behavior; classes represent entities.
-
-**Use sealed traits for exhaustiveness checking**: Compiler verifies all cases handled.
-
-::code-wrapper{language="scala"}
-```scala
-sealed trait Result
-case class Success(value: String) extends Result
-case class Failure(error: String) extends Result
-
-def handle(r: Result) = r match {
-  case Success(v) => println(v)
-  case Failure(e) => println(e)
-  // Compiler warns if cases missing
-}
-```
-::
+**`selectDynamic` / `applyDynamic` for structural DSLs**: Scala 3's `Selectable` trait enables dynamic member access for building fluid DSLs.
 
 ## ⚠️ Edge Cases & Gotchas
 
-**`val` in constructor doesn't make it a property**: `class C(x: Int)` — `x` is only a parameter. Use `class C(val x: Int)` to make it accessible.
-
-**Multiple inheritance with traits can cause diamond problem**: Scala's linearization resolves it, but be careful with trait ordering.
-
-**Abstract methods in traits require implementation in concrete class**: Forgetting to override is a compile error.
-
-**Visibility `private` is per-file, not per-class**: Use `private[this]` to restrict to just the instance.
+**Trait `val` initialization order**: Traits initialize in linearization order. A `val` in a trait that depends on an abstract `val` from a later trait will see `0`/`null`.
 
 ::code-wrapper{language="scala"}
 ```scala
-class C {
-  private val x = 1
-  def f(other: C) = other.x  // OK (private within class)
-}
+trait Metric:
+  val name: String                        // abstract
+  val fullName = s"metric.$name"          // evaluated during trait init — name may be null!
+
+class CpuMetric extends Metric:
+  val name = "cpu"                        // initialized AFTER Metric's fullName → fullName = "metric.null"
+
+// Fix: use lazy val, def, or pre-initialized fields:
+class CpuMetricSafe extends:
+  val name = "cpu"                         // pre-init: name set BEFORE Metric trait initializes
+with Metric
 ```
 ::
 
-**Constructor side effects run on instantiation**: Be careful with expensive operations in class body.
+**`equals` on mutable fields**: If `equals` depends on a `var`, storing the object in a `HashSet` then mutating the field makes it unfindable — the hash bucket no longer matches.
 
-## 🧠 Spot the Bug
+**`object` is lazy**: The singleton is initialized on first access, not at class load. Side effects in `object` bodies run at an unpredictable time.
 
-What does this print?
+## 🧠 Quick Quiz
 
-::code-wrapper{language="scala"}
-```scala
-class Counter(private var count: Int = 0) {
-  def increment() = count += 1
-  def get = count
-}
-
-val c = Counter()
-c.increment()
-c.increment()
-println(c.get)
-```
-::
+What's the linearization of `class X extends A with B with C` where `B extends A` and `C extends A`?
 
 <details>
 <summary>Answer</summary>
 
-Prints `2`.
+Linearization is computed right-to-left, depth-first, removing duplicates (keeping the rightmost occurrence):
 
-Here's why:
-- Counter created with count=0
-- increment() adds 1 twice, so count=2
-- get returns 2
+1. Start with `X`
+2. `C` → `C` linearizes to `C, A` (C extends A)
+3. `B` → `B` linearizes to `B, A`
+4. `A` → `A`
 
-**The lesson**: `private var` is mutable within the class only. External code can't access or modify it.
+Assembling right-to-left: `X, C, B, A, AnyRef, Any`
 
+So `super` in `C` calls `B`, `super` in `B` calls `A`. The rightmost trait (`C`) gets the "last word" in override chains. This is why trait ordering matters — `with B with C` vs `with C with B` produce different linearizations and different `super` call chains.
 </details>
-
-## Key Takeaways
-
-- Classes have constructor parameters; use `val`/`var` to make them properties.
-- `object` defines a singleton.
-- Companion object pairs with class for factory methods.
-- Inheritance: `class Child extends Parent`.
-- Traits: `trait T` and mix with `class C extends T1 with T2`.
-- Case classes: auto-generated copy, equals, hashCode, toString.
-- Abstract classes for abstract methods; traits for mixins.
-- Visibility: `public` (default), `protected`, `private[this]`.

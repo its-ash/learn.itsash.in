@@ -1,445 +1,357 @@
-# 03 — Functions
+---
+title: Scala — Functions, Closures & Compile-Time Desugaring
+description: Production deep-dive into function types, closure capturing, tail-call optimization, by-name vs by-need, currying, and the JVM representation of Scala functions.
+---
 
-## Function Definition
+# 03 — Functions, Closures & Compile-Time Desugaring
 
-Define functions with `def`:
+## Function Types — JVM Representation
 
 ::code-wrapper{language="scala"}
 ```scala
-def add(a: Int, b: Int): Int = a + b
+// Function1[A, B] is a trait with a single abstract method:
+//   trait Function1[-A, +B]:
+//     def apply(v1: A): B
+//
+// At the bytecode level: a lambda (x => x * 2) compiles to:
+//   1. A synthetic class extending Function1$mcII$sp (specialized for Int→Int)
+//      → if no specialization: plain Function1 with Object apply(Object)
+//   2. INVOKEDYNAMIC in Scala 3 (SAM closure via LambdaMetafactory)
+//      → JVM generates the impl class at runtime, same as Java lambdas
 
-def greet(name: String) = s"Hello, $name"  // type inferred from body
+val double: Int => Int = x => x * 2       // → Function1[Int, Int]
+// double.apply(5)                         // → the actual call
+// double(5)                               // sugar for .apply(5)
 
-def noReturn(): Unit = println("side effect")
+// Function types up to Function22 exist as named traits.
+// Beyond 22 params: Scala 3 uses FunctionXXL (uses Object[] internally, not typed)
+val complex: (Int, String, Boolean) => Double = (i, s, b) => if b then i * s.length.toDouble else 0.0
 
-// Multi-statement function
-def factorial(n: Int): Int = {
-  if (n <= 1) 1 else n * factorial(n - 1)
-}
+// Scala 3: dependent function types — return type depends on input value
+trait Codec:
+  type Repr
+  def encode(r: Repr): Array[Byte]
+def process(c: Codec)(r: c.Repr): Array[Byte] = c.encode(r)  // c.Repr is path-dependent
 ```
 ::
 
-### Best practice: annotate parameters and return type
-
-Makes intent clear and catches errors at compile time.
+## Closures — Capture Semantics & Allocation
 
 ::code-wrapper{language="scala"}
 ```scala
-// Good — explicit types
-def divide(a: Int, b: Int): Int = {
-  require(b != 0, "divisor must not be zero")
-  a / b
-}
+// A closure captures free variables from the enclosing scope.
+// Captured vars → stored as fields in the lambda's synthetic class.
+// Captured vals → may be inlined or stored as fields.
 
-// OK in local scope where type is obvious
-val double: Int => Int = x => x * 2
+def makeCounter(start: Int): () => Int =
+  var count = start                        // mutable — captured by reference
+  () =>                                    // closure captures 'count' as a field
+    count += 1                             // reads AND writes the captured var
+    count
+
+val counter = makeCounter(0)               // 1 allocation: the closure object
+counter()                                  // → 1, reads/writes count field on closure
+counter()                                  // → 2
+
+// ❌ ANTI-PATTERN: closure capturing 'this' in a hot loop
+class Processor:
+  def process(items: List[Int]): List[Int] =
+    items.map(x => transform(x))           // closure captures 'this' → allocates per call
+  def transform(x: Int): Int = x * 2
+
+// ✅ CORRECT: hoist method reference, avoid closure allocation
+class Processor:
+  def process(items: List[Int]): List[Int] =
+    items.map(transform)                   // method reference: eta-expansion creates ONE Function1
+  def transform(x: Int): Int = x * 2       //   reused across all elements (in Scala 3 with -opt)
 ```
 ::
 
-## Parameters
-
-### Default parameters
+## Higher-Order Functions — Real-World Pipeline
 
 ::code-wrapper{language="scala"}
 ```scala
-def greet(name: String, greeting: String = "Hello"): String =
-  s"$greeting, $name"
+// Production-grade data pipeline: streaming log analysis with function composition
+import scala.util.Using
 
-greet("Alice")              // "Hello, Alice"
-greet("Alice", "Hi")       // "Hi, Alice"
+final case class LogEntry(ts: Long, level: String, msg: String)
+
+object LogPipeline:
+  // Function composition with andThen / compose — builds a single pipeline
+  type LogFilter = LogEntry => Boolean
+  type LogTransform = LogEntry => LogEntry
+
+  val errorFilter: LogFilter = _.level == "ERROR"
+  val enrich: LogTransform = e => e.copy(msg = s"[svc] ${e.msg}")
+
+  // andThen: (f andThen g)(x) = g(f(x)) — left-to-right reading
+  // compose: (f compose g)(x) = f(g(x)) — right-to-left
+  val pipeline: LogFilter = errorFilter
+  val transform: LogTransform = enrich
+
+  def process(entries: List[LogEntry]): List[String] =
+    entries
+      .filter(pipeline)                    // LogFilter: LogEntry => Boolean
+      .map(transform)                      // LogTransform: LogEntry => LogEntry
+      .map(_.msg)                          // extract message
+      .scanLeft("")(_ + "\n" + _)          // accumulate with prefix
+      .drop(1)                             // remove initial ""
+
+  // Partial application for reusable, configurable components
+  def filterByLevel(level: String): LogFilter = _.level == level
+  val warnFilter = filterByLevel("WARN")   // partial application → reusable filter
 ```
 ::
 
-### Named arguments
+## Currying & Multiple Parameter Lists
 
 ::code-wrapper{language="scala"}
 ```scala
-def createUser(name: String, age: Int, email: String): User =
-  User(name, age, email)
+// Multiple parameter lists enable:
+//   1. Type inference boundary — first list informs second list's types
+//   2. Trailing block syntax for DSL-style
+//   3. Partial application without placeholder syntax
 
-createUser("Alice", 30, "alice@example.com")  // positional
-createUser(name = "Alice", email = "alice@example.com", age = 30)  // named (order doesn't matter)
-createUser(email = "alice@example.com", name = "Alice", age = 30)
-```
-::
+// Type inference: first param list determines type parameter for second
+def mapExactly[A, B](list: List[A])(f: A => B): List[B] = list.map(f)
+mapExactly(List(1, 2, 3))(x => x * 2)      // A=Int inferred from first list; f: Int=>B, no annotation needed
+// With single list: mapExactly(List(1,2,3), x => x * 2) — type of x unknown, must annotate
 
-### Variadic parameters (varargs)
+// DSL-style trailing block:
+def withResource[R](acquire: => R)(release: R => Unit)(body: R => Unit): Unit =
+  val r = acquire
+  try body(r) finally release(r)
 
-Use `*` for variable-length arguments:
-
-::code-wrapper{language="scala"}
-```scala
-def sum(nums: Int*): Int = nums.sum
-
-sum(1, 2, 3)        // 6
-sum()               // 0
-
-// Pass array as varargs with :_*
-val arr = Array(1, 2, 3)
-sum(arr: _*)        // 6
-```
-::
-
-## Function Values (Lambdas)
-
-Assign functions to variables:
-
-::code-wrapper{language="scala"}
-```scala
-val double: Int => Int = x => x * 2
-double(5)           // 10
-
-val add: (Int, Int) => Int = (a, b) => a + b
-add(2, 3)           // 5
-
-// Multiple statements
-val compute: Int => Int = { x =>
-  val squared = x * x
-  squared + 1
-}
-compute(5)          // 26
-```
-::
-
-### Type inference in lambdas
-
-Scala infers parameter types from context:
-
-::code-wrapper{language="scala"}
-```scala
-val nums = List(1, 2, 3, 4, 5)
-nums.map(x => x * 2)              // type of x inferred as Int
-nums.filter(_ > 2)                // _ is placeholder
-```
-::
-
-## Higher-Order Functions
-
-Functions that take or return other functions.
-
-::code-wrapper{language="scala"}
-```scala
-// Takes a function as parameter
-def apply(fn: Int => Int, x: Int): Int = fn(x)
-
-apply(x => x * 2, 5)              // 10
-apply(_ + 1, 5)                   // 6
-
-// Returns a function
-def makeMultiplier(factor: Int): Int => Int = {
-  x => x * factor
+withResource(openSocket())(_.close()) { socket =>
+  socket.write("data")                     // reads as: "with resource [acquired] [released] do { body }"
 }
 
-val times3 = makeMultiplier(3)
-times3(5)                         // 15
-
-// Function composition
-def compose[A, B, C](f: A => B, g: B => C): A => C = {
-  a => g(f(a))
-}
+// Curry for dependency injection — first list: config, second list: payload
+def httpRequest(config: ClientConfig)(url: String, body: Array[Byte]): Response =
+  ???
+val apiCall = httpRequest(prodConfig)      // partially applied — reusable with different URLs
+apiCall("/users", payload)
 ```
 ::
 
-## Collections with Functions
-
-Map, filter, reduce, and more:
+## By-Name Parameters (`=> T`) vs By-Need (`=> T` with `lazy`)
 
 ::code-wrapper{language="scala"}
 ```scala
-val nums = List(1, 2, 3, 4, 5)
+// By-name: the expression is re-evaluated EVERY time it's referenced
+def trace[A](msg: => String)(value: A): A =
+  println(msg)                             // eval #1
+  println(msg)                             // eval #2 — runs the expression AGAIN
+  value
 
-// map — transform each element
-nums.map(_ * 2)                   // List(2, 4, 6, 8, 10)
-nums.map(x => s"Number: $x")      // List("Number: 1", ...)
+trace({ println("evaluating"); "msg" })(42)
+// Prints: evaluating, "msg", evaluating, "msg", returns 42
 
-// filter — keep matching elements
-nums.filter(_ > 2)                // List(3, 4, 5)
-nums.filter(x => x % 2 == 0)      // List(2, 4)
+// By-need: evaluate once, cache (memoize)
+def traceOnce[A](msg: => String)(value: A): A =
+  lazy val m = msg                         // evaluated once, cached
+  println(m)
+  println(m)
+  value
 
-// reduce / fold — accumulate into single value
-nums.reduce(_ + _)                // 15
-nums.fold(0)(_ + _)               // 15 (fold takes initial value)
-nums.fold("")((acc, x) => acc + x.toString)  // "12345"
+traceOnce({ println("evaluating"); "msg" })(42)
+// Prints: evaluating, "msg", "msg", returns 42
 
-// find — first matching element
-nums.find(_ > 3)                  // Some(4)
-nums.find(_ > 10)                 // None
+// ❌ ANTI-PATTERN: by-name in a loop — O(n) re-evaluation
+def retry[T](max: Int)(op: => T): T =
+  var attempt = 0
+  while attempt < max do
+    try return op                          // op re-evaluated each iteration (correct here)
+    catch case e if attempt < max - 1 => attempt += 1
+  throw new RuntimeException("exhausted retries")
 
-// exists / forall
-nums.exists(_ > 4)                // true
-nums.forall(_ > 0)                // true
-
-// flatMap — map then flatten
-List(1, 2, 3).flatMap(x => List(x, x * 2))  // List(1, 2, 2, 4, 3, 6)
-
-// partition — split by condition
-nums.partition(_ % 2 == 0)        // (List(2, 4), List(1, 3, 5))
+// ✅ CORRECT for parameter validation: by-name with lazy for expensive defaults
+def loadConfig(path: => String = defaultPath()): Config =
+  lazy val p = path                        // evaluate once even if referenced multiple times
+  Using.resource(io.Source.fromFile(p)) { _.mkString }
 ```
 ::
 
-## For Comprehensions
-
-Syntactic sugar for map/filter/flatMap chains:
-
-::code-wrapper{language="scala"}
-```scala
-// With generators (map)
-for (x <- 1 to 5) yield x * 2     // Vector(2, 4, 6, 8, 10)
-
-// With guards (filter)
-for (x <- 1 to 10 if x % 2 == 0) yield x  // Vector(2, 4, 6, 8, 10)
-
-// Multiple generators (flatMap)
-for {
-  x <- 1 to 3
-  y <- 1 to 3
-} yield (x, y)                    // Vector((1,1), (1,2), ..., (3,3))
-
-// With bindings
-for {
-  x <- 1 to 5
-  squared = x * x
-  if squared > 10
-} yield squared                   // Vector(16, 25)
-
-// Equivalent to:
-(1 to 5)
-  .map(x => (x, x * x))
-  .filter { case (x, sq) => sq > 10 }
-  .map { case (x, sq) => sq }
-```
-::
-
-## Closures
-
-Functions capture variables from enclosing scope:
-
-::code-wrapper{language="scala"}
-```scala
-def makeAdder(x: Int): Int => Int = {
-  y => x + y      // y is parameter, x is captured
-}
-
-val add5 = makeAdder(5)
-add5(3)           // 8
-
-val add10 = makeAdder(10)
-add10(3)          // 13
-```
-::
-
-## Pattern Matching in Functions
-
-Use pattern matching as function body:
-
-::code-wrapper{language="scala"}
-```scala
-def describeNumber: Int => String = {
-  case 0 => "zero"
-  case 1 => "one"
-  case n if n > 0 => "positive"
-  case _ => "negative"
-}
-
-describeNumber(0)     // "zero"
-describeNumber(5)     // "positive"
-describeNumber(-3)    // "negative"
-```
-::
-
-## Recursive Functions
-
-Use `@tailrec` for tail-recursive optimization:
+## Tail Recursion — `@tailrec` & Loop Desugaring
 
 ::code-wrapper{language="scala"}
 ```scala
 import scala.annotation.tailrec
 
-def countdown(n: Int): Unit = {
-  if (n > 0) {
-    println(n)
-    countdown(n - 1)  // tail call
-  }
-}
+// @tailrec: compiler verifies the recursive call is in tail position.
+// If NOT tail-recursive → COMPILE ERROR (not a warning).
+// Tail calls are rewritten to a while loop → no stack frame growth, O(1) stack.
 
-// Explicitly mark tail recursion
 @tailrec
-def factorial(n: Int, acc: Int = 1): Int = {
-  if (n <= 1) acc else factorial(n - 1, n * acc)
-}
+def sumTo(n: Int, acc: Long = 0): Long =
+  if n <= 0 then acc else sumTo(n - 1, acc + n)  // tail call → rewritten to loop
 
-factorial(5)         // 120
+// ❌ NOT tail-recursive — the multiplication happens AFTER the recursive call returns
+def factorial(n: Int): Long =
+  if n <= 1 then 1 else n * factorial(n - 1)     // n * (result of recursion) — NOT tail position
+// @tailrec on this → COMPILE ERROR: "not in tail position"
+
+// ✅ Tail-recursive factorial with accumulator
+@tailrec
+def factorial(n: Int, acc: Long = 1): Long =
+  if n <= 1 then acc else factorial(n - 1, acc * n)
+
+// Mutually recursive: @tailrec does NOT work across functions
+// → Use a loop with a state machine, or trampoline (TailRec from Cats)
+def trampoline[T](f: () => Either[() => T, T]): T =
+  @tailrec
+  def loop(current: () => Either[() => T, T]): T =
+    current() match
+      case Left(next) => loop(next)        // tail call within loop — OK
+      case Right(result) => result
+  loop(f)
 ```
 ::
 
-The `@tailrec` annotation ensures Scala optimizes the call; if the function isn't tail-recursive, compilation fails.
-
-## Partially Applied Functions
-
-Apply some arguments, get a function back:
+## Partial Functions — `PartialFunction[A, B]`
 
 ::code-wrapper{language="scala"}
 ```scala
-def add(a: Int, b: Int, c: Int): Int = a + b + c
+// PartialFunction: defined only for a subset of inputs.
+// Has isDefinedAt(x: A): Boolean + apply(x: A): B
+// Used in collect, actor receive, route definitions.
 
-val add5and10 = add(5, 10, _: Int)  // partially applied
-add5and10(3)                         // 18
+val parseStatus: PartialFunction[Int, String] =
+  case 200 => "OK"
+  case 404 => "Not Found"
+  case 500 | 502 | 503 => "Server Error"
 
-// Or convert to function
-val addCurried: (Int, Int, Int) => Int = (a, b, c) => a + b + c
-val add5 = addCurried(5, _, _)
-add5(3, 4)                          // 12
+parseStatus(200)                          // → "OK"
+parseStatus.isDefinedAt(404)              // → true
+parseStatus.isDefinedAt(418)              // → false
+
+// collect = filter + map in one pass (only processes defined elements)
+List(200, 404, 418, 500).collect(parseStatus)  // → List("OK", "Not Found", "Server Error")
+
+// Compose partial functions: orElse (fallback), andThen (chaining)
+val httpOnly: PartialFunction[Int, String] =
+  case c if c / 100 == 4 || c / 100 == 5 => "HTTP Error"
+val all = parseStatus.orElse(httpOnly).orElse { case _ => "Unknown" }
+
+// Real-world: Akka/Pekko actor receive is a PartialFunction[Any, Unit]
+val receive: PartialFunction[Any, Unit] =
+  case "ping" => sender ! "pong"
+  case n: Int if n > 0 => process(n)
+  case _ => // ignore
 ```
 ::
 
-## Curried Functions
-
-Functions with multiple parameter lists:
+## For-Comprehension — Desugared to `flatMap` / `map` / `filter`
 
 ::code-wrapper{language="scala"}
 ```scala
-// Curried version
-def addCurried(a: Int)(b: Int)(c: Int): Int = a + b + c
+// For-comprehension is NOT a loop — it's syntactic sugar for flatMap/map/withFilter
+// Works on ANY type with these methods (List, Option, Future, Try, IO, etc.)
 
-val result = addCurried(1)(2)(3)    // 6
+for
+  x <- List(1, 2, 3)                      // generator → flatMap
+  if x % 2 == 0                           // guard   → withFilter
+  y = x * x                               // binding → map (assigns intermediate)
+  z <- List(y, y + 1)                     // generator → flatMap
+yield (x, y, z)
 
-// Partial application (auto-generated)
-val add1 = addCurried(1)
-val add1and2 = add1(2)
-val result = add1and2(3)            // 6
+// Exact desugaring (what the compiler generates):
+List(1, 2, 3)
+  .withFilter(_ % 2 == 0)
+  .flatMap { x =>
+    val y = x * x                         // binding becomes a map to pair (x, y)
+    List(y, y + 1).map { z => (x, y, z) }
+  }
+// → List((2, 4, 4), (2, 4, 5))
 
-// vs uncurried
-def addUncurried(a: Int, b: Int, c: Int): Int = a + b + c
+// Monadic chaining across Option:
+def compute(a: Option[Int], b: Option[Int]): Option[Int] =
+  for
+    x <- a                                // if a is None → entire comprehension is None
+    y <- b                                // if b is None → short-circuits to None
+    if x + y > 0                          // guard
+  yield x + y                             // map
+
+// Equivalent:
+a.flatMap(x => b.withFilter(y => x + y > 0).map(y => x + y))
 ```
 ::
 
-Use curried functions for:
-- Clearer syntax with type inference
-- Partial application patterns
-- Higher-order function factories
-
-## By-Name Parameters
-
-Pass expressions that are evaluated later (lazy):
+## Extension Methods — Compile-Time Injection
 
 ::code-wrapper{language="scala"}
 ```scala
-def lazyPrint(msg: => String): Unit = println(msg)
+// Extension methods in Scala 3 — no implicit conversion overhead
+extension (s: String)
+  def slug: String = s.toLowerCase.replaceAll("[^a-z0-9]+", "-").stripSuffix("-")
+  def truncate(max: Int): String = if s.length <= max then s else s.take(max - 1) + "…"
 
-lazyPrint("hello")                 // arg is an expression, not pre-evaluated
-lazyPrint({
-  println("computing...")
-  "result"
-})                                // prints "computing..." then "result"
+"Hello World!!".slug                      // → "hello-world"
+"A very long string here".truncate(10)    // → "A very lon…"
 
-// Vs strict parameters
-def strictPrint(msg: String): Unit = println(msg)
-strictPrint({
-  println("computing...")
-  "result"
-})                                // prints "computing..." then "result"
+// Extension on generic type with context bound:
+extension [A](list: List[A])
+  def freqMap: Map[A, Int] = list.groupMapReduce(identity)(_ => 1)(_ + _)
+
+List("a", "b", "a", "c", "a").freqMap     // → Map("a" -> 3, "b" -> 1, "c" -> 1)
+
+// Extension compiles to a static method with the receiver as first param.
+// "Hello".slug → StringExt$.MODULE$.slug$extension("Hello")
+// No wrapper object, no implicit conversion — zero runtime cost.
 ```
 ::
-
-Use by-name for:
-- Lazy evaluation
-- Control structures (if you're building DSLs)
-- Expensive computations only when needed
-
-## Implicit Parameters
-
-Not covered here (advanced), but functions can accept implicit parameters that are automatically injected by the compiler.
 
 ## 💡 Tips & Tricks
 
-**Use `@tailrec` for recursive functions**: Let the compiler verify tail calls. It'll error if optimization isn't possible, forcing a rewrite.
+**Eta-expansion for method-to-function**: `def f(x: Int) = x * 2` → `f _` or just `f` (Scala 3) converts to `Int => Int`. One `Function1` allocation.
 
-**Placeholder syntax for simple lambdas**: `list.map(_ * 2)` is cleaner than `list.map(x => x * 2)` for single-argument functions.
-
-**Function values as DSL builders**: Higher-order functions are perfect for building domain-specific languages.
+**`inline` for zero-cost higher-order functions**: Scala 3 `inline def` eliminates the lambda allocation entirely — the function body is spliced at the call site.
 
 ::code-wrapper{language="scala"}
 ```scala
-def repeat(n: Int)(fn: => Unit): Unit = {
-  for (_ <- 1 to n) fn
-}
-repeat(3) { println("hello") }
+inline def mapInRange(start: Int, end: Int)(inline f: Int => Int): List[Int] =
+  var i = start
+  var acc = List.empty[Int]
+  while i <= end do
+    acc = f(i) :: acc                      // f is inlined here — NO lambda object
+    i += 1
+  acc.reverse
+// mapInRange(1, 5)(_ * 2) → the while loop with `i * 2` inlined, zero Function1 allocation
 ```
 ::
 
-**Type bounds in functions**: Use `[A <: Number]` for generic functions with constraints.
+**`Function1` composition avoids intermediate collections**: `(f andThen g andThen h)(list)` when combined with `list.map` fuses into a single pass if the functions are `@inline`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-**By-name parameters are re-evaluated each call**: If you pass `() => { expensive() }` as a by-name parameter, it runs again on each access. Use `lazy val` if you want memoization.
+**Closure captures `var` by reference, not value**: If you mutate the captured var after creating the closure, the closure sees the new value. This is the source of classic loop-capture bugs.
 
 ::code-wrapper{language="scala"}
 ```scala
-def once(fn: => Unit): Unit = { fn; fn }
-once(println("hi"))    // prints "hi" twice
-
-def onceLazy(fn: => Unit): Unit = {
-  lazy val result = fn
-  result; result
+var x = 0
+val closures = (1 to 3).map { i =>
+  () => (x, i)                             // captures x (the var) and i (the val)
 }
+x = 99
+closures.map(_())                          // → List((99,1), (99,2), (99,3)) — x is 99 everywhere!
+// i is fine — it's a loop val, each iteration gets its own binding
 ```
 ::
 
-**Pattern matching exhaustiveness**: In function bodies, Scala checks if all cases are handled. Missing a case is a compile error (usually).
+**`@tailrec` fails on try/catch**: A `try` block prevents tail-call optimization because the exception handler needs the stack frame. Use `Either`/`Try` instead of try/catch inside recursive functions.
 
-**Default parameters are evaluated at definition time**: Like Python, mutable defaults are shared.
+**Default parameter values are evaluated at call time, not definition time**: Unlike Python (which evaluates defaults once at def time), Scala re-evaluates defaults on each call. So `def f(buf: List[Int] = List())` is safe — no shared mutable default.
 
-::code-wrapper{language="scala"}
-```scala
-def bad(items: scala.collection.mutable.ArrayBuffer[Int] = scala.collection.mutable.ArrayBuffer()) { }
-// Fix: use => to defer
-def good[A](items: => scala.collection.mutable.ArrayBuffer[A] = scala.collection.mutable.ArrayBuffer()) { }
-```
-::
+## 🧠 Quick Quiz
 
-**`_` in function position has special meaning**: `list.map(_)` is invalid (ambiguous). Use `x => x` or a proper function reference.
-
-## 🧠 Spot the Bug
-
-What does this print?
-
-::code-wrapper{language="scala"}
-```scala
-def makeAdder(x: Int) = {
-  y => x + y
-}
-
-val add5 = makeAdder(5)
-val add10 = makeAdder(10)
-
-println(add5(3))
-println(add10(3))
-```
-::
+Why does `List(1,2,3).map(println).map(_ * 2)` print three numbers but the result is `List((), (), ())`?
 
 <details>
 <summary>Answer</summary>
 
-Prints `8` and `13`.
+`println` returns `Unit`. So `List(1,2,3).map(println)` produces `List((), (), ())` — it prints each number (side effect) but the elements are now `Unit`. The second `.map(_ * 2)` will fail to compile because `Unit` has no `*` method.
 
-Here's why:
-- `makeAdder(5)` returns a function that captures `x = 5`
-- `add5(3)` calls that function with `y = 3`, so `5 + 3 = 8`
-- `makeAdder(10)` returns a different function capturing `x = 10`
-- `add10(3)` returns `10 + 3 = 13`
+If this compiled (e.g., with `Any` typing), the result would be `List((), (), ())` — the `_ * 2` is never reached because `Unit` doesn't support `*`.
 
-**The lesson**: Each closure captures its own variables. Independent closures don't share state.
-
+**Lesson**: `map` is for transforming values, not side effects. Use `foreach` for side effects: `List(1,2,3).foreach(println)`.
 </details>
-
-## Key Takeaways
-
-- Functions are first-class values; assign to variables and pass around.
-- Annotate parameters and return types for clarity (but Scala infers many).
-- Use lambdas (`x => x * 2`) for anonymous functions.
-- Higher-order functions (taking/returning functions) enable functional composition.
-- For comprehensions are syntactic sugar for map/filter/flatMap chains.
-- Closures capture variables from enclosing scope.
-- Use `@tailrec` for tail-recursive optimization.
-- Curried functions enable partial application and clearer syntax.
-- By-name parameters (`=> T`) defer evaluation (lazy).

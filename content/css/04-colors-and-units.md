@@ -1,135 +1,158 @@
-# 04 — Colors & Units
+---
+title: "04 — Color Spaces, Units & the Fluid Math of CSS"
+description: "OKLCH perceptual uniformity, em/rem compounding, viewport units vs dynamic dvh, and calc/min/max/clamp as the responsive math engine. Code-first reference with color-mix and fluid-type production patterns."
+---
 
-## Color Notations
+# 04 — Color Spaces, Units & the Fluid Math of CSS
 
-::code-wrapper{language="css"}
-```css
-/* Hex */
-color: #ff0000;        /* red */
-color: #f00;           /* abbreviated */
-color: #ff0000ff;      /* 8-digit hex with alpha (ff = opaque) */
+CSS has a unit system and a color system. Most bugs in both come from not knowing *what the unit is relative to* (rem→root, em→parent, %→parent's same-axis dimension, vw→viewport including scrollbar) and not knowing *that HSL lightness is a lie* (50% lightness varies in perceived brightness across hues). This chapter engineers both.
 
-/* RGB / RGBA */
-color: rgb(255, 0, 0);
-color: rgba(255, 0, 0, 0.5);          /* 50% opacity */
-color: rgb(255 0 0 / 50%);            /* modern syntax (space-separated, / for alpha) */
-
-/* HSL / HSLA — hue (0-360), saturation%, lightness% */
-color: hsl(0, 100%, 50%);             /* red */
-color: hsl(120, 100%, 25%);           /* dark green */
-color: hsl(0 100% 50% / 50%);         /* modern syntax with alpha */
-
-/* Named colors */
-color: red; color: transparent; color: currentColor; color: inherit;
-
-/* LCH / OKLCH — perceptually uniform (modern, 2023+) */
-color: oklch(0.6 0.2 25);             /* lightness, chroma, hue — perceptually uniform */
-color: color(display-p3 1 0 0);       /* wide-gamut color space */
-```
-::
-### Which to use?
-
-- **Hex** — most common, concise. Use for opaque colors.
-- **HSL/OKLCH** — best for generating color variations (lighten/darken by adjusting lightness). OKLCH is perceptually uniform (50% lightness looks the same across hues).
-- **`currentColor`** — the element's current `color` value, useful for SVG/icons that should match text color.
-- **`transparent`** — `rgba(0,0,0,0)` — fully transparent.
-
-### Opacity vs `rgba`
-
-- `opacity: 0.5` — makes the *entire element* (and children) 50% transparent.
-- `rgba(..., 0.5)` — makes only the *color* 50% transparent (children are fully opaque).
-
-Use `rgba`/HSL-alpha for semi-transparent backgrounds/borders; `opacity` only when you want the whole element (including text) transparent.
-
-## Units
-
-### Absolute
-
-- `px` — pixels (CSS pixels, not device pixels; 1px ≈ 1/96 inch). The most common absolute unit.
-
-### Relative to font size
-
-- `em` — relative to the *parent's* font-size. `1.5em` = 1.5 × parent's font-size. Compounds in nested elements (a `1.2em` inside a `1.2em` is 1.44×).
-- `rem` — relative to the *root* (`html`) font-size. `1.5rem` = 1.5 × root font-size. Doesn't compound — consistent across the page. **Prefer `rem` for font-sizes and spacing.**
-
-### Relative to viewport
-
-- `vw` — 1% of the viewport width. `100vw` = full viewport width (note: includes the scrollbar on some browsers, causing overflow — use `dvw` or `100%`).
-- `vh` — 1% of the viewport height. `100vh` = full viewport height (on mobile, `100vh` includes the browser chrome — use `dvh` for the dynamic viewport).
-- `dvw`/`dvh` — dynamic viewport units (adjust when the mobile browser chrome shows/hides). Modern replacement for `vw`/`vh` on mobile.
-- `svw`/`svh` — small viewport (smallest possible, when all browser chrome is shown).
-- `lvw`/`lvh` — large viewport (largest possible, when all chrome is hidden).
-
-### Relative to parent
-
-- `%` — relative to the parent's dimension (`width: 50%` is half the parent's width). For `height`, the parent needs a defined height.
-- `ch` — the width of the "0" character in the current font. Useful for max-width of text (`max-width: 60ch` — about 60 characters per line).
-- `ex` — the x-height of the font (rare).
-
-### Viewport-percentage vs container queries
-
-For container-relative sizing, use container query units (`cqw`, `cqh`) — see chapter 09.
-
-## `calc()`
+## Color — the perceptually uniform truth
 
 ::code-wrapper{language="css"}
 ```css
-width: calc(100% - 200px);          /* mix units */
-font-size: calc(1rem + 0.5vw);      /* responsive font */
-padding: calc(1rem * 2);
-width: calc(min(100%, 600px));      /* nested (or use min() directly) */
+:root {
+  --c-primary: oklch(0.62 0.18 245);       /* L=0-1, C=chroma 0-0.37, H=0-360. Perceptually uniform. */
+  --c-primary-hover: color-mix(in oklch, var(--c-primary) 85%, white 15%);  /* derive tint at runtime */
+  --c-danger: oklch(0.62 0.22 25);         /* same L as primary → SAME perceived brightness. HSL can't do this. */
+  --c-on-primary: oklch(0.98 0 0);         /* near-white, zero chroma → grayscale */
+}
+/* Why OKLCH: hsl(60,100%,50%) yellow looks WAY brighter than hsl(240,100%,50%) blue
+   at the "same" 50% lightness. OKLCH's L axis is perceptually uniform — 0.62 looks
+   equally bright whether the hue is blue, red, or green. Deriving palettes by
+   tweaking L is now mathematically sound. */
 ```
 ::
-`calc()` lets you combine units in arithmetic. Always spaces around `+`/`-` (required); `*`/`/` don't need spaces but can have them.
 
-## `min()`, `max()`, `clamp()`
+### Anti-pattern: HSL for derived palettes
 
 ::code-wrapper{language="css"}
 ```css
-/* min — the smaller of the values */
-width: min(100%, 600px);            /* never wider than 600px or the container */
-
-/* max — the larger */
-font-size: max(1rem, 2vw);          /* never smaller than 1rem */
-
-/* clamp(min, preferred, max) */
-font-size: clamp(1rem, 2vw + 1rem, 3rem);  /* fluid between 1rem and 3rem */
+/* ❌ HSL lightness is NOT perceptual. These two "50% lightness" colors look wildly different: */
+--yellow: hsl(60, 100%, 50%);   /* appears near-white-bright */
+--blue:   hsl(240, 100%, 50%);  /* appears mid-dark */
+/* Deriving a "lighter" shade by bumping lightness 10% gives inconsistent results per hue. */
 ```
 ::
-`clamp()` is the modern responsive pattern — a fluid value with min/max bounds, no media queries needed.
 
-## Recommended Defaults
+::code-wrapper{language="css"}
+```css
+/* ✓ OKLCH: same L = same perceived brightness. Tint/shade derivation is uniform. */
+--base:  oklch(0.62 0.18 245);
+--tint:  oklch(0.72 0.14 245);   /* +0.10 L → consistent perceptual lightening */
+--shade: oklch(0.52 0.16 245);   /* -0.10 L → consistent perceptual darkening */
+```
+::
 
-- Font-sizes: `rem` (consistent, doesn't compound).
-- Spacing (padding/margin): `rem` (scales with user's font-size preference) or `em` (relative to the element's font-size, for component-internal spacing).
-- Widths: `%` (relative to parent), `ch` (for text containers), `px` (for fixed UI elements).
-- Viewport-relative: `dvh` for mobile full-height (not `vh`), `clamp()` for fluid responsive values.
-- Avoid `px` for font-sizes — `rem` respects the user's browser font-size setting (accessibility).
+## `opacity` vs `rgba` — what gets transparent
+
+::code-wrapper{language="css"}
+```css
+.card { opacity: 0.5; }               /* ENTIRE element + ALL children → 50% transparent. Text too. */
+.card { background: rgb(0 0 0 / 0.5); } /* only the background color is 50% transparent. Children opaque. */
+/* Use rgb()/oklch() with alpha for semi-transparent surfaces. Use opacity only when you
+   mean the whole subtree (including text) should fade. opacity < 1 also creates a stacking context. */
+```
+::
+
+## Units — what each is relative to
+
+::code-wrapper{language="text"}
+```text
+px    → CSS pixels (1/96 inch). Absolute. Ignores user font-size setting (a11y issue for text).
+em    → parent's font-size. COMPOUNDS: 1.2em inside 1.2em = 1.44× root. Trap for nested components.
+rem   → root (html) font-size. Does NOT compound. Consistent. Use for font-size and spacing.
+%     → parent's SAME-AXIS dimension. width:% → parent width. height:% → parent height (needs defined parent height).
+vw/vh → 1% of viewport. ⚠️ 100vw INCLUDES scrollbar on desktop → horizontal overflow.
+dvh/dvw → dynamic viewport (adjusts when mobile address bar shows/hides). Use instead of vh/vw.
+svh   → smallest viewport (all browser chrome visible). Stable, no jump.
+lvh   → largest viewport (all chrome hidden). = old vh behavior.
+ch    → width of "0" glyph in current font. Use for max-width:60ch (reading measure).
+cqw/cqi → 1% of query container's inline size. Container-relative fluid type.
+```
+::
+
+### Anti-pattern: em for font-size in nested components
+
+::code-wrapper{language="css"}
+```css
+/* ❌ em compounds through nesting → 1.2 × 1.2 × 1.2 = 1.728× in a deeply nested structure */
+.card { font-size: 1.2em; }       /* 1.2× parent */
+.card .body { font-size: 1.2em; } /* 1.2× .card → 1.44× root */
+.card .body p { font-size: 1.2em; } /* 1.728× root — unintended escalation */
+```
+::
+
+::code-wrapper{language="css"}
+```css
+/* ✓ rem is root-relative → never compounds regardless of nesting depth */
+.card { font-size: 1.125rem; }       /* 18px (at 16px root) */
+.card .body { font-size: 1rem; }     /* 16px — stays at root regardless of nesting */
+/* Use em ONLY for component-internal spacing that should scale with the element's own font-size. */
+```
+::
+
+## `calc()`, `min()`, `max()`, `clamp()` — the responsive math engine
+
+::code-wrapper{language="css"}
+```css
+:root {
+  /* Fluid type: clamp(min, preferred, max). The preferred formula scales with viewport.
+     No media queries. Bounds ensure a11y (never below 1rem = respects user setting). */
+  --font-body: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);
+  --fluid-space: clamp(1rem, 2vw + 1rem, 3rem);
+
+  /* calc mixes units. ⚠️ spaces required around + and - or it's invalid. */
+  --sidebar-offset: calc(100% - var(--sidebar-w) - var(--gap));
+  --neg-calc: calc(var(--n) * 1px);  /* multiply unitless var by 1px to add a unit */
+}
+.layout {
+  /* min(): picks the smaller → caps at 600px but shrinks on narrow screens */
+  width: min(100%, 600px);
+  /* max(): picks the larger → floor at 1rem, grows with viewport */
+  font-size: max(1rem, 2vw);
+}
+```
+::
+
+### The fluid container pattern (no breakpoints)
+
+::code-wrapper{language="css"}
+```css
+.container {
+  /* fill viewport, cap at 1200px, center. The only responsive container you need. */
+  width: min(100% - 2rem, 1200px);
+  margin-inline: auto;
+}
+```
+::
+
+## `currentColor` — the inheritance bridge
+
+::code-wrapper{language="css"}
+```css
+.icon { fill: currentColor; }  /* SVG fill tracks the element's computed `color` → recolor via color */
+.link { color: var(--c-primary); }
+.link .icon { fill: currentColor; }  /* icon matches link color automatically. No separate --icon-color. */
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `rem` for font-sizes and spacing — `rem` is relative to the root font-size, so it's consistent (doesn't compound like `em`) and respects the user's browser font-size setting (accessibility). Use `em` only for component-internal spacing where you want it to scale with the element's font-size.
-- **Idiom**: use `clamp()` for fluid responsive values — `font-size: clamp(1rem, 0.5rem + 2vw, 3rem)` gives a font that scales with the viewport but never below 1rem or above 3rem, without media queries. The same pattern works for padding, widths, etc.
-- **Idiom**: use `dvh`/`dvw` (dynamic viewport units) instead of `vh`/`vw` on mobile — `100vh` includes the browser chrome on mobile (causing overflow when the address bar shows), while `100dvh` adjusts dynamically. Use `100svh` for the smallest viewport (when all chrome is shown).
-- **Idiom**: use `ch` for text container max-widths — `max-width: 60ch` gives about 60 characters per line, a comfortable reading width regardless of font. This is better than a fixed `px` max-width, which doesn't adapt to font size.
-- **Idiom**: use `oklch()` for perceptually uniform color manipulation — `oklch(0.6 0.2 25)` (lightness, chroma, hue) makes 50% lightness look the same across hues, unlike HSL where 50% lightness varies in perceived brightness. Generate tints/shades by adjusting lightness consistently.
+- **Idiom**: `oklch()` + `color-mix()` replaces every preprocessor color function — `color-mix(in oklch, var(--c) 80%, white)` derives a tint at runtime, cascades, and is JS-accessible. No `lighten()` mixin needed.
+- **Idiom**: `clamp(1rem, 0.5rem + 2vw, 3rem)` for fluid type — the `0.5rem + 2vw` preferred value gives a linear ramp; the rem-based bounds respect the user's browser font-size setting (px bounds don't).
+- **Idiom**: `dvh` for mobile full-height sections — `100vh` on mobile includes the address bar's potential space → content hidden behind chrome. `100dvh` adjusts dynamically. `100svh` for the stable smallest case.
+- **Idiom**: `ch` for text measure — `max-width: 65ch` gives ~65 characters per line, the optimal reading width, regardless of font size. Better than a fixed px max-width.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`em` compounds**: `1.2em` inside a `1.2em` is 1.44× the root. Use `rem` for font-sizes to avoid this.
-- **`100vw` includes the scrollbar** (on desktop): causing horizontal overflow. Use `100%` (of a full-width parent) or `dvw`.
-- **`100vh` on mobile includes browser chrome**: the address bar/toolbar overlaps. Use `100dvh` (dynamic) or `100svh` (smallest).
-- **`%` height needs a parent with a defined height**: `height: 100%` of an `auto`-height parent is 0. Set the parent's height, or use `100vh`/flexbox.
-- **`px` for font-sizes ignores user's browser font-size setting**: `16px` is always 16px regardless of the user's preference. `rem` (or `em`) respects the setting (accessibility).
-- **`opacity` affects the whole element including children**: a `div` with `opacity: 0.5` makes its text 50% transparent too. Use `rgba`/HSL-alpha for semi-transparent backgrounds.
-- **Hex alpha is the last 2 digits**: `#ff0000ff` is opaque red; `#ff000080` is 50% red. The `80` is hex for 128/255 ≈ 50%.
-- **HSL lightness isn't perceptually uniform**: `hsl(60, 100%, 50%)` (yellow) looks brighter than `hsl(240, 100%, 50%)` (blue) at the same "lightness." Use `oklch` for perceptual uniformity.
-- **`currentColor` is the computed `color`**: useful for SVG fill matching text, but it changes with the element's `color` — not a fixed reference.
-- **`calc()` requires spaces around `+`/`-`**: `calc(100%-20px)` is invalid (parsed as a percentage with a negative number, not subtraction). `calc(100% - 20px)` works. `*`/`/` don't require spaces.
+- **`100vw` includes the desktop scrollbar** → horizontal overflow. Use `100%` of a full-width parent or `dvw`.
+- **`calc()` requires spaces around `+`/`-`**: `calc(100%-20px)` is invalid (parsed as a negative percentage). `calc(100% - 20px)` works. `*`/`/` don't need spaces.
+- **Hex alpha is the last 2 digits**: `#ff000080` is 50% red (`80` hex = 128/255 ≈ 50%). `#ff0000ff` is opaque.
+- **`currentColor` is the *computed* `color`**: it changes with the element's `color` property — it's not a frozen reference. It also creates no stacking context (unlike `opacity`).
+- **`%` height needs a parent with a concrete height**: `height: 100%` of a `height: auto` parent resolves to 0. Use `100dvh`, flex `align-items: stretch`, or set the parent's height.
 
 ## 🧠 Spot the Bug
-
-A developer sets a full-height hero section, but on mobile it's taller than the screen and the bottom is cut off:
 
 ::code-wrapper{language="css"}
 ```css
@@ -137,27 +160,9 @@ A developer sets a full-height hero section, but on mobile it's taller than the 
 ```
 ::
 
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`100vh` on mobile browsers is the "large viewport" height — it includes the space the browser chrome (address bar, toolbar) *could* occupy. When the address bar is visible (the common case), `100vh` is taller than the visible area, so the hero's bottom is behind the address bar / cut off.
-
-The fix — use `dvh` (dynamic viewport height) or `svh` (small viewport height):
-
-```css
-.hero { height: 100dvh; }   /* adjusts when the address bar shows/hides */
-/* or */
-.hero { min-height: 100svh; }  /* always fits the smallest viewport */
-```
-::
-`dvh` adjusts dynamically as the browser chrome shows/hides (the hero resizes). `svh` is the smallest viewport (all chrome shown) — stable but leaves space when the chrome hides. `lvh` is the largest (all chrome hidden) — equivalent to the old `vh` behavior.
-
-**The lesson**: `100vh` on mobile is the large viewport (includes potential chrome space), causing overflow when the address bar is visible. Use `100dvh` (dynamic) or `100svh` (smallest) for mobile full-height sections.
+`100vh` on mobile browsers is the *large* viewport — it includes space the address bar *could* occupy. When the address bar is visible (the common case), the hero is taller than the visible area → the bottom is behind the address bar / cut off. Fix: `100dvh` (dynamic — resizes when chrome shows/hides) or `100svh` (smallest — stable, always fits).
 
 </details>
-
-## Summary
-
-You can now use hex/RGB/HSL/OKLCH colors (and `currentColor`/`transparent`), `opacity` vs `rgba`, absolute (`px`) and relative (`rem`/`em`/`vw`/`vh`/`dvh`/`%`/`ch`) units, `calc()`, and `min()`/`max()`/`clamp()` for fluid responsive values — while preferring `rem` for accessibility and `dvh` for mobile. Next: typography and text.

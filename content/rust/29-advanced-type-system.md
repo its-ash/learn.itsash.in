@@ -1,431 +1,519 @@
 # 29 — Advanced Type System (Variance, HRTBs, Subtyping)
 
-This chapter covers the parts of the type system that most Rust developers never need to write, but should understand to read errors and design libraries.
+The gap between mid-level and senior Rust fluency lives here: knowing *why* the compiler rejects code that looks obviously correct, and which of two API designs (generic vs. associated type, `dyn Trait` vs. `impl Trait`, GAT vs. boxing) is the right trade-off rather than a syntax preference.
 
-## Subtyping in Rust
+## Under-the-Hood Mechanics
 
-Most languages have subtyping via inheritance (Cat : Animal). Rust's subtyping is **only** through **lifetimes**: a longer lifetime is a *subtype* of a shorter one.
+### Variance: derived structurally, not annotated
 
-`'static` is a subtype of `'a` for any `'a`: a `&'static str` can be used where `&'a str` is expected.
-
-::code-wrapper{language="rust"}
-```rust
-fn takes_str<'a>(s: &'a str) { /* ... */ }
-let s: &'static str = "hi";
-takes_str(s);    // OK: 'static <: 'a
-```
-::
-
-## Variance
-
-Variance describes how subtyping of parameters affects subtyping of the constructed type:
-
-- **Covariant** `T <: U` → `F<T> <: F<U>`
-- **Contravariant** `T <: U` → `F<U> <: F<T>`
-- **Invariant** no subtyping relationship
-- **Bivariant** both directions (rare; only happens with unused params)
-
-### Examples
-
-| Type | Variance |
-|---|---|
-| `&'a T` | covariant in `'a` and `T` |
-| `&'a mut T` | covariant in `'a`, **invariant** in `T` |
-| `*const T` | covariant in `T` |
-| `*mut T` | invariant in `T` |
-| `fn(T) -> U` | contravariant in `T`, covariant in `U` |
-| `Box<T>`, `Arc<T>`, `Vec<T>` | covariant in `T` |
-| `Cell<T>`, `RefCell<T>`, `UnsafeCell<T>` | invariant in `T` |
-| `&'a mut &'b T` | covariant in `'a`, invariant in `&'b T` (which is covariant in `'b` and `T`) |
-
-### Why does variance matter?
-
-If `&'a mut T` were covariant in `T`:
-::code-wrapper{language="rust"}
-```rust
-let mut s = String::from("hi");
-let r: &mut &'static str = &mut s;    // would-be covariance
-let short = String::from("bye");
-*r = &short;                          // writes &'short str into a &'static slot
-println!("{}", s);                    // s dangling!
-```
-::
-Invariance in `T` for `&mut T` is what prevents this. The compiler rejects the first assignment.
-
-### Practical Implication
-
-When you get a weird lifetime error, invariance is often the cause. The fix is usually to add an explicit lifetime tie or to introduce indirection (`Box<T>` makes some invariance problems tractable).
-
-## Higher-Rank Trait Bounds (HRTBs)
+`'static` is a subtype of every `'a`. Variance is how that substitutability propagates through type constructors — derived from how a type *uses* its parameter.
 
 ::code-wrapper{language="rust"}
 ```rust
-fn foo<F>(f: F) where F: for<'a> Fn(&'a str) { /* ... */ }
-```
-::
-
-`for<'a>` means "for all possible lifetimes `'a`". The function `f` must accept any borrowed `&str`, not just one with a specific lifetime.
-
-### Where HRTBs Appear
-
-- Closures that take references without explicit lifetimes:
-  ::code-wrapper{language="rust"}
-```rust
-  let f: impl for<'a> Fn(&'a str) = |s| println!("{s}");
-  ```
-- `Fn`/`FnMut`/`FnOnce` implicitly use HRTB on their arguments.
-
-### Common Pattern
-
-```
-::rust
-fn apply_any(f: impl for<'a> Fn(&'a [u8])) {
-    let buf = [0u8; 16];
-    f(&buf);
-}
-```
-::
-## Associated Types vs Generics
-
-### Why associated types exist
-
-An **associated type** (`type Item;` in a trait) is chosen by the *implementing type* — there's exactly one `Item` for each impl. A **generic type parameter** is chosen by the *caller* — the same type can be instantiated many ways. You reach for associated types when each impl has **one natural related type**: an `Iterator` over `T` has `Item = T` — there's no sense in the caller picking a different `Item` for the same iterator. You reach for generics when **multiple impls coexist**: `From<&str> for String` and `From<u8> for String` are two valid impls the caller selects between. The tradeoff: associated types are more ergonomic (no extra type parameter cluttering call sites) and enable `dyn Trait` (the impl owns the type); generics are more flexible (caller can pick) but bloat signatures and break object-safety.
-
-::code-wrapper{language="rust"}
-```rust
-// Associated type — impl picks:
-trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; }
-
-// Generic — caller picks:
-trait From<T> { fn from(value: T) -> Self; }
-```
-::
-
-Use associated types when each impl has *one* natural type. Use generics when multiple impls can coexist (`From<&str>`, `From<String>`).
-
-## `impl Trait` Internals
-
-### What existential types are and when to use `impl Trait`
-
-`fn f() -> impl Trait` returns a **concrete but hidden type** — an *existential* type ("some type that implements Trait, but I won't tell you which"). The caller knows it implements `Trait` but can't name the exact type. This is zero-cost (static dispatch, monomorphized, the compiler knows the real type internally). Reach for `impl Trait` returns when you want to hide a complex internal type (an iterator chain, an async block) without exposing it in the signature. The limitation: every `return` must produce the *same* concrete type, so multi-branch returns with different types need boxing.
-
-`fn f(x: impl Trait)` in argument position is sugar for `fn f<T: Trait>(x: T)` — the caller picks the type, statically dispatched. Reach for it for ergonomics (one less `<T>`); it's equivalent to the generic form.
-
-`fn f() -> impl Trait` returns *some* concrete type that implements `Trait`. The type is inferred per return path; if branches return different concrete types, you must box.
-
-`fn f(x: impl Trait)` is sugar for `fn f<T: Trait>(x: T)`. The caller picks the type.
-
-## `dyn Trait` Type Erasure
-
-### How erasure works and when to reach for `dyn`
-
-`dyn Trait` is **type erasure**: the compiler generates a **vtable** (a static table of function pointers, one per method) for each trait impl, and the `dyn Trait` value is a **fat pointer** carrying `(data_ptr, vtable_ptr)`. Method calls go through the vtable (one indirection). This lets you hold **heterogeneous values** in one collection (`Vec<Box<dyn Trait>>`) and call them uniformly. The tradeoff vs generics: `dyn` has one copy of the code (small binary) but runtime vtable dispatch (slower, no inlining); generics monomorphize per type (fast, but binary grows). Reach for `dyn Trait` when you need **heterogeneous** values or want to **reduce binary size** at the cost of dispatch speed; reach for generics when the types are uniform and you want zero-cost dispatch. The pointer must be behind indirection (`Box`, `&`, `Arc`) because the `dyn` value itself is unsized.
-
-`dyn Trait` is a **dynamic** type — values are behind a pointer (`Box<dyn Trait>`, `&dyn Trait`, `Arc<dyn Trait>`, `Rc<dyn Trait>`, `Pin<Box<dyn Trait>>`).
-
-The pointer is **wide** (fat): `(data_ptr, vtable_ptr)`.
-
-## Object Safety (Recap)
-
-A trait is object-safe iff:
-- No `Self` in argument positions or return by value.
-- No generics in methods.
-- All methods have `where Self: Sized` or take `self` by reference.
-- No associated constants without a default that depend on `Self`.
-- `Send`/`Sync` as supertraits are OK; `Sized` as a supertrait disqualifies.
-
-Workarounds for non-object-safe traits:
-- Use a wrapper trait that doesn't return `Self`.
-- Use generic dispatch instead of trait objects.
-- Add `where Self: Sized` to static methods.
-
-## Auto Traits
-
-### Why they exist and how auto-derivation works
-
-Auto traits (`Send`, `Sync`, `Unpin`, `Sized`) are **compositionally derived marker traits**: the compiler automatically implements them for a type when **all its fields** implement them — no manual impl needed. This is how Rust tracks soundness properties (thread-safety, movability) through the type system *without* boilerplate: a struct is `Send` iff every field is `Send`, so adding a non-`Send` field (`Rc<T>`) makes the whole struct `!Send`, and the compiler prevents it from crossing a thread boundary. The derivation is **structural** — it walks the type's composition. You reach for auto traits implicitly (rely on the auto-derivation) and override with `unsafe impl` only when wrapping a raw type you've verified is safe. `Send` (safe to *move* to another thread) and `Sync` (safe to *share* `&T` between threads) are the two you'll encounter most — they're how `Arc<T>: Send` requires `T: Send + Sync`.
-
-`Send`, `Sync`, `Unpin`, `Sized` are auto traits — the compiler auto-implements them based on constituent types.
-
-::code-wrapper{language="rust"}
-```rust
-struct MyType(Rc<u8>);   // not Send, not Sync because Rc isn't
-struct MyType2(Arc<u8>); // Send + Sync
-```
-::
-
-You can opt out or opt in via `unsafe impl`/`impl !Send` (negative impls are unstable).
-
-## `Sized` Trait
-
-### Why `Sized` is the default and when to relax it
-
-`Sized` marks types whose **size is known at compile time** — the compiler needs this for stack allocation, passing by value, and indexing arrays. Most types are `Sized` (`i32`, `String`, any struct of `Sized` fields). The exceptions (`?Sized`) are **dynamically sized types** (DSTs): `str`, `[T]`, `dyn Trait` — their size is only known at runtime (a `str`'s length lives in the fat pointer). Generic parameters **default to `Sized`** because most code assumes a known size; you relax with `T: ?Sized` when you want to write code generic over DSTs — e.g., a function that accepts `&str`, `&[T]`, or `&dyn Trait` via `fn foo<T: ?Sized>(x: &T)`. Reach for `?Sized` in collection/library code that must handle borrowed DSTs; leave the default (`Sized`) for ordinary functions.
-
-Most types are `Sized` (known size at compile time). Exceptions are `?Sized` types:
-- `str`, `[T]`, `dyn Trait`, `*const ()` (in some contexts)
-
-Generic parameters default to `Sized`; relax with `T: ?Sized`:
-
-::code-wrapper{language="rust"}
-```rust
-fn first_byte(s: &str) -> u8 { /* str is !Sized but you can take &str */ }
-fn foo<T: ?Sized>(x: &T) { /* works for unsized T */ }
-```
-::
-::
-
-## `PhantomData<T>` — Marker for Unused Type Params
-
-::code-wrapper{language="rust"}
-```rust
-use std::marker::PhantomData;
-
-struct Tagged<Tag, T> {
-    data: T,
-    _tag: PhantomData<Tag>,
+// &'a T is COVARIANT in T: a longer-lived, read-only borrow can substitute
+fn takes_short<'a>(s: &'a str) { println!("{s}"); }
+fn covariance_ok() {
+    let s: &'static str = "hi";
+    takes_short(s); // &'static str used where &'a str expected — fine, read-only
 }
 ```
 ::
 
-`PhantomData` is zero-sized but tells the compiler about ownership/variance:
-- `PhantomData<T>` makes your type behave like it owns a `T` for drop-checking and variance.
-- `PhantomData<&'a T>` makes it covariant in `'a`.
-- `PhantomData<*mut T>` makes it invariant and `!Send`/`!Sync`.
-- `PhantomData<fn(T) -> ()>` makes it contravariant in `T` and `!Send`/`!Sync`.
-
-Picking the right `PhantomData` variant is critical for unsafe collections.
-
-## Newtype Pattern
-
 ::code-wrapper{language="rust"}
 ```rust
-struct Meters(f64);
-struct Miles(f64);
-
-impl Meters { fn to_miles(self) -> Miles { Miles(self.0 / 1609.344) } }
+// &'a mut T is INVARIANT in T — this hypothetical is what invariance forbids
+fn if_covariance_allowed_this_would_compile() {
+    let mut s = String::from("hi");
+    // let r: &mut &'static str = &mut s;      // NOT real code — illustrative only
+    // let short = String::from("bye");
+    // *r = &short;                            // would write a short-lived &str
+    //                                          // into a slot typed &'static str
+    // println!("{}", s);                      // s would now dangle
+}
 ```
 ::
 
-- Zero-cost wrapper for type safety.
-- No accidental mixing: `Meters(5.0) + Miles(1.0)` is a type error.
-- Implement `From`/`Into`/`Display`/`Deref`/`Add` as needed.
-
-## Type-Level Programming
-
-With traits and associated types:
-
 ::code-wrapper{language="rust"}
 ```rust
-trait Peano { type Next; }
-struct Zero;
-struct Succ<T>(T);
-
-impl Peano for Zero { type Next = Succ<Zero>; }
-impl<T: Peano> Peano for Succ<T> { type Next = Succ<Succ<T>>; }
-
-type One = <Zero as Peano>::Next;
-type Two = <One as Peano>::Next;
+// Real compiler output for the invariant case:
+fn assign<'a>(dest: &mut &'a str, src: &'a str) { *dest = src; }
+fn real_rejection() {
+    let mut r: &str = "long lived";
+    {
+        let short = String::from("short");
+        // assign(&mut r, &short); // ERROR: `short` does not live long enough
+    }
+    println!("{r}");
+}
 ```
 ::
 
-Practical for `typenum` (compile-time integers), dimension tracking (`uom`), and `frunk`'s HList.
+### Monomorphization: one compiled copy per concrete `T`
 
-## Const Generics (Deep)
+::code-wrapper{language="rust"}
+```rust
+fn identity<T>(x: T) -> T { x }
 
-### Why they exist and how they're monomorphized
+fn call_sites() {
+    identity(1i32);        // compiles a separate identity::<i32>
+    identity("hi");         // compiles a separate identity::<&str>
+    identity(String::new()); // and a separate identity::<String>
+    // -> three distinct, non-generic functions in the binary after codegen
+}
+```
+::
 
-Const generics let you **parameterize a type by a compile-time constant value** (an integer, bool, or char) — not just by other types. This exists because some types are naturally parameterized by a *number*: a fixed-size `Grid<W, H>`, an array `<i32; N>`, a cryptographic `Block<16>`. Without const generics, you'd use macros or separate types per size (`Array16`, `Array32`...). The compiler **monomorphizes** each instantiation (`Arr<10>` and `Arr<20>` are distinct types), giving you type-level size guarantees with zero runtime cost. Reach for const generics when a number is part of a type's identity (fixed-size arrays/matrices, compile-time-sized buffers); use `Vec`/slices when the size is runtime-variable.
+::code-wrapper{language="rust"}
+```rust
+// Code-bloat in practice: N call-site types => N copies of the body
+trait Encode { fn encode(&self) -> Vec<u8>; }
+fn encode_all<T: Encode>(items: &[T]) -> Vec<Vec<u8>> {
+    items.iter().map(Encode::encode).collect()
+}
+// encode_all::<Header>, encode_all::<Frame>, encode_all::<Ack>, ... each
+// fully duplicated in the binary, each independently inlinable.
+```
+::
+
+### `dyn Trait`: vtable + fat pointer
+
+::code-wrapper{language="rust"}
+```rust
+trait Shape { fn area(&self) -> f64; }
+
+struct Circle { r: f64 }
+impl Shape for Circle { fn area(&self) -> f64 { std::f64::consts::PI * self.r * self.r } }
+
+struct Square { side: f64 }
+impl Shape for Square { fn area(&self) -> f64 { self.side * self.side } }
+
+// Generic: monomorphized, zero-cost dispatch, one compiled copy PER type used
+fn print_area_generic<S: Shape>(s: &S) { println!("{}", s.area()); }
+
+// dyn: one shared compiled copy, vtable dispatch, heterogeneous types allowed
+fn print_area_dyn(s: &dyn Shape) { println!("{}", s.area()); }
+
+fn heterogeneous_collection() {
+    let shapes: Vec<Box<dyn Shape>> = vec![
+        Box::new(Circle { r: 1.0 }),
+        Box::new(Square { side: 2.0 }), // impossible with a single generic Vec<S>
+    ];
+    for s in &shapes { print_area_dyn(s.as_ref()); }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Fat pointer size proof
+fn size_check() {
+    assert_eq!(std::mem::size_of::<&dyn Shape>(), 2 * std::mem::size_of::<usize>());
+    assert_eq!(std::mem::size_of::<&Circle>(), std::mem::size_of::<usize>());
+}
+```
+::
+
+### Higher-Rank Trait Bounds: quantifying over *all* lifetimes
+
+::code-wrapper{language="rust"}
+```rust
+// Auto-inferred HRTB: closure ties nothing external to the input's lifetime
+fn apply_to_str<F>(f: F) where F: for<'a> Fn(&'a str) -> usize {
+    let owned = String::from("hello");
+    println!("{}", f(&owned)); // f must work for THIS call's fresh lifetime
+    println!("{}", f("literal")); // and for this one too, a different lifetime
+}
+fn use_it() { apply_to_str(|s: &str| s.len()); }
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG attempt: pinning the lifetime to a generic parameter doesn't work —
+// the caller of apply_to_str_broken can't know 'a in advance
+fn apply_to_str_broken<'a, F: Fn(&'a str) -> usize>(f: F, s: &'a str) -> usize {
+    f(s) // works, but only for ONE fixed 'a chosen by the caller, not "any 'a"
+}
+```
+::
+
+### GATs: an associated type that borrows from `&self`
+
+::code-wrapper{language="rust"}
+```rust
+trait LendingIterator {
+    type Item<'a> where Self: 'a;
+    fn next(&mut self) -> Option<Self::Item<'_>>;
+}
+
+struct WindowsMut<'buf> { buf: &'buf mut [u8], pos: usize }
+
+impl<'buf> LendingIterator for WindowsMut<'buf> {
+    type Item<'a> = &'a mut [u8] where Self: 'a;
+    fn next(&mut self) -> Option<Self::Item<'_>> {
+        if self.pos + 2 > self.buf.len() { return None; }
+        let slice = &mut self.buf[self.pos..self.pos + 2];
+        self.pos += 1;
+        Some(slice) // borrows FROM self, per-call — impossible with a fixed `Item`
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Ecosystem friction: this does NOT work — `for` desugars to std::iter::Iterator,
+// whose Item is not generic over a lifetime
+fn cannot_for_loop(mut it: WindowsMut) {
+    // for w in it { ... } // ERROR: WindowsMut is not `std::iter::Iterator`
+    while let Some(w) = it.next() {
+        w[0] = 0; // must drive it manually instead
+    }
+}
+```
+::
+
+### Const generics: values monomorphized like types
 
 ::code-wrapper{language="rust"}
 ```rust
 struct Arr<const N: usize> { data: [u8; N] }
 
-impl<const N: usize> Arr<N> {
-    fn len(&self) -> usize { N }
-}
+fn needs_32(a: Arr<32>) { /* ... */ }
 
-fn sum<const N: usize>(arr: &[i32; N]) -> i32 { arr.iter().sum() }
-```
-::
-
-### Limits
-
-- Only integer/bool/char const params on stable.
-- Const expressions as params are unstable (`[T; N + 1]`).
-- Min const generics only — full generics (e.g., `&'a str` const param) is unstable.
-
-## `min_specialization` and Full Specialization
-
-Specialization lets you provide a more specific impl overriding a general one:
-
-::code-wrapper{language="rust"}
-```rust
-#![feature(min_specialization)]
-trait Pick { fn pick(&self); }
-impl<T> Pick for T { default fn pick(&self) { println!("default"); } }
-impl Pick for String { fn pick(&self) { println!("string"); } }  // specialized
-```
-::
-
-Unstable. Avoid in production. Workarounds: macros, separate traits, or `auto impl`-style delegation.
-
-## Higher-Kinded Types (HKT)
-
-Rust doesn't have HKTs (types parameterized over type constructors). Workarounds:
-- `higher` crate
-- Associated type families (unstable)
-- Manual "Functor" traits via `PhantomData` (clunky)
-
-The lack of HKTs limits abstracting over `Option`, `Vec`, `Result` uniformly. Most code doesn't need it.
-
-## GATs (Generic Associated Types)
-
-### Why they were needed
-
-GATs (Generic Associated Types) are associated types that **themselves take generic parameters** — most commonly lifetimes (`type Item<'a>`) — stable since 1.65. They were needed because **before GATs, an associated type couldn't borrow from `self`**: a trait like `LendingIterator` (whose `next()` returns a borrow tied to `&mut self`) couldn't express that its `Item` depends on the borrow's lifetime. The `where Self: 'a` clause ties the lifetime: "the returned `Item<'a>` is valid for `'a`, which is bounded by how long `self` lives." You reach for GATs when a trait's associated type must reference `self`'s lifetime — lending iterators (returning borrowed items), async traits (the future borrows `self`), or graph/node APIs (returning references into the graph). Without GATs, these patterns required boxing or `unsafe`.
-
-::code-wrapper{language="rust"}
-```rust
-trait LendingIterator {
-    type Item<'a> where Self: 'a;
-    fn next(&mut self) -> Option<Self::Item<'_>>;
+fn const_generic_mismatch() {
+    let a16 = Arr::<16> { data: [0; 16] };
+    // needs_32(a16); // ERROR: expected `Arr<32>`, found `Arr<16>` — compile-time, not a bounds check
 }
 ```
 ::
 
-Associated types that themselves have generic params (lifetimes/types). Stable since 1.65. Lets you express borrowing iterators, async traits, etc.
-
-## Subtyping and `Cow`
+## Cost, Performance, and Trade-Offs
 
 ::code-wrapper{language="rust"}
 ```rust
-fn process<'a>(s: Cow<'a, str>) { /* ... */ }
-process("static".into());      // Cow::Borrowed(&'static str)
-process(String::from("x").into());   // Cow::Owned
-```
-::
-
-`Cow<'a, B>` is variant in `'a` (covariant), so `Cow<'static, str>` is a subtype of `Cow<'a, str>`.
-
-## Negative Trait Impls
-
-::code-wrapper{language="rust"}
-```rust
-impl !Send for MyType {}
-```
-::
-
-Unstable; you can opt out of auto traits today via `PhantomData<*const ()>` or `Rc<()>`.
-
-## Common Pitfalls
-
-- **Forgetting variance**: writing `PhantomData<T>` when you needed `PhantomData<fn() -> T>` (covariant vs invariant).
-- **HRTB vs named lifetime**: `fn(&str)` is `for<'a> fn(&'a str)`; `fn<'a>(&'a str)` is a *specific* lifetime.
-- **`dyn Trait + 'static`**: by default `dyn Trait` borrows for some lifetime; you usually want `Box<dyn Trait + 'static>`.
-- **Object safety regression**: adding a generic method to a trait breaks all `dyn Trait` users.
-- **Auto-trait inference**: a struct containing a `Rc` makes the whole struct `!Send + !Sync`.
-- **`Sized` default**: `fn foo<T>()` requires `T: Sized`; unsized locals and parameters are unstable.
-- **Trait objects and `Send`**: `Box<dyn Trait>` isn't `Send` unless you write `Box<dyn Trait + Send>`.
-
-## Advanced Type System Tricks
-
-::code-wrapper{language="rust"}
-```rust
-// Trick: use associated types for cleaner APIs
-trait Container {
-    type Item; // caller doesn't pick; impl does
-    fn push(&mut self, item: Self::Item);
-}
-
-// Trick: use GATs for lending iterators
-trait LendingIterator {
-    type Item<'a> where Self: 'a;
-    fn next(&mut self) -> Option<Self::Item<'_>>;
-}
-
-// Trick: newtype pattern for type safety
-struct UserId(u64);
-struct PostId(u64);
-fn get_post(user: UserId, post: PostId) { } // can't accidentally swap types
-
-// Trick: use PhantomData for type-level reasoning
-use std::marker::PhantomData;
-struct Contains<T> {
-    _p: PhantomData<T>,
-}
-// Now the struct "owns" a T for variance purposes, even without storing it
-
-// Trick: use marker traits to categorize types
-trait Recoverable: std::error::Error + Send + Sync {}
-fn safe_to_send<E: Recoverable>(e: E) { } // only Recoverable errors
-
-// Trick: higher-rank trait bounds for flexibility
-fn apply_to_strings<F>(f: F) where F: for<'a> Fn(&'a str) -> &'a str {
-    println!("{}", f("hello"));
-}
-
-// Trick: sized/unsized trait bounds
-fn foo<T: ?Sized>(x: &T) {} // accepts &T where T might not be Sized
-
-// Trick: use where clauses to express complex bounds
-fn complex<T>(x: T) where T: Clone + std::fmt::Debug, <T as Clone>::Output: Default {
-    // T can be cloned and debugged, and its Output implements Default
+// Generics: N instantiations = N copies, each inlinable, all zero-dispatch-cost
+fn sum_generic<T: std::ops::Add<Output = T> + Copy>(a: T, b: T) -> T { a + b }
+fn call_many_types() {
+    sum_generic(1i32, 2);       // copy #1
+    sum_generic(1.0f64, 2.0);   // copy #2
+    sum_generic(1u8, 2);        // copy #3 — binary grows with each new T
 }
 ```
 ::
 
-## Type-Level Patterns
+::code-wrapper{language="rust"}
+```rust
+// dyn: one copy, vtable call, no cross-call inlining — measure, don't assume
+trait Adder { fn add(&self, a: i32, b: i32) -> i32; }
+struct Plain;
+impl Adder for Plain { fn add(&self, a: i32, b: i32) -> i32 { a + b } }
+
+fn hot_loop(adder: &dyn Adder) -> i32 {
+    let mut acc = 0;
+    for i in 0..1_000_000 {
+        acc = adder.add(acc, i); // indirect call every iteration, not inlined
+    }
+    acc
+}
+```
+::
+
+Associated type vs. generic parameter — the ergonomics trade, in code:
 
 ::code-wrapper{language="rust"}
 ```rust
-// Pattern: typestate for compile-time state validation
-struct Builder<State>(std::marker::PhantomData<State>);
-struct Empty;
-struct Configured;
+// Generic parameter: multiple impls per type, but every signature pays for it
+trait ConvertFrom<T> { fn convert(t: T) -> Self; }
+impl ConvertFrom<u8> for String { fn convert(t: u8) -> Self { t.to_string() } }
+impl ConvertFrom<&str> for String { fn convert(t: &str) -> Self { t.to_string() } }
 
-impl Builder<Empty> {
-    fn configure(self) -> Builder<Configured> { Builder(std::marker::PhantomData) }
+fn needs_generic_param<T, S: ConvertFrom<T>>(t: T) -> S { S::convert(t) } // extra param everywhere
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Associated type: clean call sites, but exactly ONE impl per concrete type
+trait Parser { type Output; fn parse(&self, s: &str) -> Self::Output; }
+struct IntParser;
+impl Parser for IntParser { type Output = i32; fn parse(&self, s: &str) -> i32 { s.parse().unwrap() } }
+// impl Parser for IntParser { type Output = f64; ... } // ERROR: conflicting impl
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// PhantomData is zero-sized — verify, don't assume
+struct Tagged<T> { id: u64, _marker: std::marker::PhantomData<T> }
+fn phantom_is_free() {
+    assert_eq!(std::mem::size_of::<Tagged<String>>(), std::mem::size_of::<u64>());
+}
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+### Anti-pattern: generic method added to a trait already used as `dyn Trait`
+
+::code-wrapper{language="rust"}
+```rust
+// Existing, object-safe trait, used widely as Box<dyn Service> in production
+pub trait Service {
+    fn call(&self, req: Request) -> Response;
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// A "harmless" addition during a refactor — WRONG, breaks object safety
+pub trait Service {
+    fn call(&self, req: Request) -> Response;
+    fn call_typed<T: FromRequest>(&self, req: Request) -> T; // compiles here...
 }
 
-impl Builder<Configured> {
-    fn build(self) -> String { String::from("built") }
+fn breaks_far_away(svc: &dyn Service) {
+    // ERROR surfaces HERE, in a different crate maybe:
+    // "the trait `Service` cannot be made into an object"
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT — keep the object-safe trait untouched; add the generic method via
+// an extension trait excluded from object safety with `where Self: Sized`
+pub trait Service {
+    fn call(&self, req: Request) -> Response;
 }
 
-// Usage: build() only works on Builder<Configured>, not Builder<Empty>
-// let b = Builder::<Empty>(std::marker::PhantomData);
-// b.build(); // compile error!
-
-// Pattern: sealed traits to prevent external implementations
-mod sealed {
-    pub trait Sealed {}
-    pub struct SealedType;
-    impl Sealed for SealedType {}
+pub trait ServiceExt: Service {
+    fn call_typed<T: FromRequest>(&self, req: Request) -> T where Self: Sized {
+        T::from_request(self.call(req))
+    }
 }
-pub trait Public: sealed::Sealed {}
-impl Public for sealed::SealedType {}
-// external types can't impl Public because Sealed is private
+impl<S: Service + ?Sized> ServiceExt for S {}
+
+fn still_works(svc: &dyn Service) {
+    let _ = svc.call(Request::default()); // dyn callers never see call_typed
+}
+```
+::
+
+### Anti-pattern: `dyn Trait` in a hot path, never benchmarked
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG (maybe) — introduced for "future flexibility," never profiled
+pub struct Pipeline { stages: Vec<Box<dyn Fn(&mut Buffer)>> }
+
+impl Pipeline {
+    pub fn run(&self, buf: &mut Buffer) {
+        for stage in &self.stages {
+            stage(buf); // vtable call, non-inlinable, per stage, per buffer
+        }
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT, if stages are fixed at compile time — generic over concrete types,
+// fully inlinable, no vtable
+pub struct Pipeline<A, B> { stages: (A, B) }
+
+impl<A: Fn(&mut Buffer), B: Fn(&mut Buffer)> Pipeline<A, B> {
+    pub fn run(&self, buf: &mut Buffer) {
+        (self.stages.0)(buf);
+        (self.stages.1)(buf); // both statically known, inlinable
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT, if heterogeneity IS a genuine runtime requirement (plugins, config-driven)
+pub struct PluginPipeline { stages: Vec<Box<dyn Fn(&mut Buffer)>> }
+// same shape as the "wrong" version above — the difference is a measured
+// decision (stages vary at runtime), not a default reached for by habit
+```
+::
+
+### Anti-pattern: wrong `PhantomData` variant
+
+::code-wrapper{language="rust"}
+```rust
+// WRONG — Generator doesn't own a T, it produces one on demand; PhantomData<T>
+// falsely claims ownership: covariance and Send/Sync inferred as if T were stored
+pub struct Generator<T> {
+    state: *mut u8,
+    _marker: std::marker::PhantomData<T>,
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// RIGHT — PhantomData<fn() -> T> models "produces T": covariant in T,
+// without claiming ownership; !Send/!Sync opt-out appropriate for raw state
+pub struct Generator<T> {
+    state: *mut u8,
+    _marker: std::marker::PhantomData<fn() -> T>,
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// The hole this closes: covariance you didn't intend to grant
+fn generator_variance_bug(long: Generator<&'static str>) {
+    fn wants_short<'a>(_g: Generator<&'a str>) {}
+    // With PhantomData<T> (covariant, correct here since &'static str : &'a str
+    // is fine for READ-ONLY data) this is sound; the danger is the OPPOSITE
+    // case — a type that mutates through T where covariance would be unsound.
+    wants_short(long);
+}
+```
+::
+
+## Architectural Application
+
+::code-wrapper{language="rust"}
+```rust
+// Default: generics for library-internal, perf-sensitive, few-concrete-types code
+pub fn checksum<T: AsRef<[u8]>>(data: T) -> u32 { crc32(data.as_ref()) }
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Boundary: dyn Trait for plugin systems / runtime-assembled heterogeneity
+pub trait Middleware { fn handle(&self, req: &mut Request); }
+pub struct App { middlewares: Vec<Box<dyn Middleware>> } // set from config at startup
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Sealed trait: close a public trait to external impls
+mod sealed { pub trait Sealed {} }
+
+pub trait InternalOnly: sealed::Sealed {
+    fn do_thing(&self);
+}
+pub struct Known;
+impl sealed::Sealed for Known {}
+impl InternalOnly for Known { fn do_thing(&self) { /* ... */ } }
+// external crates can implement InternalOnly's methods but never the trait
+// itself, because they cannot implement the private `sealed::Sealed`
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// Typestate: invalid call sequences become compile errors
+pub struct Disconnected;
+pub struct Connected;
+
+pub struct Conn<State> { socket: Option<std::net::TcpStream>, _state: std::marker::PhantomData<State> }
+
+impl Conn<Disconnected> {
+    pub fn connect(self, addr: &str) -> std::io::Result<Conn<Connected>> {
+        let socket = std::net::TcpStream::connect(addr)?;
+        Ok(Conn { socket: Some(socket), _state: std::marker::PhantomData })
+    }
+}
+impl Conn<Connected> {
+    pub fn send(&mut self, _bytes: &[u8]) { /* ... */ } // only callable once connected
+}
+
+fn typestate_use() -> std::io::Result<()> {
+    let conn = Conn::<Disconnected> { socket: None, _state: std::marker::PhantomData };
+    // conn.send(&[1]); // ERROR: no method `send` on Conn<Disconnected>
+    let mut conn = conn.connect("127.0.0.1:0")?;
+    conn.send(&[1]); // fine — type proves connection happened
+    Ok(())
+}
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: when you get a baffling lifetime error involving `&mut`, ask "is this an invariance problem?" first — `cargo expand` won't help here, but mentally substituting `&T` for `&mut T` (which is covariant) and seeing if the error disappears is a fast diagnostic.
-- **Idiom**: reach for `PhantomData<fn() -> T>` (not `PhantomData<T>`) when your type logically "produces" `T` but doesn't store it directly — this gives covariance and `!Send`/`!Sync` opt-out behavior similar to a function pointer, which is usually what unsafe collection authors actually want.
-- **Debug**: `rustc --edition 2021 -Z unpretty=hir` (nightly) or simply hovering in rust-analyzer over a `for<'a>` bound shows the desugared HRTB — useful for confirming whether your closure's inferred type actually is higher-ranked or just looks like it.
-- **Idiom**: sealed traits (a private supertrait in a hidden module) are the standard way to make a public trait non-implementable by downstream crates while still exposing its methods — reach for this before reaching for unstable `impl !Trait`.
-- **Performance**: `dyn Trait` dispatch costs one indirect call through a vtable per method invocation — for hot loops, benchmark the generic (`impl Trait`/`<T: Trait>`) version against the `dyn` version before assuming the abstraction is free either way.
-- **Clippy**: `clippy::type_complexity` flags deeply nested generic types (like `Rc<RefCell<HashMap<String, Vec<Box<dyn Trait>>>>>`) — a good nudge to introduce a type alias or newtype rather than a readability problem you just live with.
+- **Debug**: substitute `&T` for `&mut T` mentally when a lifetime error appears — if it disappears, it's invariance:
+::code-wrapper{language="rust"}
+```rust
+fn diagnostic_swap<'a>(_dest: &'a str, _src: &'a str) {} // if THIS compiles but
+                                                           // &mut &'a str didn't, it's invariance
+```
+::
+- **Idiom**: prefer `PhantomData<fn() -> T>` over `PhantomData<T>` for "produces `T`" types:
+::code-wrapper{language="rust"}
+```rust
+struct Lazy<T> { thunk: Box<dyn Fn() -> T>, _marker: std::marker::PhantomData<fn() -> T> }
+```
+::
+- **Debug**: hover a `for<'a>` bound in rust-analyzer, or run `cargo expand`, to confirm a closure is genuinely higher-ranked rather than pinned to one lifetime.
+- **Idiom**: sealed traits over unstable `impl !Trait` — see the `mod sealed` pattern above.
+- **Performance**: benchmark generic vs. `dyn` before trusting intuition:
+::code-wrapper{language="rust"}
+```rust
+#[inline(never)] fn via_dyn(f: &dyn Fn(i32) -> i32, x: i32) -> i32 { f(x) }
+fn via_generic<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(x) } // often fully inlined away
+```
+::
+- **Clippy**: `clippy::type_complexity` flags this and suggests a type alias:
+::code-wrapper{language="rust"}
+```rust
+type Handlers = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, Vec<Box<dyn Fn()>>>>>;
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Invariance in `&mut T` is not a bug you can "just fix" — it's load-bearing**: code that compiles fine with `&T` (covariant) and suddenly won't with `&mut T` in the same generic position is not a compiler limitation; allowing covariance there would let you smuggle a shorter-lived reference into a longer-lived slot, causing a genuine use-after-free.
-- **Adding a generic method to an existing trait is a silent breaking change for `dyn` users**: a library that adds `fn new_method<T>(&self)` to a previously object-safe trait doesn't get a compile error in the trait definition itself — the break appears at every downstream `Box<dyn Trait>` call site instead, often in a different crate than the one that changed.
-- **`Send`/`Sync` auto-trait inference is all-or-nothing per field**: adding a single `Rc<T>` field deep inside an otherwise fully `Send` struct makes the *entire* struct `!Send` — the compiler error points at the struct's use site (e.g., a `thread::spawn` call far away), not at the field that caused it, making the root cause non-obvious.
-- **`dyn Trait` has an implicit lifetime bound that isn't `'static` by default in every position**: `Box<dyn Trait>` defaults to `Box<dyn Trait + 'static>`, but `&'a dyn Trait` defaults its trait-object lifetime to `'a`, not `'static` — mixing these defaults across function boundaries produces "the trait `Trait` is not implemented" errors that are actually lifetime mismatches in disguise.
-- **GATs can express iterators that plain associated types cannot, but callers must be generic over the lifetime too**: a `LendingIterator` with `type Item<'a>` cannot be used through the standard `for` loop sugar or many existing iterator-consuming generic functions, because those are written against `Iterator`'s non-generic `Item` — GATs solve the expressiveness problem but don't retrofit into the existing ecosystem for free.
-- **Const generics only support structural equality for the const parameter**: `Arr<5>` and `Arr<{2 + 3}>` are the same type only if the compiler can prove the const-expressions are equal at the type level, which is limited on stable — two const-generic types that are "obviously" the same value can fail to unify if the expressions aren't written identically.
-- **Platform-independent trap — `PhantomData` variance mismatches only show up in unsafe collection edge cases**: choosing `PhantomData<T>` instead of `PhantomData<*const T>` for a custom unsafe collection compiles fine and passes ordinary tests, then produces a soundness hole only exploitable through subtyping/coercion patterns most test suites never exercise (e.g., passing a `Container<&'static str>` where `Container<&'a str>` was expected via covariance the type shouldn't have).
+- **Invariance is load-bearing, not a limitation**:
+::code-wrapper{language="rust"}
+```rust
+fn covariant_ok<'a>(x: &'a str) {}      // fine with &'static str
+fn invariant_fails<'a>(x: &'a mut &'a str) {} // same substitution fails through &mut
+```
+::
+- **Adding a generic method silently breaks `dyn` users far from the change site** — see the `ServiceExt` example above; the error never points at the trait definition.
+- **`Send`/`Sync` inference is all-or-nothing per field**:
+::code-wrapper{language="rust"}
+```rust
+struct MostlySend { a: i32, b: std::rc::Rc<i32> } // Rc makes the WHOLE struct !Send
+fn spawn_it(v: MostlySend) {
+    // std::thread::spawn(move || { let _ = v; }); // ERROR points at spawn, not at field `b`
+}
+```
+::
+- **`dyn Trait` lifetime defaults differ by position**:
+::code-wrapper{language="rust"}
+```rust
+fn owned_default(x: Box<dyn std::fmt::Display>) {}       // == Box<dyn Display + 'static>
+fn borrowed_default<'a>(x: &'a dyn std::fmt::Display) {} // trait object lifetime == 'a, NOT 'static
+```
+::
+- **GATs don't retrofit into `for` loops**:
+::code-wrapper{language="rust"}
+```rust
+// for item in lending_iter {} // ERROR — LendingIterator isn't std::iter::Iterator
+```
+::
+- **Const generics need syntactically-identical expressions to unify on stable**:
+::code-wrapper{language="rust"}
+```rust
+struct Arr<const N: usize>;
+fn const_expr_mismatch() {
+    let a: Arr<5> = Arr;
+    // let b: Arr<{ 2 + 3 }> = a; // may fail to unify even though 2+3 == 5
+}
+```
+::
+- **`PhantomData<T>` vs `PhantomData<*const T>` compiles and passes ordinary tests either way** — the soundness hole only appears via subtyping/coercion patterns most suites never construct (see the `Generator<T>` anti-pattern above).
 
 ## 🧠 Spot the Bug
 
@@ -454,16 +542,53 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-It fails with a lifetime error: `short_lived` does not live long enough.
+`short_lived` does not live long enough. `&mut &'a str` is invariant in `'a`, so the compiler must unify `'a` to the *shortest* lifetime satisfying both `dest` (needs `r`'s lifetime, which spans to the `println!`) and `src` (`short_lived`'s short scope) — it can't shrink just one side. The only consistent `'a` is too short for `r`'s required lifetime, so the borrow is rejected.
 
-`assign_shorter` takes `dest: &mut &'a str` — a mutable reference to a `&'a str`. Because `&mut T` is **invariant** in `T`, the compiler cannot let the caller pass a `&mut &'a str` where `'a` is inferred to be *shorter* than `r`'s actual lifetime; instead, unification forces `'a` in the function call to be the *shortest* lifetime that satisfies both the `&mut r` borrow and the `src` argument. Since `src` is `&short_lived` (scoped to the inner block) and `dest` is `&mut r` (where `r` must remain valid until the final `println!`), the compiler is forced to conclude `'a` must be at most as long as `short_lived`'s scope — but `r` needs to outlive that scope for the `println!` to work, so the borrow of `r` as `&mut &'a str` with that short `'a` is rejected: it would let `*dest = src` assign a short-lived reference into a binding (`r`) that needs to outlive it. If `&mut T` were covariant, this code would compile and `println!("{r}")` would print through a dangling reference to the already-dropped `short_lived` — invariance is precisely what closes this hole at compile time.
+::code-wrapper{language="rust"}
+```rust
+// If it DID compile (it doesn't), this is the dangling reference it would produce:
+fn what_would_happen() {
+    // r would point at short_lived's freed stack memory here,
+    // and println!("{r}") would read use-after-free.
+}
+```
+::
 
-**The lesson**: `&mut T` is invariant in `T` so that you can never use a mutable reference to smuggle a shorter-lived value into a binding that's expected to outlive it.
+**The lesson**: `&mut T` is invariant in `T` precisely so a mutable reference can never smuggle a shorter-lived value into a binding expected to outlive it.
 
 </details>
 
 ## Summary
 
-Variance governs subtype relationships and is mostly about lifetimes (and `&mut`'s invariance in `T`). HRTBs express "for all lifetimes." Associated types vs generics: one natural type vs caller-supplied. Object safety limits trait objects. GATs (1.65+) enable borrowing in associated types. Const generics (1.51+) parameterize by integers/bools. PhantomData tunes variance and drop behavior. Newtype pattern is the idiomatic type-distinctness tool. Use typestate pattern for compile-time validation; use sealed traits to prevent external implementations.
+::code-wrapper{language="rust"}
+```rust
+// Variance: &T covariant, &mut T invariant — invariance is load-bearing soundness
+fn covariant<'a>(_: &'a str) {}
+fn invariant_marker<'a>(_: &'a mut &'a str) {}
+```
+::
 
-Next: Common design patterns and idiomatic Rust.
+::code-wrapper{language="rust"}
+```rust
+// Generics: N copies, zero dispatch cost, inlinable, larger binary
+fn mono<T: Clone>(x: T) -> T { x.clone() }
+
+// dyn: 1 copy, vtable dispatch, no cross-call inlining, smaller binary
+fn dynamic(x: &dyn std::fmt::Debug) { println!("{x:?}"); }
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// HRTB: universal quantification over lifetimes chosen per-call
+fn hrtb<F: for<'a> Fn(&'a str) -> usize>(f: F) -> usize { f("x") }
+
+// GAT: associated type borrowing from &self — real expressiveness gain,
+// real ecosystem-composability cost (no `for` loop sugar, see above)
+trait Lend { type Item<'a> where Self: 'a; }
+```
+::
+
+Object safety is a trait's public contract with `dyn` consumers — breaking it is a stealth breaking change; `PhantomData`'s variant choice is a correctness decision, not boilerplate.
+
+Next: Design patterns and idiomatic Rust — how these type-system primitives compose into production-grade APIs.

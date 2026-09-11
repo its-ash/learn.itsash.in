@@ -1,393 +1,417 @@
 # 15 — Iterators & Combinators
 
-Rust's iterators are **lazy**, **zero-cost**, and compose into chains that compile down to tight loops. Mastering them is the difference between "writing Rust" and "writing idiomatic Rust".
+"Zero-cost abstraction" holds because LLVM does enormous, specific work to make it true. This chapter shows *why* `v.iter().map(f).filter(g).sum()` compiles to a hand-rolled loop — and where that guarantee breaks — mostly in code.
 
-## The `Iterator` Trait
+## Under-the-Hood Mechanics
 
-### Why it's built around a single `next()`
+The entire `Iterator` trait rests on one required method; everything else is default-implemented on top of it.
 
-The entire `Iterator` trait is built around **one required method**: `next(&mut self) -> Option<Self::Item>`. Everything else — `map`, `filter`, `fold`, `collect`, `take`, `sum`, dozens of methods — is a *provided method* derived from `next`. This design exists so that **any** sequence-producing logic can be an iterator by implementing one method, and instantly get the entire combinator library for free. The conceptual model is *pull-based*: an iterator yields the next item on demand (`next`), reports exhaustion with `None`, and the adapters layer on top by calling `next` and transforming the result. This minimal contract is what makes iterator composition so uniform and zero-cost.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 pub trait Iterator {
     type Item;
     fn next(&mut self) -> Option<Self::Item>;
-    // ... dozens of provided methods
+    // map, filter, take, sum, collect, ... all default-implemented via next()
 }
 ```
 ::
 
-Implement `next()` and you get `map`, `filter`, `fold`, `collect`, etc. for free.
+Adapters are generic structs, not dynamic wrappers — no vtable, no heap allocation.
 
-## Laziness
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let v = vec![1, 2, 3];
-let it = v.iter().map(|x| x * 2);   // no work yet
-for y in it { println!("{y}"); }    // work happens here
+// (simplified — roughly what std generates)
+struct Map<I, F> { iter: I, f: F }
+struct Filter<I, P> { iter: I, predicate: P }
+
+// v.iter().map(f).filter(g) has this concrete, fully-known type:
+// Filter<Map<std::slice::Iter<'_, T>, F>, G>
 ```
 ::
 
-Iterator chains don't run until consumed (by `for`, `collect`, `sum`, `count`, etc.).
+After monomorphization + inlining, the whole chain collapses to a single loop:
 
-## `IntoIterator`
-
-Anything implementing `IntoIterator` can be used in `for`:
-
-::code-wrapper{language="rust"}
-```rust
-for x in &vec { }       // &Vec<T>  -> Iterator<Item = &T>
-for x in &mut vec { }  // &mut Vec<T> -> Iterator<Item = &mut T>
-for x in vec { }        // Vec<T> -> consumes, yields T
-```
-::
-
-`Vec<T>: IntoIterator<Item = T>` since edition 2021. Pre-2021, arrays only borrowed-by-default — `for x in [1,2,3]` errored unless you wrote `for x in &[1,2,3]` or `into_iter()`.
-
-## Consuming vs Borrowing Iterators
-
-| Method | Yields |
-|---|---|
-| `iter()` | `&T` |
-| `iter_mut()` | `&mut T` |
-| `into_iter()` | `T` (consumes the collection) |
-
-## Common Adapters (Producers)
-
-::code-wrapper{language="rust"}
-```rust
-0..10                       // Range
-(1..=5).rev()
-"abc".chars()
-"abc".bytes()
-vec.iter()
-vec.iter_mut()
-vec.into_iter()
-slice.chunks(3)
-slice.chunks_exact(3)
-slice.rchunks(3)
-slice.windows(2)             // sliding window, overlapping
-slice.split(|c| *c == b',')
-slice.splitn(3, |c| *c == b',')
-str.lines()
-str.split_whitespace()
-str.split_ascii_whitespace()
-std::iter::repeat(5)         // infinite
-std::iter::repeat_with(|| rand::random())
-std::iter::once(5)
-std::iter::empty::<i32>()
-std::iter::successors(Some(1), |n| Some(n * 2))   // unfold
-std::iter::from_fn(|| Some(1))
-std::iter::zip(a, b)         // zip two iterables
-```
-::
-
-## Common Transformers
-
-::code-wrapper{language="rust"}
-```rust
-it.map(|x| x * 2)
-it.filter(|x| *x > 0)
-it.filter_map(|x| if *x > 0 { Some(*x) } else { None })
-it.enumerate()               // (index, item)
-it.zip(other_iter)           // pair up
-it.flat_map(|x| x.iter())     // flatten one level
-it.flatten()                  // for Iterator<Item = Iterator>
-it.take(3)                    // first 3
-it.skip(3)
-it.take_while(|x| *x < 10)
-it.skip_while(|x| *x < 10)
-it.step_by(2)
-it.chain(other)
-it.rev()                       // requires DoubleEndedIterator
-it.peekable()                  // Peekable — see next without consuming
-it.cycle()                     // infinite repeat (Clone-able items)
-it.scan(init, |state, x| ...)  // stateful map, returns Option
-it.dedup()
-it.unzip()                     // (Vec<A>, Vec<B>)
-it.collect()
-it.copied()                    // Iterator<Item=&T where T:Copy> -> Item=T
-it.cloned()                    // Iterator<Item=&T> -> Item=T (T: Clone)
-it.by_ref()                    // borrow iterator for partial consumption
-```
-::
-
-## Common Consumers
-
-::code-wrapper{language="rust"}
-```rust
-it.collect::<Vec<_>>()
-it.collect::<HashMap<K, V>>()
-it.sum::<i32>()
-it.product::<i32>()
-it.count()
-it.last()              // Option<T>
-it.nth(5)
-it.all(|x| *x > 0)
-it.any(|x| *x > 0)
-it.find(|x| *x > 0)    // first matching
-it.position(|x| *x > 0) // Option<usize>
-it.fold(init, |acc, x| acc + x)
-it.try_fold(init, |acc, x| Ok(acc + x))   // bails on Err
-it.for_each(|x| println!("{x}"))
-it.max() / it.min()
-it.max_by_key(|x| *x)
-it.min_by(|a, b| a.cmp(b))
-it.eq(other)
-it.ne(other)
-it.lt(other)
-it.cmp(other)
-it.partition(|x| *x > 0)   // (Vec<T>, Vec<T>)
-it.unzip()
-```
-::
-
-## `collect` and `FromIterator`
-
-### How it works conceptually
-
-`collect` builds *any* type that implements `FromIterator<A>` — a trait with a `from_iter: IntoIterator<Item = A> -> Self` method. The same `collect` call can target wildly different collections (`Vec`, `HashMap`, `String`, `HashSet`) because each of those types implements `FromIterator` differently: `Vec` pushes each item, `HashMap` inserts each `(k, v)` pair, `String` appends each `char`. You tell `collect` which type to build via a type annotation or turbofish (`collect::<Vec<_>>()`); the compiler resolves the `FromIterator` impl. This is why one method serves every collection — the destination type owns the logic.
-
-::code-wrapper{language="rust"}
-```rust
-let v: Vec<i32> = (0..5).collect();
-let s: String = "abc".chars().collect();
-let m: HashMap<&str, i32> = [("a", 1), ("b", 2)].into_iter().collect();
-let (evens, odds): (Vec<i32>, Vec<i32>) = (0..10).partition(|x| x % 2 == 0);
-```
-::
-
-`collect` can build *any* `FromIterator` type — the turbofish or type annotation tells it which.
-
-## Custom Iterator (Manual `impl`)
-
-### When to write a manual `impl`
-
-Most iterators come from composing existing adapters (`.map()`, `.filter()`, `.chunks()`, etc.) — reach for that first. You write a manual `impl Iterator` only when the iteration logic is **stateful in a way no combinator expresses cleanly**: a state machine, a parser producing tokens, a generator with non-trivial termination, or a sequence derived from external state (reading bytes from a device). The example below is a `Counter`, but the real motivation is custom iteration logic that doesn't map to existing adapters.
-
-::code-wrapper{language="rust"}
-```rust
-struct Counter { count: u32 }
-impl Counter {
-    fn new() -> Self { Counter { count: 0 } }
-}
-impl Iterator for Counter {
-    type Item = u32;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.count += 1;
-        if self.count <= 5 { Some(self.count) } else { None }
-    }
-}
-
-for n in Counter::new().map(|x| x * 2) {
-    println!("{n}");   // 2, 4, 6, 8, 10
-}
-```
-::
-
-## Performance: Iterators Compile to Tight Loops
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let v: Vec<i32> = (0..1_000_000).collect();
 let sum: i32 = v.iter().map(|x| x + 1).filter(|x| x % 2 == 0).sum();
+// After inlining: one loop, one branch per element.
+// `cargo expand` shows a wall of nested generics — that complexity
+// exists at the type level precisely so it can vanish at the machine-code level.
 ```
 ::
 
-This compiles to essentially the same machine code as a hand-written `for` loop. No allocations, no closures dispatched at runtime — everything inlines.
+Laziness follows from the pull model: nothing runs until a consumer calls `.next()`.
 
-## `DoubleEndedIterator`
-
-### How double-endedness works
-
-A `DoubleEndedIterator` adds a `next_back` method: you can pull from *either end*. `.rev()` works by swapping to `next_back`. Not every iterator is double-ended — `std::io::Lines` reading a file can only go forward (you can't un-read a line), and infinite iterators have no back. You care about double-endedness when you need to consume from the back (reversal, deque-style), or when you want to interleave front/back consumption (e.g., building a palindrome, two-pointer algorithms).
-
-`.rev()` requires `DoubleEndedIterator` (can pull from the back):
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-for x in (0..5).rev() { print!("{x} "); }   // 4 3 2 1 0
+fn main() {
+    let v = vec![1, 2, 3];
+    let iter = v.iter().map(|x| {
+        println!("mapping {x}"); // does NOT print yet
+        x * 2
+    });
+    println!("chain built, nothing consumed");
+    let doubled: Vec<i32> = iter.collect(); // prints "mapping 1/2/3" HERE
+    println!("{doubled:?}");
+}
 ```
 ::
 
-Not all iterators are double-ended (`std::io::Lines` reading a file isn't).
+`collect` dispatches through `FromIterator`, resolved entirely at compile time — no runtime "what collection is this" check.
 
-## `ExactSizeIterator`
-
-`.len()` works if the iterator knows its exact remaining length. This trait exists so consumers can **pre-allocate** the destination collection — `Vec::from_iter` can reserve the exact capacity up front, avoiding reallocations during `collect`. An iterator knows its exact size when it's derived from a sized source (a `Vec`, a `Range`); it doesn't when the source is unbounded or when adapters like `filter` make the count unpredictable.
-
-## Infinite Iterators
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let ones = std::iter::repeat(1);
-let natural = (0..).map(|x| x * 2);
-let mut evens = (0..).step_by(2);
+fn collect<B: FromIterator<Self::Item>>(self) -> B {
+    FromIterator::from_iter(self)
+}
+
+// Same source iterator, three different FromIterator impls picked at compile time:
+let as_vec: Vec<i32> = (1..=3).collect();
+let as_set: std::collections::HashSet<i32> = (1..=3).collect();
+let as_string: String = ['a', 'b', 'c'].into_iter().collect();
 ```
 ::
 
-Use `take(n)` or `take_while` to bound them. Don't `.collect()` an infinite iterator!
+## Cost, Performance, and Trade-Offs
 
-## `peekable`
-
-### When to reach for it
-
-`peekable` lets you **look at the next item without consuming it** — `peek()` returns `Option<&Item>` and leaves the iterator's state unchanged. This is essential for **lookahead parsing**: a tokenizer that needs to decide based on the upcoming token, a parser distinguishing `==` from `=` by peeking the second `=`, or any "consume if next matches X" pattern. Without `peekable`, you'd have to consume the item and re-inject it on mismatch — `peek` lets you inspect first.
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let mut it = vec.iter().peekable();
-let first = it.peek();
-if let Some(&&3) = first { /* ... */ }
-let actual = it.next();
+// Zero-cost is a RELEASE-BUILD guarantee, not universal.
+// debug build (opt-level = 0): every adapter is a real, uninlined call
+// release build (opt-level = 3): collapses to a tight loop
+//
+// Never benchmark iterators with `cargo build` / `cargo run` — only `--release`.
 ```
 ::
 
-`peek` returns `Option<&Item>` without advancing.
+`Box<dyn Iterator<Item = T>>` is the escape hatch when branches return different concrete types — and it reintroduces real cost: one allocation, one vtable call per `.next()`.
 
-## `fuse`
-
-### Why this matters
-
-The `Iterator` contract says: once `next` returns `None`, calling `next` again has **unspecified** behavior — some iterators return `None` forever, some may return `Some` again (it's not guaranteed). `fuse` wraps an iterator and makes it **always return `None` after the first `None`**, giving you a deterministic contract. You reach for `fuse` when you can't trust the underlying iterator's post-exhaustion behavior — e.g., when you're manually driving `next` in a loop and want a guarantee, or when mixing iterators where one might misbehave after exhaustion.
-
-After an iterator returns `None` once, calling `next` again is unspecified — `fuse` makes it always return `None` after the first:
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let mut it = some_iter.fuse();
-while let Some(x) = it.next() { /* ... */ }
-it.next();   // guaranteed None
+// Needed because `impl Iterator` requires ONE concrete return type per function:
+fn events(enabled: bool) -> Box<dyn Iterator<Item = i32>> {
+    if enabled {
+        Box::new((0..10).filter(|x| x % 2 == 0)) // Filter<Range<i32>, _>
+    } else {
+        Box::new(0..10) // Range<i32> — different concrete type, won't unify with impl Trait
+    }
+}
 ```
 ::
 
-## `inspect`
+`collect`'s pre-allocation depends on `size_hint` — `.filter()` degrades the bound, `.map()` preserves it.
 
-For debugging chains without breaking them:
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-(0..5)
-    .inspect(|x| println!("before: {x}"))
-    .map(|x| x * 2)
-    .inspect(|x| println!("after:  {x}"))
-    .collect::<Vec<_>>();
+// Cheap: exact size hint survives map -> one allocation
+let v: Vec<i32> = (0..1_000_000).map(|x| x * 2).collect();
+
+// More expensive: filter can't know the output count -> amortized-doubling reallocs
+let v: Vec<i32> = (0..1_000_000).filter(|x| x % 2 == 0).collect();
+
+assert_eq!((0..1_000_000).map(|x| x * 2).size_hint(), (1_000_000, Some(1_000_000)));
+assert_eq!((0..1_000_000).filter(|x| x % 2 == 0).size_hint().1, None); // no upper bound
 ```
 ::
 
-## Iterators and Ownership
+Compile time scales with chain depth and generic fan-out — visible directly:
 
-### How iterator lifetimes tie to the collection
-
-The kind of iterator you use (`iter()`, `iter_mut()`, `into_iter()`) determines **who owns the data during iteration**. `iter()` borrows immutably — the collection lives, you get `&T`s, and multiple iterators can coexist. `iter_mut()` borrows mutably — the collection lives, you get `&mut T`s, but no other access is allowed meanwhile. `into_iter()` **consumes** the collection — it's gone after, you get owned `T`s. The choice ties the iteration's lifetime to the collection's ownership: borrowing iterators can't outlive the collection; `into_iter` ends the collection's life. This is why `for s in v` (consuming) leaves `v` unusable, while `for s in &v` keeps `v` alive.
-
-::code-wrapper{language="rust"}
-```rust
-let v = vec![String::from("a"), String::from("b")];
-
-// Borrow (keep v alive):
-for s in &v { /* s: &String */ }
-
-// Consume (v gone after):
-for s in v { /* s: String */ }
-
-// Partial consume then use rest:
-let mut it = v.into_iter();
-let first = it.next();
-let rest: Vec<_> = it.collect();
-```
-::
-::
-
-## Common Patterns
-
-### Group consecutive equal elements
-
-::code-wrapper{language="rust"}
-```rust
-let v = vec![1, 1, 2, 2, 2, 3];
-for (key, group) in v.into_iter().group_by(|a, b| a == b) { /* unstable API */ }
-// Use `itertools` crate for `group_by` on stable.
+::code-wrapper{language="rust" filename="main.rs"}
+```bash
+cargo build --timings   # flags slow-to-monomorphize generic call sites
 ```
 ::
 
-### Chunked iterator
+## Production Failure Modes & Anti-Patterns
 
-::code-wrapper{language="rust"}
+### Collecting an infinite iterator
+
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-for chunk in v.chunks(10) { /* process */ }
+// WRONG: hangs / OOMs, no panic, no compiler error
+fn generate_ids() -> Vec<u64> {
+    (0..).map(|x| x * 2).collect() // RangeFrom has no upper bound
+}
 ```
 ::
 
-### Build a map from a vec
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let m: HashMap<i32, &str> = vec.iter().map(|x| (*x, "x")).collect();
+// RIGHT: bound unbounded sources explicitly
+fn generate_ids(count: usize) -> Vec<u64> {
+    (0..).map(|x| x * 2).take(count).collect()
+}
 ```
 ::
 
-### Sum of squares of evens
+### Holding a borrow alive across a chain, then dropping the source
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let sum: i32 = (1..=100).filter(|x| x % 2 == 0).map(|x| x * x).sum();
+// WRONG-SHAPED (compiles as written, breaks one refactor later):
+fn process(v: &Vec<i32>) -> impl Iterator<Item = i32> + '_ {
+    v.iter().map(|x| x * 2) // ties the returned iterator's lifetime to `v`
+}
+
+fn main() {
+    // let it = process(&vec![1, 2, 3]); // temporary Vec dropped -> caught by compiler HERE
+    let owned = vec![1, 2, 3];
+    let it = process(&owned); // fine, but only because `owned` outlives `it`
+    println!("{:?}", it.collect::<Vec<_>>());
+}
 ```
 ::
 
-### Flatten nested options
-
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let v: Vec<i32> = vec![Some(1), None, Some(2)].into_iter().flatten().collect();
+// RIGHT: decide ownership up front instead of chasing lifetime errors later
+fn process_owned(v: Vec<i32>) -> impl Iterator<Item = i32> {
+    v.into_iter().map(|x| x * 2) // owns its data, no borrow to outlive
+}
 ```
 ::
 
-### Find max by key
+### Silently dropping errors with `.flatten()`
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-let max = v.iter().max_by_key(|x| x.score);
+// WRONG: looks correct, silently discards every parse failure
+fn parse_all(inputs: &[&str]) -> Vec<i32> {
+    inputs.iter()
+        .map(|s| s.parse::<i32>())  // Iterator<Item = Result<i32, ParseIntError>>
+        .flatten()                  // Result: Err -> 0 items, Ok -> 1 item
+        .collect()
+}
+
+fn main() {
+    let bad = ["1", "oops", "3"];
+    println!("{:?}", parse_all(&bad)); // [1, 3] — "oops" vanished, no error, no log
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// RIGHT: fail the whole batch on first error
+fn parse_all_strict(inputs: &[&str]) -> Result<Vec<i32>, std::num::ParseIntError> {
+    inputs.iter().map(|s| s.parse::<i32>()).collect() // Result<Vec<_>, _> via FromIterator
+}
+
+// RIGHT: keep successes AND surface failures
+fn parse_all_partial(inputs: &[&str]) -> (Vec<i32>, Vec<String>) {
+    let mut ok = Vec::new();
+    let mut errs = Vec::new();
+    for s in inputs {
+        match s.parse::<i32>() {
+            Ok(n) => ok.push(n),
+            Err(e) => errs.push(format!("{s}: {e}")),
+        }
+    }
+    (ok, errs)
+}
+```
+::
+
+### `Box<dyn Iterator>` in a hot loop after a well-intentioned refactor
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// WRONG: "clean up the API" refactor reintroduces vtable overhead
+// in what used to be a fully inlined, monomorphized hot loop
+struct Event { valid: bool }
+fn events() -> impl Iterator<Item = Event> { std::iter::empty() }
+
+fn make_pipeline(filter_enabled: bool) -> Box<dyn Iterator<Item = Event>> {
+    if filter_enabled {
+        Box::new(events().filter(|e| e.valid)) // called per-packet -> per-.next() vtable hit
+    } else {
+        Box::new(events())
+    }
+}
+```
+::
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// RIGHT: push the runtime condition INSIDE the chain, stay monomorphized
+fn make_pipeline_fast(filter_enabled: bool) -> impl Iterator<Item = Event> {
+    events().filter(move |e| !filter_enabled || e.valid)
+}
+```
+::
+
+## Architectural Application
+
+`impl Iterator` in a public signature commits you to one concrete return type forever; `Box<dyn Iterator>` trades that rigidity for dynamic dispatch cost.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Locks in static dispatch — adding a second concrete return type later is a breaking change
+pub fn ids() -> impl Iterator<Item = u64> { (0..100).map(|x| x as u64) }
+
+// Flexible, but every .next() pays a vtable indirection
+pub fn ids_dyn() -> Box<dyn Iterator<Item = u64>> { Box::new((0..100).map(|x| x as u64)) }
+```
+::
+
+Accepting `impl Iterator<Item = T>` instead of `Vec<T>` commits a function to streaming — bounded memory regardless of input size.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// Streaming: works on a source larger than memory (file lines, paginated API)
+fn sum_all(items: impl Iterator<Item = i64>) -> i64 { items.sum() }
+
+// Materializing: caller must build the whole Vec first, even for a one-pass consumer
+fn sum_all_vec(items: Vec<i64>) -> i64 { items.into_iter().sum() }
+```
+::
+
+A custom `Iterator` impl expresses a state machine as data flow — a decoder gets every combinator for free.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Decoder<'a> { bytes: &'a [u8], pos: usize }
+
+impl<'a> Iterator for Decoder<'a> {
+    type Item = u8;
+    fn next(&mut self) -> Option<u8> {
+        let b = *self.bytes.get(self.pos)?;
+        self.pos += 1;
+        Some(b)
+    }
+}
+
+fn main() {
+    let d = Decoder { bytes: &[1, 2, 3, 0, 4], pos: 0 };
+    let before_zero: Vec<u8> = d.take_while(|&b| b != 0).collect(); // free combinator
+    println!("{before_zero:?}"); // [1, 2, 3]
+}
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `.inspect(|x| eprintln!("{x:?}"))` spliced anywhere in a chain lets you peek at intermediate values without breaking the chain or changing its type — far less disruptive than temporarily `.collect()`ing to a `Vec` just to `println!` it.
-- **Idiom**: prefer `.filter_map(|x| ...)` over `.filter(...).map(...)` when the predicate and transformation both depend on the same computed `Option` — it avoids computing that value twice and is usually clearer besides.
-- **Performance**: `.copied()` is preferred over `.cloned()` for `Iterator<Item = &T> where T: Copy` — both compile down to a copy for `Copy` types, but `.copied()` documents the intent and fails to compile if `T` ever stops being `Copy`, catching an accidental future deep-clone at compile time.
-- **Idiom**: `std::iter::successors(Some(seed), |&x| next(x))` is an underused way to express "unfold" sequences (like a linked-list traversal or a Collatz sequence) lazily, without a manual `while let` loop and a `Vec` to collect into.
-- **Debug**: if `.collect()` gives a baffling type-inference error, add a turbofish (`.collect::<Vec<_>>()`) at the point of the error rather than trying to annotate the outer `let` — it isolates whether the ambiguity is really about the collection type.
-- **Performance**: `Vec::from_iter` and `.collect::<Vec<_>>()` will use `size_hint()` to pre-allocate when the iterator reports an exact or reasonable bound — chains that start from a `Vec`/slice `iter()` (which have exact size hints) collect with zero reallocations.
+- **Debug**: splice `.inspect()` into a chain instead of collecting early just to `println!`.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let sum: i32 = (1..=3)
+    .inspect(|x| eprintln!("before map: {x}"))
+    .map(|x| x * 10)
+    .inspect(|x| eprintln!("after map: {x}"))
+    .sum();
+```
+::
+
+- **Idiom**: `.filter_map()` beats `.filter().map()` when both depend on the same `Option`.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// WRONG-ISH: parses twice
+let ok: Vec<i32> = ["1", "x", "3"].iter()
+    .filter(|s| s.parse::<i32>().is_ok())
+    .map(|s| s.parse::<i32>().unwrap())
+    .collect();
+
+// RIGHT: parses once
+let ok: Vec<i32> = ["1", "x", "3"].iter()
+    .filter_map(|s| s.parse::<i32>().ok())
+    .collect();
+```
+::
+
+- **Performance**: `.copied()` over `.cloned()` for `Copy` types — fails to compile instead of silently deep-cloning later.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let v = vec![1, 2, 3];
+let a: Vec<i32> = v.iter().copied().collect(); // compiles: i32 is Copy
+// let b: Vec<String> = strings.iter().copied().collect(); // won't compile — forces .cloned()
+```
+::
+
+- **Debug**: resolve `collect()` type-inference errors with a turbofish at the call site, not an outer annotation.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let v = (1..5).collect::<Vec<_>>(); // isolates ambiguity here, not at `let v: ??? =`
+```
+::
+
+- **Idiom**: `std::iter::successors` expresses lazy "unfold" without a manual `while let` + `Vec`.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let collatz: Vec<u64> = std::iter::successors(Some(27), |&x| {
+    if x == 1 { None } else if x % 2 == 0 { Some(x / 2) } else { Some(3 * x + 1) }
+}).collect();
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`collect` ambiguity**: if you write `let v = it.collect();` without a type annotation, you'll get an error. Always annotate.
-- **Iterator invalidation**: you can't mutate the underlying collection while iterating via a borrowed iterator. `Vec::retain` is the safe way to filter in place.
-- **`for x in vec` consumes**: easy mistake — `vec` is gone after. Use `&vec` to keep it.
-- **Infinite iterator + `count`/`sum`**: hangs forever.
-- **`.rev()` on `Range` from `0..`**: `RangeFrom` isn't `DoubleEndedIterator` (no end to reverse to).
-- **`.zip` stops at shorter**: zipping a 3-element with a 5-element yields 3 pairs. Use `itertools::zip_longest` for the padded form.
-- **Closure captures**: `it.map(|x| x + offset)` borrows `offset` for the iterator's lifetime; can surprise you with borrow errors.
-- **`flatten` on `Iterator<Item = Option<T>>`**: this is a special impl — `Option` impls `IntoIterator`. Same for `Result<T, E>` (only the `Ok` cases flatten).
-- **`Iterator::size_hint`**: returns `(lower, Option<upper>)`; useful for algorithms that need a size estimate.
-- **Lazy evaluation gotcha**: `let v = vec![1,2,3]; let iter = v.iter().map(|x| x+1); drop(v);` — the iterator still holds a borrowed reference, dropping `v` is an error.
-- **Multiple `.rev()` calls**: `.rev().rev()` works and cancels out, but at runtime cost (two reversals). Don't do it idomatically; keep one `.rev()` where needed.
-- **`Peekable` and consuming after peek**: `.peek()` returns `Option<&Item>`, then `.next()` still consumes the peeked item. No double-consumption.
-- **`.take(n)` beyond iterator end**: safe — stops naturally when iterator is exhausted.
-- **Combining iterators with different types**: `vec![Some(1), None, Some(2)].into_iter().flatten()` works (Option's IntoIterator), but `vec![Ok(1), Err("e")].into_iter().flatten()` only flattens `Ok` values; errors are silently dropped. Use `.collect::<Result<Vec<_>, _>>()` to preserve errors.
-- **Using `.by_ref()` to split iteration**: `let mut it = v.iter(); for x in it.by_ref().take(3) { } for y in it { }` — `by_ref()` borrows the iterator so partial consumption is safe.
-- **Finding the index of an element**: `v.iter().position(|x| x == &target)` returns `Option<usize>`, not the element.
-- **Iterator adapters don't consume until collected or iterated**: `v.iter().map(|x| expensive(x))` does nothing until you `collect()` or `for x in`.
-- **Chaining empty iterators**: `std::iter::empty::<i32>().chain(v.iter())` is valid and useful for conditional chains.
+- **Adapters do no work until consumed** — a `println!` inside `.map()` never fires "up front" (see the Under-the-Hood example above).
+
+- **`for x in vec` consumes `vec`.**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let v = vec![1, 2, 3];
+for x in v { println!("{x}"); }
+// println!("{v:?}"); // ERROR: value moved — use `for x in &v` to keep ownership
+```
+::
+
+- **Infinite iterator + `.count()`/`.sum()`/`.collect()` hangs or OOMs — no panic, no warning.**
+
+- **`.rev()` on `(0..)` doesn't compile** — `RangeFrom` isn't `DoubleEndedIterator`; there's no end to reverse from.
+
+- **`.zip()` silently truncates to the shorter side.**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let short = vec![1, 2, 3];
+let long = vec!["a", "b", "c", "d", "e"];
+let pairs: Vec<_> = short.iter().zip(long.iter()).collect();
+assert_eq!(pairs.len(), 3); // "d" and "e" silently dropped, no error
+```
+::
+
+- **`.flatten()` on `Iterator<Item = Result<T, E>>` silently discards every `Err`** — use `.collect::<Result<Vec<_>, _>>()` instead (see anti-pattern above).
+
+- **Calling `.next()` again after `None` is unspecified, not guaranteed forever-`None`.**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+struct Weird(u8);
+impl Iterator for Weird {
+    type Item = u8;
+    fn next(&mut self) -> Option<u8> {
+        self.0 += 1;
+        if self.0 % 3 == 0 { None } else { Some(self.0) } // None isn't final here!
+    }
+}
+// .fuse() is the explicit contract fix when a hard guarantee is required:
+let fused = Weird(0).fuse();
+```
+::
+
+- **`Peekable::peek()` does not consume.**
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+let mut it = [1, 2, 3].into_iter().peekable();
+assert_eq!(it.peek(), Some(&1));
+assert_eq!(it.next(), Some(1)); // peeked item is still returned by next()
+```
+::
 
 ## 🧠 Spot the Bug
 
 What does this print?
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 fn main() {
     let v = vec![1, 2, 3];
@@ -406,8 +430,7 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-Output:
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 about to consume
 mapping 1
@@ -415,57 +438,28 @@ got: Some(2)
 ```
 ::
 
-Not:
-::code-wrapper{language="rust"}
-```rust
-mapping 1
-mapping 2
-mapping 3
-about to consume
-got: Some(2)
-```
-::
-
-Iterators in Rust are **lazy** — `v.iter().map(|x| ...)` builds a chain of adapters but does no work at all until something actually pulls a value out of it. The closure passed to `.map()` doesn't run for every element up front; it runs exactly once per element, and only when that specific element is demanded. Calling `.next()` once demands exactly one element, so the closure prints "mapping 1" and stops — elements 2 and 3 are never touched because nothing asked for them. This trips up developers coming from languages (or from misremembering `Vec::iter().map(...).collect()` idioms) where transformation stages are commonly eager.
-
-**The lesson**: iterator adapters do no work until consumed, and they only do as much work as the consumer actually demands, element by element.
+Not the eager order (`mapping 1/2/3` before `about to consume`) that developers from eager pipeline abstractions expect. `.map()` builds an adapter struct and does no work until pulled — one `.next()` call demands exactly one element, so only `1` is ever touched.
 
 </details>
 
-## Iterator Tricks
+## Summary
 
-::code-wrapper{language="rust"}
+::code-wrapper{language="rust" filename="main.rs"}
 ```rust
-// Trick: collect into tuple of vecs
-let (evens, odds): (Vec<_>, Vec<_>) = (1..10).partition(|x| x % 2 == 0);
+// Pull-based: nothing runs until .next() is called (for/collect/sum/...)
+v.iter().map(f).filter(g); // builds structs, does zero work
 
-// Trick: fold to accumulate with closure state
-let counts = vec!["a", "a", "b", "c", "c", "c"];
-let result = counts.iter().fold(HashMap::new(), |mut map, word| {
-    *map.entry(word).or_insert(0) += 1;
-    map
-});
+// "Zero-cost" = release-build inlining outcome, breaks at a dyn boundary:
+let fast: impl Iterator<Item = i32> = (0..5).map(|x| x); // inlinable
+let slow: Box<dyn Iterator<Item = i32>> = Box::new((0..5).map(|x| x)); // vtable per .next()
 
-// Trick: skip the first N items, process rest
-let v = vec![0, 1, 2, 3, 4, 5];
-for x in v.iter().skip(2) { println!("{x}"); } // prints 2, 3, 4, 5
+// collect() efficiency depends on size_hint propagation through the chain
+(0..1000).map(|x| x).collect::<Vec<_>>();      // exact hint -> one alloc
+(0..1000).filter(|x| x % 2 == 0).collect::<Vec<_>>(); // degraded hint -> reallocs
 
-// Trick: group consecutive items with tuple windows
-for [a, b] in v.iter().collect::<Vec<_>>().windows(2) { }
-
-// Trick: use scan for stateful mapping
-let v = vec![1, 2, 3];
-let running_sum: Vec<_> = v.iter().scan(0, |acc, x| { *acc += x; Some(*acc) }).collect();
-// running_sum = [1, 3, 6]
-
-// Trick: unzip to split a Vec of tuples
-let pairs = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-let (nums, chars): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+// Never collect an unbounded source without .take(n) first
+(0..).take(10).collect::<Vec<_>>();
 ```
 ::
 
-## Summary
-
-Iterators are lazy, zero-cost, and compose beautifully. Pick the right adapter for the job. `collect` is a swiss-army knife driven by type inference. Avoid infinite iterator pitfalls. Manual `Iterator` impl is straightforward — implement `next()`.
-
-Next: Traits and generics — the type system's reuse mechanism.
+Next: Traits and generics — how static dispatch, monomorphization, and vtables actually get generated, and what each costs.

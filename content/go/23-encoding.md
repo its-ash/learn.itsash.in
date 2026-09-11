@@ -1,259 +1,338 @@
+---
+title: "23 — Encoding: JSON, CSV, gob"
+description: "Struct tag mechanics, streaming JSON, json.Number precision, custom marshalers, CSV streaming, and gob for Go-to-Go serialization."
+---
+
 # 23 — Encoding: JSON, CSV, gob
 
-Go's `encoding/` packages handle serialization. `encoding/json` is the most-used — Go's struct tags make JSON mapping declarative.
-
-## JSON Marshaling
+## JSON — Struct Tags and `omitempty`
 
 ::code-wrapper{language="go"}
 ```go
 type User struct {
-	ID       int    `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email,omitempty"`
-	Password string `json:"-"`           // never serialized
-	Age      int    `json:"age,omitempty"`
+	// JSON tags control serialization:
+	ID       int64  `json:"id"`                          // serialize as "id"
+	Name     string `json:"name" validate:"required"`   // multiple tags
+	Email    string `json:"email,omitempty"`             // omit if zero value
+	Password string `json:"-"`                           // never serialize
+	Age      *int   `json:"age,omitempty"`              // *int: nil=omit, 0=include
+	CreatedAt time.Time `json:"created_at"`              // snake_case in JSON
 }
 
-u := User{ID: 1, Username: "alice", Password: "secret"}
-data, err := json.Marshal(u)
-// {"id":1,"username":"alice","email":"","age":0}
-// (password excluded, email and age included because... see omitempty)
+// ─── omitempty traps ───
+type Response struct {
+	Count int    `json:"count,omitempty"`   // 0 → omitted (but 0 may be valid!)
+	Items []int  `json:"items,omitempty"`    // nil/empty → omitted
+	Name  string `json:"name,omitempty"`     // "" → omitted
+	Done  bool   `json:"done,omitempty"`     // false → omitted
+}
 
-data, err := json.MarshalIndent(u, "", "  ")   // pretty-printed
+r := Response{Count: 0, Items: []int{}}
+data, _ := json.Marshal(r)
+// {"items":[]}  — Count and Name omitted (zero values), Items included (non-nil empty)
+// ⚠️ Count=0 was omitted — but 0 might be a valid count!
+
+// ✅ Fix: use *int for fields where 0 is a valid value:
+type FixedResponse struct {
+	Count *int `json:"count,omitempty"`  // nil → omitted, 0 → "count":0
+}
+c := 0
+fr := FixedResponse{Count: &c}
+data, _ = json.Marshal(fr)
+// {"count":0}  — 0 is included because *int is non-nil
 ```
-::
 
-### Struct tags
-
-- `json:"name"` — serialize as `"name"`.
-- `json:"name,omitempty"` — omit if the field is the zero value (`0`, `""`, `false`, `nil`, empty slice/map).
-- `json:"-"` — never serialize.
-- `json:",omitempty"` — use the field name, omit if zero.
-- No tag — use the Go field name (PascalCase, which is unusual in JSON).
-
-### `omitempty` and zero values
-
-`omitempty` omits zero values, but this can be ambiguous — `0` (a real age of 0) and `""` (a real empty string) are omitted along with "not set." For fields where zero is a valid value, use a pointer (`*int`) — `nil` (omitted) vs `0` (included):
+## JSON — Streaming with `json.Encoder`/`Decoder`
 
 ::code-wrapper{language="go"}
 ```go
-type User struct {
-	Age *int `json:"age,omitempty"`   // nil → omitted, 0 → "age":0
-}
-``
-::
+// ─── Encoder — streaming write (NDJSON, log files) ───
+func writeNDJSON(path string, records []User) error {
+	f, err := os.Create(path)
+	if err != nil { return err }
+	defer f.Close()
 
-## JSON Unmarshaling
-
-::code-wrapper{language="go"}
-```go
-var u User
-err := json.Unmarshal([]byte(`{"id":1,"username":"alice"}`), &u)
-// u.ID = 1, u.Username = "alice", other fields = zero values
-``
-::
-
-- Unmarshal into a struct (typed) or `map[string]interface{}`/`any` (dynamic).
-- Unknown JSON fields are **ignored** by default (no error).
-- Use `json.Decoder` for streaming (from an `io.Reader`).
-
-### `json.Decoder` (streaming)
-
-::code-wrapper{language="go"}
-```go
-dec := json.NewDecoder(r)
-for {
-	var v MyType
-	if err := dec.Decode(&v); err == io.EOF {
-		break
-	} else if err != nil {
-		return err
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")  // pretty-print (optional, don't use for NDJSON)
+	for _, r := range records {
+		if err := enc.Encode(r); err != nil {  // one JSON object per line
+			return err
+		}
 	}
-	process(v)
+	return nil
 }
 
-// Disallow unknown fields (strict)
-dec := json.NewDecoder(r)
-dec.DisallowUnknownFields()
-``
-::
-
-`Decoder` reads from a stream (e.g., an HTTP body) and decodes one value at a time — efficient for large/streamed JSON.
-
-## JSON and `interface{}`
-
-::code-wrapper{language="go"}
-```go
-var v any
-json.Unmarshal([]byte(`{"a": 1, "b": [2, 3]}`), &v)
-// v is map[string]interface{}{"a": float64(1), "b": []interface{}{float64(2), float64(3)}}
-// Numbers are float64! See chapter 13.
-``
-::
-
-Decoding into `any` gives `map[string]any` for objects, `[]any` for arrays, `float64` for numbers, `string` for strings, `bool` for booleans, `nil` for null. Type-assert to use. Prefer typed structs for known schemas.
-
-### `json.Number` (preserve number precision)
-
-::code-wrapper{language="go"}
-```go
-dec := json.NewDecoder(r)
-dec.UseNumber()
-var v any
-dec.Decode(&v)
-n, _ := v.(json.Number).Int64()   // exact integer, not float64
-``
-::
-
-`UseNumber` decodes numbers as `json.Number` (a string-backed type) instead of `float64`, preserving precision for large integers.
-
-## Custom Marshaling (`MarshalJSON`/`UnmarshalJSON`)
-
-::code-wrapper{language="go"}
-```go
-type Time struct{ time.Time }
-
-func (t Time) MarshalJSON() ([]byte, error) {
-	return []byte(t.Time.Format(`"2006-01-02"`)), nil
+// ─── Decoder — streaming read (HTTP bodies, large files) ───
+func decodeStream(r io.Reader) error {
+	dec := json.NewDecoder(r)
+	for {
+		var u User
+		if err := dec.Decode(&u); err != nil {
+			if err == io.EOF { break }
+			return err
+		}
+		process(u)  // one record at a time — no full buffering
+	}
+	return nil
 }
 
-func (t *Time) UnmarshalJSON(data []byte) error {
+// ─── DisallowUnknownFields — strict schema ───
+func strictDecode(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()  // error on unrecognized fields
+	return dec.Decode(v)
+}
+// Useful for API clients where the server shouldn't add fields silently.
+```
+
+## JSON — The `float64` Number Trap
+
+::code-wrapper{language="go"}
+```go
+// encoding/json decodes numbers as float64 by default.
+// This loses precision for large integers (> 2^53).
+
+func jsonNumberTrap() {
+	var v any
+	json.Unmarshal([]byte(`{"id": 12345678901234567890}`), &v)
+	m := v.(map[string]any)
+	id := m["id"].(float64)
+	fmt.Println(int64(id))  // 12345678901234567000 — WRONG (precision lost!)
+}
+
+// ✅ Fix 1: UseNumber — numbers become json.Number (string-backed)
+func jsonUseNumber() {
+	dec := json.NewDecoder(strings.NewReader(`{"id": 12345678901234567890}`))
+	dec.UseNumber()
+	var v any
+	dec.Decode(&v)
+	m := v.(map[string]any)
+	n := m["id"].(json.Number)  // json.Number is a string
+	id, _ := n.Int64()  // 12345678901234567890 — exact
+	fmt.Println(id)
+}
+
+// ✅ Fix 2: Unmarshal into a typed struct (best for known schemas)
+type Data struct {
+	ID int64 `json:"id"`  // unmarshal directly into int64 — exact
+}
+func jsonStruct() {
+	var d Data
+	json.Unmarshal([]byte(`{"id": 12345678901234567890}`), &d)
+	fmt.Println(d.ID)  // 12345678901234567890 — exact
+}
+```
+
+## Custom Marshalers — `MarshalJSON`/`UnmarshalJSON`
+
+::code-wrapper{language="go"}
+```go
+// Implement json.Marshaler/Unmarshaler for custom serialization.
+
+type Money struct {
+	cents int64  // unexported — serialize as a string
+}
+
+func (m Money) MarshalJSON() ([]byte, error) {
+	// Serialize as "$12.34" string (not a number — avoids float precision issues):
+	s := fmt.Sprintf(`"$%d.%02d"`, m.cents/100, m.cents%100)
+	return []byte(s), nil
+}
+
+func (m *Money) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
-	parsed, err := time.Parse("2006-01-02", s)
-	if err != nil {
-		return err
-	}
-	t.Time = parsed
+	// Parse "$12.34" → 1234 cents
+	parts := strings.Split(strings.TrimPrefix(s, "$"), ".")
+	if len(parts) != 2 { return errors.New("invalid money format") }
+	dollars, _ := strconv.ParseInt(parts[0], 10, 64)
+	cents, _ := strconv.ParseInt(parts[1], 10, 64)
+	m.cents = dollars*100 + cents
 	return nil
 }
+
+type Product struct {
+	Price Money `json:"price"`
+}
+p := Product{Price: Money{cents: 1234}}
+data, _ := json.Marshal(p)
+// {"price":"$12.34"}
 ```
-::
 
-Implement `json.Marshaler`/`json.Unmarshaler` for custom serialization (dates, enums, encrypted fields).
-
-## CSV
+## JSON — Handling Null and Empty
 
 ::code-wrapper{language="go"}
 ```go
-// Write
-w := csv.NewWriter(os.Stdout)
-w.Write([]string{"name", "age", "city"})
-w.Write([]string{"Alice", "30", "NYC"})
-w.Flush()   // flush buffered data
-if err := w.Error(); err != nil {
-	log.Fatal(err)
+type Nullable struct {
+	// *string: nil → "null", "" → `""`, "x" → `"x"`
+	Optional *string `json:"optional"`
+
+	// []string: nil → "null", []string{} → "[]"
+	Tags []string `json:"tags"`
+
+	// string: "" → `""` (always present unless omitempty)
+	Name string `json:"name"`
 }
 
-// Read
-r := csv.NewReader(f)
-records, err := r.ReadAll()   // or Read() in a loop
-for _, row := range records {
-	fmt.Println(row[0], row[1], row[2])
+func nullDemo() {
+	// nil pointer and nil slice → "null":
+	n1 := Nullable{}
+	data, _ := json.Marshal(n1)
+	// {"optional":null,"tags":null,"name":""}
+
+	// Non-nil empty slice → "[]":
+	n2 := Nullable{Tags: []string{}}
+	data, _ = json.Marshal(n2)
+	// {"optional":null,"tags":[],"name":""}
+
+	// Non-nil pointer → the string value:
+	s := ""
+	n3 := Nullable{Optional: &s}
+	data, _ = json.Marshal(n3)
+	// {"optional":"","tags":null,"name":""}
 }
 
-// Custom options
-r.Comma = ';'           // default ','
-r.Comment = '#'         // lines starting with '#' are comments
-r.FieldsPerRecord = -1  // variable fields per record (default: error on mismatch)
-``
-::
+// For APIs: distinguish "field absent" (null) from "field is empty" ("")
+// Use *string (null = absent, "" = explicitly empty).
+```
 
-## gob (Go binary encoding)
+## CSV — Streaming Read/Write
 
 ::code-wrapper{language="go"}
 ```go
-// Encode
-var buf bytes.Buffer
-enc := gob.NewEncoder(&buf)
-enc.Encode(User{ID: 1, Name: "Alice"})
+import "encoding/csv"
 
-// Decode
-dec := gob.NewDecoder(&buf)
-var u User
-dec.Decode(&u)
-``
-::
+func readCSV(path string) ([][]string, error) {
+	f, err := os.Open(path)
+	if err != nil { return nil, err }
+	defer f.Close()
 
-`gob` is Go-specific binary encoding — faster and smaller than JSON, but only readable by Go. Use for Go-to-Go RPC/serialization (e.g., internal services). Not for cross-language APIs.
+	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1  // allow variable columns per row
+	// r.Comma = ';'  // change delimiter (default is comma)
+
+	records, err := r.ReadAll()  // reads all into memory
+	// For large files, read one at a time:
+	// for { record, err := r.Read(); if err == io.EOF { break }; ... }
+	return records, err
+}
+
+func writeCSV(path string, records [][]string) error {
+	f, err := os.Create(path)
+	if err != nil { return err }
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	defer w.Flush()  // ⚠️ must Flush to write buffered data
+
+	for _, record := range records {
+		if err := w.Write(record); err != nil {
+			return err
+		}
+	}
+	return w.Flush()  // ✅ check Flush error (defer discards it)
+}
+```
+
+## `gob` — Go-to-Go Binary Serialization
+
+::code-wrapper{language="go"}
+```go
+// gob is Go's binary encoding — faster and smaller than JSON for Go types.
+// Only works between Go programs (not cross-language).
+
+type CacheEntry struct {
+	Key   string
+	Value []byte
+	Expiry time.Time
+}
+
+func gobEncode(entries []CacheEntry) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	for _, e := range entries {
+		if err := enc.Encode(e); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func gobDecode(data []byte) ([]CacheEntry, error) {
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	var entries []CacheEntry
+	for {
+		var e CacheEntry
+		if err := dec.Decode(&e); err != nil {
+			if err == io.EOF { break }
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// ⚠️ gob requires types to be registered if using interfaces:
+// gob.Register(MyType{})
+// Without registration, decoding an interface value panics.
+```
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use struct tags (`json:"name,omitempty"`) for JSON mapping — declarative, and `go vet` checks tag syntax. Use `omitempty` for optional fields (omit zero values) and `json:"-"` for never-serialized fields (passwords, internal state).
-- **Idiom**: use pointers (`*int`, `*string`) for fields where zero is a valid value that must be distinguished from "not set" — `omitempty` on an `int` omits `0` (which might be a real age); `omitempty` on `*int` omits `nil` (not set) but includes `0` (real value). This is the standard "nullable field" pattern.
-- **Idiom**: use `json.Decoder` for streaming JSON from an `io.Reader` (HTTP body, file) — `json.Unmarshal` requires the whole input in memory; `Decoder.Decode` reads one value at a time. Use `DisallowUnknownFields` for strict input validation.
-- **Idiom**: use `json.Number` + `UseNumber` when decoding into `any` and you need exact integers — default decoding makes all numbers `float64`, losing precision for large integers (> 2^53). `json.Number` keeps them as strings, parseable to `int64`/`float64`/`big.Int`.
-- **Idiom**: implement `MarshalJSON`/`UnmarshalJSON` for custom serialization (dates as "YYYY-MM-DD", enums as strings, encrypted fields) — it's the escape hatch when struct tags aren't enough. Keep the custom format documented for API consumers.
+- **Idiom**: use `*int`/`*string` for fields where zero value is valid — `omitempty` omits zero values, which drops valid 0/""/false. `*int` lets nil=omit, 0=include.
+- **Idiom**: use `json.Decoder` for streaming (HTTP bodies, large files) — `json.Unmarshal` buffers everything. `Decoder.Decode` reads one value at a time.
+- **Idiom**: use `DisallowUnknownFields()` for strict API contracts — catches typos in JSON field names (client sends "usrname" instead of "username" → error, not silent ignore).
+- **Idiom**: use `UseNumber()` when decoding into `any` and you need integer precision — `json.Number` is string-backed, preserving exact values. For known schemas, use typed structs.
+- **Idiom**: implement `MarshalJSON`/`UnmarshalJSON` for custom serialization (Money as string, timestamps in a specific format, redacted fields). This is cleaner than post-processing the JSON.
+- **Safety**: `csv.Writer.Flush()` can fail — don't rely on `defer w.Flush()` (error discarded). Call `w.Flush()` explicitly and check the error.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`omitempty` omits zero values, including valid zeros**: `0`, `""`, `false`, `nil`, empty slice/map are all omitted. For "zero is valid," use a pointer.
-- **Numbers in `any` are `float64`**: `json.Unmarshal` into `any` makes `42` a `float64` (not `int`). Type-asserting to `int` panics. Use `json.Number` or typed structs.
-- **Unknown fields are ignored by default**: `Unmarshal` silently drops fields not in the struct. Use `DisallowUnknownFields` to catch typos/API mismatches.
-- **`json.Marshal` of `nil` map/slice**: `nil` map → `null`; empty `[]int{}` → `[]`. For APIs expecting `[]` not `null`, initialize slices: `s := []int{}`.
-- **`time.Time` JSON**: `time.Time` marshals as an RFC 3339 string (`"2024-03-15T14:30:00Z"`). Custom formats require a custom type with `MarshalJSON`.
-- **Unexported fields aren't serialized**: `json.Marshal` only sees exported fields. Unexported fields are silently ignored (no error).
-- **`interface{}` field and concrete types**: a struct field of type `any` can hold any JSON value, but the type is lost — type-assert on use.
-- **Circular references**: `json.Marshal` doesn't handle cycles (infinite loop). Avoid cycles in structs you serialize.
-- **CSV quoting**: `csv` handles quoting/escaping automatically. `a,b"c,"` → `"a","b""c"",""` (RFC 4180). Don't quote manually.
-- **`gob` requires registration for interfaces**: encoding an interface value requires the concrete type to be registered (`gob.Register(MyType{})`) for decoding to work. Without it, decoding fails.
+- **`omitempty` omits valid zero values**: `Count int` with `omitempty` → `0` is omitted. If 0 is valid, use `*int`.
+- **nil slice → "null", empty slice → "[]"**: `var s []int` → `null`; `[]int{}` → `[]`. APIs may treat these differently — be deliberate.
+- **`json.Unmarshal` into `any` makes numbers `float64`**: asserting to `int` panics. Use `UseNumber` or typed structs.
+- **Unknown JSON fields are ignored by default**: `DisallowUnknownFields()` makes it an error. Without it, a typo in a field name is silently ignored (data lost).
+- **`time.Time` is serialized as RFC3339 by default**: `{"created_at":"2024-03-15T14:30:00Z"}`. Parse with `time.Parse(time.RFC3339, ...)`.
+- **`gob` requires type registration for interfaces**: `gob.Register(MyType{})` before encoding/decoding interface values. Without it, decode panics.
+- **`csv.Writer` must be flushed**: `defer w.Flush()` discards the error. Call `w.Flush()` explicitly and check the return.
+- **Large JSON → `json.Unmarshal` allocates everything**: for large responses, use `json.Decoder` to stream-record by record.
+- **`json.Marshal` panics on cyclic structures**: a struct that references itself (directly or via a cycle) causes an infinite loop in `Marshal` → stack overflow.
 
-## 🧠 Spot the Bug
-
-A developer decodes JSON into `any` and checks for an integer:
+## 🧠 Quick Quiz
 
 ::code-wrapper{language="go"}
 ```go
-var v any
-json.Unmarshal([]byte(`{"count": 42}`), &v)
-m := v.(map[string]any)
-if count, ok := m["count"].(int); ok {   // ❌ never true
-	fmt.Println("count:", count)
+type T struct {
+	A int    `json:"a"`
+	B string `json:"b,omitempty"`
+	C *int   `json:"c,omitempty"`
 }
+
+t := T{A: 0, B: "", C: nil}
+data, _ := json.Marshal(t)
 ```
+
+What's the JSON output?
 ::
-
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-`json.Unmarshal` into `any` decodes JSON numbers as `float64`, not `int`. So `m["count"]` is `float64(42)`, and `m["count"].(int)` fails (`ok` is false) — the type assertion to `int` never matches.
-
-The fixes:
-
-```go
-// Option 1: assert to float64, convert to int
-if count, ok := m["count"].(float64); ok {
-	fmt.Println("count:", int(count))
-}
-
-// Option 2: use json.Number for exact types
-dec := json.NewDecoder(bytes.NewReader([]byte(`{"count": 42}`)))
-dec.UseNumber()
-var v any
-dec.Decode(&v)
-m := v.(map[string]any)
-if n, ok := m["count"].(json.Number); ok {
-	count, _ := n.Int64()
-	fmt.Println("count:", count)
-}
-
-// Option 3: unmarshal into a typed struct (best for known schemas)
-type Data struct{ Count int }
-var d Data
-json.Unmarshal([]byte(`{"count": 42}`), &d)
-fmt.Println("count:", d.Count)   // 42
+```json
+{"a":0}
 ```
-::
-Option 3 (typed struct) is the idiomatic way for known schemas — it avoids the `any`/type-assertion dance entirely and gives exact types. Use `any` only for dynamic/unknown schemas, and then prefer `json.Number`.
 
-**The lesson**: `json.Unmarshal` into `any` makes numbers `float64`. Asserting to `int` fails. Assert to `float64` and convert, use `json.Number`, or unmarshal into a struct.
+- `A` → `"a":0` — no `omitempty`, always included.
+- `B` → omitted — `omitempty` + zero value (`""`).
+- `C` → omitted — `omitempty` + nil pointer.
+
+So only `A` appears.
+
+If you wanted to include `B` even when empty, remove `omitempty`. If you wanted to include `C` with a value, set `C` to a non-nil pointer: `c := 0; t.C = &c` → `"c":0`.
 
 </details>
 
-## Summary
+## 📚 What's Next
 
-You can now marshal/unmarshal JSON with struct tags (`omitempty`, `-`), use pointers for nullable fields, stream with `Decoder`, handle `any`/`json.Number` for dynamic JSON, implement custom `MarshalJSON`/`UnmarshalJSON`, and use `csv`/`gob` for other formats. Next: time and dates.
+→ [24 — Time & Dates](/go/24-time-and-dates) — monotonic clock, the reference time format, time zones, and the `==` vs `Equal` trap.

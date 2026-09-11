@@ -1,184 +1,196 @@
-# 01 — Introduction & Setup
+---
+title: "01 — CSS Engine Internals & Production Setup"
+description: "How the browser parses, cascades, and renders CSS — box tree construction, the cascade algorithm, and a production-grade stylesheet architecture from line one. Code-first reference for mid-to-senior engineers."
+---
 
-## What Is CSS?
+# 01 — CSS Engine Internals & Production Setup
 
-CSS (Cascading Style Sheets) is the language for styling web pages — it controls how HTML elements look (colors, layout, fonts, animations). Key characteristics:
+No hand-holding. CSS is a declarative render-tree DSL: the browser parses stylesheets into a rule list, matches selectors against the DOM to build a box tree, resolves the cascade, then walks layout → paint → composite. Every "gotcha" in CSS is a consequence of one of those stages. This chapter engineers the foundation: how the engine sees your CSS, and the architecture you should ship on day one.
 
-- **Declarative** — you describe how elements should look, the browser figures out how to render it.
-- **Cascading** — multiple rules can apply to the same element; the cascade resolves conflicts (specificity, source order, importance).
-- **Progressive** — CSS degrades gracefully; unsupported properties are ignored, not errors.
-- **Style-free markup** — HTML describes structure, CSS describes presentation (separation of concerns).
-- **Huge and evolving** — CSS has hundreds of properties and is actively extended (container queries, `:has()`, subgrid, cascade layers).
+## How the Browser Sees a Stylesheet
 
-## A Brief History
-
-| Year | Milestone |
-|---|---|
-| 1996 | CSS1 — basic styling (fonts, colors, margins). |
-| 1998 | CSS2 — positioning, media types, z-index. |
-| 2001–2011 | CSS3 — modular spec (selectors, backgrounds, transforms, transitions, animations, media queries, flexbox). |
-| 2017 | CSS Grid ships in all major browsers. |
-| 2017–2024 | CSS4-ish era — custom properties, `gap`, `aspect-ratio`, `:has()`, container queries, cascade layers, nesting, view transitions. |
-
-CSS is no longer versioned (CSS3+); it's a collection of independent modules, each at its own maturity level. "CSS4" isn't a real spec — it's shorthand for "modern CSS."
-
-## Adding CSS to HTML
-
-Three ways, in order of preference:
-
-### External stylesheet (recommended)
-
-::code-wrapper{language="html"}
-```html
-<!-- index.html -->
-<link rel="stylesheet" href="styles.css">
-```
-::
 ::code-wrapper{language="css"}
 ```css
-/* styles.css */
-body {
-	font-family: system-ui, sans-serif;
-	margin: 0;
+/* A "rule" = selector list + declaration block.
+   The engine tokenizes, parses into CSSOM, then matches. */
+@layer reset, base, components, utilities;  /* layer order declared FIRST → fixes precedence for the whole sheet */
+
+@layer reset {
+  /* Universal selector: specificity (0,0,0,0). Cheap to match,
+     but forces a style recalc on every element. Keep resets tiny. */
+  *, *::before, *::after {
+    box-sizing: border-box;   /* width includes padding+border → math matches design specs */
+    margin: 0;                /* nuke UA margins so spacing is a deliberate token, not inherited chaos */
+    padding: 0;
+  }
+}
+
+/* At-rules (@media, @keyframes, @supports, @layer, @import) are
+   processed at parse time. @import MUST precede all other rules
+   except @charset — put it later and the engine silently drops it. */
+@supports (display: grid) {   /* feature detection at parse time, not UA sniffing */
+  @layer base {
+    :root { --layout: grid; } /* custom property: registered on :root, inherits to every descendant */
+  }
 }
 ```
 ::
-External stylesheets are cached, reusable across pages, and keep HTML clean. This is the production approach.
 
-### `<style>` element (per-page)
+### Anti-pattern: the "throw CSS at the top" file
+
+::code-wrapper{language="css"}
+```css
+/* ❌ ANTI-PATTERN — unlayered, ad-hoc, specificity will spiral */
+* { margin: 0; }                      /* reset mixed with no ordering */
+#header .btn { color: red; }          /* ID selector → (0,1,1,0), unoverridable by classes */
+.btn { color: blue; }                 /* (0,0,1,0) → loses to the ID above forever */
+.btn { color: blue !important; }      /* arms race: now every override needs !important */
+
+@import url("theme.css");             /* ❌ placed AFTER rules → engine IGNORES it. Also serial+render-blocking */
+```
+::
+
+::code-wrapper{language="css"}
+```css
+/* ✓ PRODUCTION — explicit layer order, flat specificity, no @import */
+@layer reset, base, components, utilities;
+
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+}
+@layer base {
+  /* ID never used for styling → specificity stays (0,0,1,0) max across the codebase */
+  .btn { color: var(--btn-fg, blue); }     /* token with fallback: survives missing theme */
+}
+@layer components {
+  .btn--cta { color: var(--cta-fg, white); }  /* later layer beats base regardless of specificity */
+}
+@layer utilities {
+  .u-text-cta { color: var(--cta-fg); }   /* utilities layer always wins → one-off overrides are safe */
+}
+```
+::
+
+**Why:** layer order is fixed by the *first* `@layer reset, base, …` declaration. Later `@layer base { … }` appends into the already-positioned `base` layer. Unlayered rules beat *all* layered rules — that's the escape hatch, not a bug.
+
+## The Three Ways CSS Enters the Browser
 
 ::code-wrapper{language="html"}
 ```html
+<!-- 1. External <link> — cached, parallel (HTTP/2), the only production choice for non-critical CSS -->
+<link rel="stylesheet" href="/assets/app.[hash].css">
+
+<!-- 2. Critical CSS inlined in <head> — bytes that block first paint go here; everything else async -->
 <style>
-	body { font-family: sans-serif; }
+  /* above-the-fold rules only; inlined to remove a render-blocking round trip */
+  :root{--bg:#fff;--fg:#333}
+  body{background:var(--bg);color:var(--fg)}
 </style>
+<!-- non-critical CSS: preload without blocking, swap to stylesheet onload -->
+<link rel="preload" href="/assets/app.[hash].css" as="style" onload="this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="/assets/app.[hash].css"></noscript>
+
+<!-- 3. Inline style="" — specificity (1,0,0,0). Only for JS-driven dynamic values. -->
+<div style="--x: 42px; transform: translateX(var(--x))"></div>
 ```
 ::
-Use for page-specific styles or critical CSS inlined in `<head>` for performance (avoiding a render-blocking request).
 
-### Inline `style` attribute (avoid)
+### Anti-pattern: inline styles for static presentation
 
 ::code-wrapper{language="html"}
 ```html
-<p style="color: red; font-weight: bold;">Warning</p>
+<!-- ❌ (1,0,0,0) specificity → no stylesheet rule without !important can override it; not cached; mixes concerns -->
+<p style="color:red;font-weight:bold">Warning</p>
 ```
 ::
-Inline styles have the highest specificity (hard to override), can't be cached, and mix structure with presentation. Avoid except for genuinely one-off, dynamic styles (set via JavaScript).
 
-## Syntax
+::code-wrapper{language="javascript"}
+```javascript
+// ✓ Inline style is a *bridge for runtime values*. Set a custom property, let CSS do the rest.
+el.style.setProperty('--x', `${pointerX}px');   // CSS: transform: translateX(var(--x))
+// The custom property cascades; the transform logic lives in the stylesheet, overridable by classes.
+```
+::
+
+## DevTools as a CSS REPL — the Engine's View
+
+The Styles pane shows matched rules **sorted by cascade winner first**, struck-through losers below. Specificity is implicit in ordering. The **Computed** tab shows the *resolved* value after the cascade + inheritance — this is where `1em` reveals itself as `16px` and a broken rule reveals itself as `initial`.
+
+::code-wrapper{language="bash"}
+```bash
+# Coverage tab: Cmd+Shift+P → "Coverage" → load page.
+#   % unused per file → purge targets. Shipping 80% unused framework CSS shows here.
+# Rendering tab: Cmd+Shift+P → "Rendering" →
+#   Paint flashing (repaint regions), Layout Shift Regions (CLS), FPS meter.
+# Layers panel: shows compositor layers → each will-change/transform creates one (RAM cost).
+```
+::
+
+## A Production Stylesheet Skeleton
 
 ::code-wrapper{language="css"}
 ```css
-/* A rule */
-selector {
-	property: value;      /* a declaration */
-	property: value;
+/* ============================================================
+   app.css — single entry. Layer order is the architecture.
+   Order = precedence: later layers win at EQUAL specificity,
+   and utilities always beat components regardless of specificity.
+   ============================================================ */
+@layer reset, tokens, base, components, utilities;
+
+@layer tokens {
+  :root {
+    /* Design tokens: the only place raw values live. Everything else var()s. */
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; /* native UI font, 0KB */
+    --space-1: .25rem;  --space-2: .5rem;  --space-3: 1rem;  --space-4: 2rem; /* modular scale */
+    --color-bg: #fff;   --color-fg: #333;   --color-primary: #3498db;
+    --radius: 8px;
+    /* OKLCH: perceptually uniform → 50% lightness looks equal across hues (HSL does NOT) */
+    --color-primary-oklch: oklch(0.62 0.18 245);
+  }
+  /* Dark theme redefines the SAME tokens → every consumer updates in one paint, no cascade walk */
+  @media (prefers-color-scheme: dark) {
+    :root { --color-bg: #1a1a1a; --color-fg: #eee; --color-primary: #5dade2; }
+  }
+  [data-theme="dark"] { --color-bg: #1a1a1a; --color-fg: #eee; } /* manual toggle override */
 }
 
-/* Comments are /* like this */ and can span lines */
-
-/* At-rules */
-@media (min-width: 768px) { /* ... */ }
-@keyframes fade { /* ... */ }
-@supports (display: grid) { /* ... */ }
-```
-::
-- A **rule** = selector + declaration block.
-- A **declaration** = property: value.
-- **At-rules** (`@media`, `@keyframes`, `@supports`, `@import`) are special directives.
-
-## DevTools — Your CSS REPL
-
-Browser DevTools are the primary tool for CSS work. Open with `Cmd+Opt+I` (Mac) or `Ctrl+Shift+I` (Windows/Linux).
-
-### Elements/Inspector panel
-
-| Feature | How |
-|---|---|
-| Inspect an element | Click the element in the page (or in the DOM tree). |
-| Edit CSS live | Click a property/value in the Styles pane and type. |
-| Add a property | Click the empty space in a rule and type. |
-| Toggle a declaration | Click the checkbox next to a property. |
-| See computed values | "Computed" tab — the final value of every property. |
-| See box model | The colored box diagram at the bottom of Styles — drag to adjust. |
-| Find unused CSS | "Coverage" tab (Cmd+Shift+P → "Coverage"). |
-| Force element state | `:hov` button — force `:hover`, `:focus`, `:active`. |
-
-### Tips
-
-- **Edit live, then copy to your file** — DevTools is a real-time REPL. Iterate in the browser, then save the final values.
-- **The Computed tab shows the resolved value** — if `font-size: 1em` resolves to `16px`, the Computed tab shows `16px`. Useful for debugging unit calculations.
-- **Box model visualization** — the colored diagram (content, padding, border, margin) shows the actual pixel values; click a number to edit.
-
-## A First Stylesheet
-
-::code-wrapper{language="html"}
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>My First CSS</title>
-	<link rel="stylesheet" href="styles.css">
-</head>
-<body>
-	<h1>Hello, CSS!</h1>
-	<p>This is my first styled page.</p>
-</body>
-</html>
-```
-::
-::code-wrapper{language="css"}
-```css
-/* styles.css */
-body {
-	font-family: system-ui, -apple-system, sans-serif;
-	max-width: 600px;
-	margin: 2rem auto;
-	padding: 0 1rem;
-	color: #333;
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    /* clamp(min, preferred, max): fluid, no media query, bounded for a11y */
+    font-size: clamp(1rem, 0.9rem + 0.5vw, 1.125rem);
+    line-height: 1.5;            /* unitless → recomputes per-element (px/em inherit as-is → overlap bug) */
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+  /* :focus-visible = keyboard only, not mouse click. outline doesn't affect layout. */
+  :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 }
 
-h1 {
-	color: #0066cc;
-	border-bottom: 2px solid #0066cc;
-	padding-bottom: 0.5rem;
+@layer utilities {
+  .u-stack > * + * { margin-block-start: var(--space-3); }  /* lobotomized owl: adjacent siblings only */
 }
 ```
 ::
-## The Cascade (preview)
-
-When multiple rules apply to the same element, the browser resolves conflicts by:
-
-1. **Importance** — `!important` wins (avoid).
-2. **Specificity** — more specific selectors win (e.g., `#id` > `.class` > `element`).
-3. **Source order** — later rules win (at equal specificity).
-
-Chapter 02 covers this in depth. For now, know that CSS "cascades" — the name is literal.
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use external stylesheets (`<link rel="stylesheet" href="styles.css">`) for production — they're cached across pages, keep HTML clean, and separate structure from presentation. Reserve inline `<style>` for critical CSS inlined in `<head>` (performance), and inline `style="..."` for genuinely one-off dynamic styles (set via JS).
-- **Idiom**: use DevTools as your CSS REPL — edit properties live in the Styles pane, see the result instantly, then copy the final values to your file. Iterating in the browser is far faster than save-and-reload cycles.
-- **Idiom**: use the Computed tab to debug unit calculations — if `font-size: 1em` resolves to `16px`, the Computed tab shows `16px`, revealing the actual computed value. Essential for debugging `em`/`rem`/`%` chains.
-- **Idiom**: use `system-ui, -apple-system, sans-serif` as a font stack — it uses the OS's native UI font (San Francisco on macOS, Segoe on Windows, Roboto on Android), giving a native feel without web font downloads. Add a web font (via `@font-face`) only when you need a specific brand font.
-- **Idiom**: avoid `!important` — it overrides the cascade in a way that's hard to debug and override further. Instead, increase specificity (a more specific selector) or reorder your rules. Reserve `!important` for overriding third-party styles you can't otherwise control.
+- **Architecture**: declare `@layer` order in the *first* line of the entry file — that single statement is your whole specificity strategy. Utilities last → one-off overrides always win; no `!important` ever.
+- **Idiom**: `system-ui, -apple-system, sans-serif` gives the native OS UI font at zero download cost. Add a web font via `@font-face` + `font-display: swap` only for brand type.
+- **Idiom**: `clamp(min, preferred, max)` replaces most breakpoint font/padding rules — fluid and bounded, respects user font-size setting because the bounds are `rem`.
+- **Debug**: when a rule "isn't applying," read the Styles pane: if it's *absent*, the selector didn't match; if it's *struck through*, it lost the cascade — compare specificity columns, not gut feeling.
+- **Performance**: each `will-change`/`transform`/`filter` promotes a compositor layer (GPU RAM). Layers panel shows the count. Layer everything → OOM on mobile.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Inline styles have the highest specificity (besides `!important`)** — `style="color: red"` overrides any stylesheet rule (without `!important`). This makes inline styles hard to override and is why they're discouraged except for dynamic JS-set styles.
-- **Whitespace in CSS is mostly insignificant** — `a{color:red}` and `a { color: red; }` are equivalent. But format for readability (use a formatter: Prettier).
-- **Missing semicolons**: `a { color: red font-size: 14px }` — the `font-size: 14px` is treated as part of the `color` value (invalid), and both are dropped. Always use semicolons (the last one is optional but recommended).
-- **Vendor prefixes**: `-webkit-`, `-moz-`, `-ms-` prefixes were needed for experimental features. Modern CSS needs few prefixes (use Autoprefixer if supporting old browsers). Don't hand-prefix — use a build tool.
-- **CSS is case-insensitive for selectors and properties** (in HTML): `DIV` and `div` match the same elements, `Color` and `color` are the same property. But class names are case-sensitive in HTML (`.Foo` ≠ `.foo`). Be consistent (lowercase).
-- **Comments can't nest**: `/* /* */ */` — the first `*/` closes the comment; the rest is invalid. There's no nested comment syntax.
-- **`@import` must come first**: `@import url('x.css');` must precede all other rules (except `@charset`). Putting it later silently fails (it's ignored). Avoid `@import` in production (it's render-blocking and serial) — use `<link>` tags or bundle.
-- **Unsupported properties are ignored**: `aspect-ratio: 16/9;` in an old browser is ignored (not an error) — the element falls back to its default. Use `@supports` for feature detection.
+- **Missing semicolon absorbs the next declaration**: `color: red font-size: 14px` parses as one invalid `color` value → *both* dropped. A formatter (Prettier) makes this impossible.
+- **`@import` after any rule is silently ignored** and is serial + render-blocking even when it works. Use `<link>` or bundle. Never `@import` in production.
+- **Comments cannot nest**: `/* /* */ */` — the first `*/` closes the comment; the trailing `*/` is a parse error.
+- **Unsupported declarations are ignored, not errored**: `aspect-ratio: 16/9` in an old browser silently no-ops. Wrap in `@supports` for a fallback.
+- **Class names are case-sensitive in HTML**: `.Foo` ≠ `.foo`. Selectors and properties are ASCII-case-insensitive. Be consistent (kebab-case).
+- **Inline `style=""` is specificity (1,0,0,0)**: beats every stylesheet rule except `!important`. That's why it's reserved for JS-set custom properties, never static presentation.
 
 ## 🧠 Spot the Bug
-
-A developer's CSS isn't applying, and they can't figure out why:
 
 ::code-wrapper{language="css"}
 ```css
@@ -189,35 +201,9 @@ p {
 ```
 ::
 
-What's wrong?
-
 <details>
 <summary>Answer</summary>
 
-The `color: blue` declaration is missing a semicolon. CSS parses `color: blue font-size: 18px;` as a single declaration with the value `blue font-size: 18px` — which is invalid for `color`. The whole declaration is dropped, so `color` isn't set (and `font-size` is lost too, since it was absorbed into the invalid `color` value).
-
-The fix — add the semicolon:
-
-```css
-p {
-	color: blue;
-	font-size: 18px;
-}
-```
-::
-The last declaration's semicolon is technically optional (the `}` closes it), but every other declaration must end with `;`. Always use semicolons (a formatter like Prettier enforces this).
-
-**The lesson**: a missing semicolon causes the next declaration to be absorbed into the current value, often invalidating both. Use a formatter to catch this.
+No semicolon after `color: blue`. The parser reads `color: blue font-size: 18px;` as a single declaration whose value is `blue font-size: 18px` — invalid for `color`. The whole declaration is dropped, and `font-size` is consumed into the invalid value, so *both* properties are lost. Fix: `color: blue;`. The final `;` before `}` is optional; every other declaration is not.
 
 </details>
-
-## Recommended Environment
-
-- **VS Code + Live Server** for hot reload.
-- **Chrome or Firefox DevTools** for inspection and live editing.
-- **Prettier** for formatting (consistent, no arguments).
-- **Autoprefixer** (via PostCSS or a bundler) if supporting older browsers.
-
-## Summary
-
-You now have CSS set up, understand how to add it to HTML (external preferred), the basic syntax (rules, declarations, at-rules), and how to use DevTools as a live CSS REPL. Next: selectors and specificity — how the cascade resolves conflicts.

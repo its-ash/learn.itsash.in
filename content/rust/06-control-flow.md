@@ -1,289 +1,343 @@
 # 06 — Control Flow
 
-## `if` Expressions
+`if`/`match`/`loop`/`while`/`for` as **expressions** eliminates whole bug classes (forgetting to assign a branch's result) at the cost of stricter type unification. `match` exhaustiveness applies the same idea to data modeling — the compiler refuses to let you forget a case.
+
+## Under-the-Hood Mechanics
+
+### Every branch produces MIR that must unify to one type
 
 ::code-wrapper{language="rust"}
 ```rust
-let n = 5;
-if n > 0 {
-    println!("positive");
-} else if n < 0 {
-    println!("negative");
-} else {
-    println!("zero");
-}
-
-let sign = if n > 0 { 1 } else { -1 };   // if is an expression
-```
-::
-
-- Branches must return the **same type** (or `!`).
-- The condition must be a `bool` — no truthy integers, no `if x { }` where `x` is `i32`.
-- `if let` combines pattern match + branch.
-
-::code-wrapper{language="rust"}
-```rust
-if let Some(v) = opt {
-    println!("{v}");
+fn main() {
+    let n = 5;
+    let sign = if n > 0 { 1 } else { -1 };   // both arms must agree on type — same destination place
+    println!("{sign}");
 }
 ```
 ::
 
-## `loop`
-
-Infinite loop until `break`. `break` can return a value:
+### `match` compiles to a decision tree, not a linear scan
 
 ::code-wrapper{language="rust"}
 ```rust
-let mut i = 0;
-let result = loop {
-    if i == 10 { break i * 2; }
-    i += 1;
-};
-```
-::
-
-### Labeled Loops
-
-::code-wrapper{language="rust"}
-```rust
-'outer: for i in 0..3 {
-    for j in 0..3 {
-        if i == j { continue 'outer; }
-        if i + j > 3 { break 'outer; }
-        println!("{i},{j}");
+fn classify(x: i32) -> &'static str {
+    match x {
+        0 => "zero",             // dense integer matches without guards -> often a jump table, O(1)
+        1 | 2 => "small",
+        3..=9 => "medium",
+        n if n < 100 => "big",   // guard: breaks jump-table optimization AND exhaustiveness proof
+        _ => "huge",             // required even though guards "look like" they cover everything
     }
 }
 ```
 ::
 
-Labels start with `'`. `break 'label` and `continue 'label` control the outer loop.
-
-## `while`
+### Only `loop` may `break` with a value
 
 ::code-wrapper{language="rust"}
 ```rust
-let mut n = 5;
-while n > 0 {
-    n -= 1;
-}
+fn main() {
+    let mut counter = 0;
+    let result = loop {
+        counter += 1;
+        if counter == 10 { break counter * 2; }   // loop: no implicit exit, so a value CAN be assigned
+    };
+    println!("{result}");
 
-while let Some(x) = stack.pop() {
-    println!("{x}");
-}
-```
-::
-
-`while let` repeatedly matches; exits when pattern fails.
-
-## `for` (Iterator Based)
-
-::code-wrapper{language="rust"}
-```rust
-for i in 0..5 { print!("{i} "); }        // 0 1 2 3 4
-for i in 0..=5 { print!("{i} "); }       // inclusive 0..5
-for c in "abc".chars() { print!("{c}"); }
-for b in &[1, 2, 3] { print!("{b} "); }   // borrows
-for v in vec![1, 2, 3] { print!("{v} "); } // consumes
-```
-::
-
-`for` consumes an `IntoIterator`. Arrays implement `IntoIterator` (by value) since edition 2021.
-
-## `match`
-
-Exhaustive pattern matching. Powerful and central to Rust:
-
-::code-wrapper{language="rust"}
-```rust
-match x {
-    0 => "zero",
-    1 | 2 => "small",
-    3..=9 => "medium",
-    n if n < 100 => "big",     // match guard
-    _ => "huge",
-};
-```
-::
-
-- Must be exhaustive; `_` is the wildcard.
-- Arms evaluate to a single common type.
-- Order matters; first matching arm wins.
-- Multiple patterns with `|`.
-- Ranges with `..=` (only for `char` and numeric types).
-- **Match guards** (`if cond`) enable extra conditions but can prevent exhaustiveness analysis.
-- Binding with `@`: `Some(n @ 1..=10) => n`.
-
-### Binding Modes (2021 edition)
-
-::code-wrapper{language="rust"}
-```rust
-match &opt {
-    Some(x) => println!("{x}"),   // x: &i32 — auto-ref
-    None => {}
+    // let x = while counter < 20 { counter += 1; };  // while's implicit exit has no value -> type is ()
+    // let y = for i in 0..5 {};                        // same: for is ALWAYS type ()
 }
 ```
 ::
 
-The 2021 edition "default binding modes" let you avoid writing `&` everywhere; the compiler inserts references as needed. This can be subtle — see the Patterns chapter.
-
-## `match` on References
-
-### Why match on a reference?
-
-When your value is a reference (`&str`, `&String`, `&enum`), you have two ways to `match`: match *through* the reference (using `&` in the pattern) or convert to a value first. The first form (`match &s { &"yes" => ... }`) matches the reference shape — the `&` in the pattern "peels off" the `&` from the scrutinee. The second (`match s.as_str() { "yes" => ... }`) obtains an owned/copyable value first and matches on that.
-
-Reach for the `&` form when you already hold a reference and copying would be costly or impossible (e.g., a borrowed `String` you can't move out of). Reach for the by-value form when the type is cheaply copyable (`&str` is `Copy`) or when the reference pattern is awkward (matching nested references).
+### `?` desugars through the `Try` trait, not a special case per type
 
 ::code-wrapper{language="rust"}
 ```rust
-match &s {
-    &"yes" => 1,      // match through the reference
-    _ => 0,
-}
-// or pattern-match by value of &str (Copy) — often clearer:
-match s.as_str() {
-    "yes" => 1,
-    _ => 0,
-}
-```
-::
+use std::num::ParseIntError;
 
-In modern Rust (2021+), **binding modes** let you often drop the explicit `&` — `match &s { "yes" => ... }` works because the compiler auto-borrows. The explicit `&pattern` form is still common in older code and is clearer when matching nested references.
-
-## Destructuring in `match`
-
-::code-wrapper{language="rust"}
-```rust
-enum Shape { Circle(f64), Square(f64), Rect(f64, f64) }
-match shape {
-    Shape::Circle(r) => 3.14 * r * r,
-    Shape::Square(s) => s * s,
-    Shape::Rect(a, b) if a == b => a * a,    // guard: catch squares
-    Shape::Rect(a, b) => a * b,
-}
-```
-::
-
-## Returning from `match` vs `break`
-
-`match` is an expression — each arm produces a value. Sometimes you don't want a value, you want to *exit early*. The four short-circuit mechanisms differ by context:
-
-- **`return`** — exits the enclosing *function* (with a value if non-unit). Use when an arm means "this function is done."
-- **`break`** — exits the enclosing *loop* (optionally with a value for `break value`). Use inside a `match` that's inside a `loop`/`while`/`for`.
-- **`?`** — propagates an error/None out of the function (see below). Use in `Result`/`Option`-returning functions to bail on failure.
-- **`continue`** — skips to the next loop iteration. Use inside a loop-embedded `match` to filter.
-
-Which one applies depends on *where* the `match` sits: in a function body, `return` exits the function; inside a loop, `break` exits the loop; in a `?`-compatible function, `?` propagates. Using `return` inside a closure returns from the *closure*, not the enclosing function (a common surprise).
-
-## `?` Operator (Error Propagation)
-
-::code-wrapper{language="rust"}
-```rust
 fn parse_and_double(s: &str) -> Result<i32, ParseIntError> {
-    let n: i32 = s.parse()?;
+    let n: i32 = s.parse()?;   // Continue(val) unwraps; Break(residual) triggers early return
     Ok(n * 2)
 }
+
+#[derive(Debug)]
+struct AppError(String);
+impl From<ParseIntError> for AppError {
+    fn from(e: ParseIntError) -> Self { AppError(e.to_string()) }
+}
+
+fn parse_via_conversion(s: &str) -> Result<i32, AppError> {
+    let n: i32 = s.parse()?;   // ? silently calls AppError::from(ParseIntError) here
+    Ok(n)
+}
 ```
 ::
 
-`?` returns early from the function on `Err` (or `None` with `Option`). Works on anything implementing `Try` (stabilized for `Option`/`Result`). See Error Handling chapter.
+## Cost, Performance, and Trade-Offs
+
+::code-wrapper{language="rust"}
+```rust
+fn forever() -> ! {
+    loop {}          // compiler KNOWS this is unconditionally infinite — proves `-> !` directly
+}
+
+fn forever_while() -> ! {
+    while true {}    // LLVM must independently PROVE the condition never changes to get the same benefit
+    unreachable!()
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+// A blanket, overly permissive From impl erases error specificity at every ? call site:
+#[derive(Debug)]
+enum BroadError { Other(String) }
+impl<E: std::error::Error> From<E> for BroadError {
+    fn from(e: E) -> Self { BroadError::Other(e.to_string()) }
+    // Every fallible call in a function now collapses to the SAME variant — an on-call
+    // engineer can't tell which of five failure modes actually happened from the log.
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+'outer: for i in 0..10 {
+    for j in 0..10 {
+        if i * j > 50 { break 'outer; }   // zero runtime cost — ordinary conditional jump to a block
+    }
+}
+```
+::
+
+## Production Failure Modes & Anti-Patterns
+
+**Anti-pattern: relying on `match` arm order for correctness when patterns overlap.**
+
+::code-wrapper{language="rust"}
+```rust
+fn tier(score: u32) -> &'static str {
+    match score {
+        0..=100 => "bronze",
+        50..=100 => "silver",   // unreachable — compiler warns, but easy to miss in a big match
+        _ => "gold",
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+#![deny(unreachable_patterns)]   // promote the warning to a hard build failure
+
+fn tier(score: u32) -> &'static str {
+    match score {
+        50..=100 => "silver",
+        0..=49 => "bronze",
+        _ => "gold",
+    }
+}
+```
+::
+
+**Anti-pattern: assuming `?`'s error conversion is happening when it silently isn't, or too broadly.**
+
+::code-wrapper{language="rust"}
+```rust
+#[derive(Debug)]
+enum ConfigError { Io(std::io::Error), Parse(toml::de::Error) }
+
+impl From<std::io::Error> for ConfigError {
+    fn from(e: std::io::Error) -> Self { ConfigError::Io(e) }
+}
+impl From<toml::de::Error> for ConfigError {
+    fn from(e: toml::de::Error) -> Self { ConfigError::Parse(e) }
+}
+
+fn load_config(path: &str) -> Result<Config, ConfigError> {
+    let raw = std::fs::read_to_string(path)?;    // requires ConfigError: From<io::Error>
+    let config: Config = toml::from_str(&raw)?;  // requires ConfigError: From<toml::de::Error>
+    Ok(config)
+}
+struct Config;
+```
+::
+
+Prefer a specific `From` impl (or `#[from]` via `thiserror`) per real error source over a permissive blanket conversion that swallows specificity.
+
+## Architectural Application
+
+::code-wrapper{language="rust"}
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+enum LoadError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("parse error: {0}")]
+    Parse(#[from] toml::de::Error),
+    // Design the error enum BEFORE writing the fallible call chain, not as an afterthought.
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+enum OrderStatus { Pending, Shipped, Delivered }
+
+fn describe(status: &OrderStatus) -> &'static str {
+    match status {
+        OrderStatus::Pending => "pending",
+        OrderStatus::Shipped => "shipped",
+        OrderStatus::Delivered => "delivered",
+        // NO `_` arm — adding a new variant to OrderStatus forces a compile error HERE,
+        // at every match site, the moment it's added. Deliberate, not an oversight.
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+#[non_exhaustive]
+pub enum ApiEvent { Created, Updated }
+// Library author's protection: consumers MUST write `_`, because new variants can be added
+// without that counting as a breaking change on the library's side.
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn find_pair(grid: &[[i32; 5]; 5], target: i32) -> Option<(usize, usize)> {
+    'search: for i in 0..5 {
+        for j in 0..5 {
+            if grid[i][j] == target {
+                return Some((i, j));   // labeled loops (or early return) beat a boolean sentinel here
+            }
+        }
+    }
+    None
+}
+```
+::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: prefer `let-else` (`let Some(x) = opt else { return; };`) over `if let ... else { return; }` when the success path is the rest of the function — it avoids one level of nesting for the common "validate or bail" shape.
-- **Debug**: label every loop you might need to `break`/`continue` out of from a nested context, even before you think you'll need it (`'outer: for ... { 'inner: for ... } }`) — adding a label later requires touching every `break`/`continue` inside, while having it unused costs nothing (a leading underscore silences the warning: `'_outer:`).
-- **Idiom**: use `loop { ... break value; }` instead of a `while`/manual flag variable when a loop's natural exit condition also produces the value you want out of it — `loop` as an expression is one of Rust's more underused features by newcomers from C-family languages.
-- **Performance**: `loop { }` is recognized by the compiler as unconditionally infinite (useful for `-> !` diverging functions), whereas `while true { }` requires the optimizer to prove the condition never changes — prefer `loop` for intentional infinite loops.
-- **Debug**: `matches!(x, pattern)` is a fast way to sanity-check what a `match` guard or pattern actually captures during debugging, without writing out a full `match` block just to print a boolean.
-- **Idiom**: chain `?` instead of nesting `match`/`if let` for early-return error propagation — a function with three sequential fallible steps reads far better as three `?`-suffixed lines than as three levels of nested `match`.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **`if` returning `()` vs value**: forgetting the trailing expr in one arm gives `()` and a type mismatch error.
-- **`break` value type**: every `break` in the same `loop` must return the same type.
-- **`continue` is `()`**: can't use `continue` to return a value from a `loop`.
-- **`for` consumes the iterator**: can't easily get the index — use `.enumerate()`.
-- **`while let` vs `if let`**: `while` loops; `if` runs once.
-- **`match` arm trailing comma**: optional but idiomatic.
-- **Empty `match` on a non-exhaustive enum** across crates requires `_ => unreachable!()` because adding variants is a non-breaking change for the upstream crate (unless `#[non_exhaustive]` rules apply).
-- **`#[non_exhaustive]`** on an enum forces downstream code to include a `_` arm even if all current variants are matched (future-proofing).
-- **Short-circuit evaluation**: `&&`, `||` short-circuit. `&` and `|` are bitwise and don't.
-- **No ternary `?:`**: use `if`/`else` expressions, or `.then()`/`.unwrap_or()` on bools.
-- **`if` condition must be `bool`**: `if x { }` where `x: u32` is an error; Rust has no truthy values. Use `if x != 0` or `if x > 0` explicitly.
-- **Unreachable arms in `match`**: the compiler warns about unreachable patterns (e.g., `Some(_)` after `Some(5..=10)`). Use `_` for truly "rest".
-- **Pattern guards and exhaustiveness**: `match x { n if n > 10 => ... }` may not be exhaustive (guard can fail); the compiler requires a fallback `_`.
-- **Loop labels with value returns**: `'outer: loop { ... break 'outer value; }` works, but forgetting the label makes `break value` apply to the immediate loop.
-- **`for` early `break` or `return`**: stopping a `for` loop doesn't implicitly return anything; you must capture the result externally.
-- **Mutable iteration with `for x in &mut v`**: the mutable borrow prevents pushing/popping during iteration.
-- **Match on references and deref coercion**: `match &opt { Some(x) => ... }` doesn't auto-deref; you need `match opt.as_ref() { Some(x) => ... }` for references inside the pattern.
-- **Binding in guards**: `if let Some(x) = opt { if x > 10 { } }` vs `if let Some(x) = opt, x > 10 { }` (let chains, unstable) — use explicit if/else for clarity.
-- **`match` with or-patterns and different captures**: `Some(x) | None => ...` captures `x` only if the first arm matches; `None` arm can't use `x`.
-- **Empty `loop { }` vs `while true { }`**: both are infinite, but `loop` is idiomatic and slightly more efficient (compiler recognizes it as an infinite loop). Use `loop { ... break; }` for controlled early exits.
-
-## 🧠 Spot the Bug
-
-What's wrong with this "find the first even number, or -1" function?
-
 ::code-wrapper{language="rust"}
 ```rust
-fn first_even(nums: &[i32]) -> i32 {
-    let mut result = -1;
-    for &n in nums {
-        if n % 2 == 0 {
-            result = n;
-            break;
+fn main() {
+    let x = 5;
+    println!("{}", matches!(x, 1..=10));   // fast boolean check without a full match block
+
+    'outer: for i in 0..3 {
+        '_inner: for j in 0..3 {           // leading underscore silences unused-label warning
+            if i == j { continue 'outer; }
         }
     }
-    result
-}
-
-fn main() {
-    let result = 'search: loop {
-        let nums = [3, 5, 7, 8, 9];
-        for &n in &nums {
-            if n % 2 == 0 {
-                break 'search n;
-            }
-        }
-        break 'search -1;
-    };
-    println!("{result}");
 }
 ```
 ::
+
+- **Idiom**: prefer `let-else` over `if let ... else { return; }` when the success path is the rest of the function.
+- **Idiom**: `loop { ... break value; }` instead of a `while` loop plus a manually tracked result variable.
+- **Performance**: prefer `loop {}` over `while true {}` for intentional infinite loops.
+- **Idiom**: `#![deny(unreachable_patterns)]` turns silent match-correctness footguns into build failures.
+
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="rust"}
+```rust
+#[non_exhaustive]
+pub enum Event { A, B }
+// Even if your match currently covers every KNOWN variant, `_` is still required — intentional.
+
+fn handle(e: &Event) -> &'static str {
+    match e {
+        Event::A => "a",
+        Event::B => "b",
+        _ => "unknown",   // forced by #[non_exhaustive], not an oversight in your match
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn check(n: i32) -> &'static str {
+    match n {
+        n if n > 10 => "big",
+        // Never exhaustive on its own — compiler cannot statically evaluate arbitrary guards.
+        _ => "small",
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in &mut v {
+        *x += 1;
+        // v.push(4);   // COMPILE ERROR: v is mutably borrowed for the loop's duration
+    }
+}
+```
+::
+
+::code-wrapper{language="rust"}
+```rust
+enum Never {}
+fn absurd(x: Never) -> i32 {
+    match x {}   // legal AND exhaustive — ONLY because Never is uninhabited
+}
+```
+::
+
+## 🧠 Spot the Bug
+
+::code-wrapper{language="rust"}
+```rust
+fn risk_tier(amount_cents: i64) -> &'static str {
+    match amount_cents {
+        n if n < 10_000 => "low",
+        n if n < 100_000 => "medium",
+        n if n >= 100_000 => "high",
+        _ => "low",   // added later "just to satisfy exhaustiveness"
+    }
+}
+```
+::
+
+An audit finds certain high-value transactions were silently classified as low-risk. What's wrong?
 
 <details>
 <summary>Answer</summary>
 
-Both versions actually work correctly and print `8` — but the second one only works because the label `'search` is attached to the outer `loop`, not the inner `for`. The bug to spot is what happens if you "simplify" the second version by removing the seemingly-redundant outer `loop` and labeling the `for` instead:
+The `_ => "low"` arm exists only because guards can never prove exhaustiveness — but it also catches negative/corrupted amounts and any future refactor's edge cases, defaulting the **least safe** outcome:
 
 ::code-wrapper{language="rust"}
 ```rust
-let result = 'search: for &n in &[3, 5, 7, 8, 9] {
-    if n % 2 == 0 {
-        break 'search n;  // ERROR
+fn risk_tier(amount_cents: i64) -> &'static str {
+    match amount_cents {
+        n if n < 0 => "high",          // negative/corrupted amounts are suspicious, not safe
+        0..=9_999 => "low",             // plain ranges: provably exhaustive over their span
+        10_000..=99_999 => "medium",
+        _ => "high",                    // unclassifiable / very large amounts default to SAFE-FOR-THE-BUSINESS
     }
-};
+}
 ```
 ::
 
-This fails to compile: `break` with a value is only allowed within a `loop` block, not `for` or `while`. The reason is that `for` and `while` loops can exit *normally* (condition false, iterator exhausted) without ever hitting a `break` — the compiler cannot know in advance what value to produce for that implicit "fell through" exit path, so `for`/`while` loops are only allowed to evaluate to `()`. Only `loop` (which the compiler knows can *only* exit via `break`, or run forever) is permitted to evaluate to a non-`()` value, which is exactly why the working version wraps the `for` inside a `'search: loop { ... }` — the label lives on the `loop`, and the `for` is just an unlabeled traversal inside it.
-
-**The lesson**: only `loop` (never `for`/`while`) can `break` with a value, because only `loop` is guaranteed to exit exclusively through an explicit `break`.
+**The lesson**: the compiler-mandated fallback arm is a real design decision — defaulting a risk-sensitive fallback to the least-alarming outcome inverts the safe default it should express.
 
 </details>
 
-## `if let` chains (unstable) / `let-else`
-
-::code-wrapper{language="rust"}
-```rust
-let Some(x) = opt else { return; };
-```
-::
-
-`let-else` is the idiomatic early-return form. For multiple conditions, use nested `let-else` or a `match`.
-
 ## Summary
 
-`if`/`while`/`for`/`loop`/`match` are all expressions. `match` is exhaustive and central. `?` propagates errors. Labels disambiguate nested loops. Next: the famous Ownership model.
+`if`/`match`/`loop` as expressions unify branch types at the MIR level, so stray semicolons and mismatched branches are compile errors, not silent bugs — but match guards defeat both jump-table optimization and exhaustiveness proof, making the compiler-demanded fallback arm a real design decision. `?` is a generic `Try`-trait mechanism whose silent `From`-based conversion is a double-edged lever: expressive with well-designed error types, dangerously lossy with a blanket conversion.
+
+Next: Ownership — the rules that make all of this control flow provably safe to alias and mutate, and the foundation the rest of the language builds on.

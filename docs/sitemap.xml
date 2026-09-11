@@ -150,6 +150,12 @@
   <url><loc>https://learn.itsash.in/lua/08-modules-and-packages</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua/09-error-handling</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua/10-io-and-files</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/lua/11-coroutines</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/lua/12-standard-library</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/lua/13-performance</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/lua/14-testing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/lua/15-best-practices</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://learn.itsash.in/lua/16-exercises-and-projects</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/lua</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/prompt-engineering/01-introduction-and-how-llms-work</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://learn.itsash.in/prompt-engineering/02-anatomy-of-a-prompt</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>

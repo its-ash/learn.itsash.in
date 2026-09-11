@@ -1,12 +1,8 @@
 # 01 — Introduction & Architecture
 
-Linux is a free, open-source, Unix-like operating system kernel. When combined with GNU userspace tools, a display server, and applications, it forms a complete **operating system** called a **Linux distribution** (or "distro").
+Linux is a monolithic kernel managing CPU, memory, devices, and process scheduling. Combined with GNU userspace tools, a display server, and applications, it forms a **Linux distribution**. This chapter covers the kernel–userspace boundary, syscall mechanics, the FHS, and the virtual filesystems that make Linux a unified system — through the lens of production code and edge-case behavior.
 
-## What Is Linux, Really?
-
-Strictly, "Linux" is just the **kernel** — the core that manages the CPU, memory, devices, and schedules processes. What you interact with (the shell, `ls`, `grep`, `bash`) is mostly **GNU software**. Hence the term **GNU/Linux**.
-
-### The Layers
+## The Layers
 
 ```text
 ┌─────────────────────────────────────┐
@@ -25,32 +21,56 @@ Strictly, "Linux" is just the **kernel** — the core that manages the CPU, memo
 - **Kernel space** — privileged, full hardware access (ring 0 on x86).
 - **User space** — unprivileged, goes through the kernel via **syscalls**.
 
-## Kernel vs Userspace
+## Kernel vs Userspace — The Syscall Boundary
 
-Every process runs in **user space** until it needs a kernel service (read a file, allocate memory, send a packet). It then issues a **syscall** — a controlled transition into kernel mode.
+Every process runs in **user space** until it needs a kernel service (read a file, allocate memory, send a packet). It then issues a **syscall** — a controlled transition into kernel mode via a software interrupt or `syscall` instruction.
 
 ::code-wrapper{language="bash"}
 ```bash
-strace -c ls /etc >/dev/null 2>&1   # count syscalls made by ls
+# Complex Implementation: count every syscall `ls` makes against /etc
+# — reveals the true cost of "just listing a directory"
+strace -c -e trace=openat,read,close,getdents64,statx ls /etc >/dev/null 2>&1
 ```
 ::
+
 Output (truncated):
 
 ::code-wrapper{language="text"}
 ```text
 % time     seconds  usecs/call     calls    errors syscall
 ------ ----------- ----------- --------- --------- ----------------
-  0.00    0.000000           0        10           mmap
-  0.00    0.000000           0         3           newfstatat
+  0.00    0.000000           0        10           openat
+  0.00    0.000000           0        14           newfstatat
   0.00    0.000000           0         7           getdents64
-  ...
+  0.00    0.000000           0        31           close
+  100.00    0.000000                    62           total
 ```
 ::
+
 Key syscalls: `openat` (open a file), `read`/`write`, `close`, `mmap` (map file into memory), `fork` (create process), `execve` (run a program), `exit` (terminate).
+
+### Caveat & Anti-Pattern: Syscall Overhead in Hot Paths
+
+::code-wrapper{language="bash"}
+```bash
+# NAIVE: 1 syscall per line — 1 million lines = 1 million syscalls
+while IFS= read -r line; do
+  printf '%s\n' "$line"
+done < bigfile.txt
+# ~10 seconds for 1M lines (syscall overhead dominates)
+
+# PRODUCTION: batch I/O — read in chunks, process in userspace
+# Use awk/sed (buffered I/O, orders of magnitude faster)
+awk '{print}' bigfile.txt > /dev/null
+# ~0.1 seconds for the same 1M lines — buffered read, no per-line syscall
+```
+::
+
+The `read` syscall fetches one buffer at a time; the shell `read` builtin re-enters the kernel for every line. For any I/O-heavy pipeline, prefer tools that buffer (`awk`, `sed`, `grep`, `dd`).
 
 ## Distributions (Distros)
 
-A distro = kernel + GNU tools + package manager + init system + default apps. Hundreds exist; the major families:
+A distro = kernel + GNU tools + package manager + init system + default apps. The major families:
 
 | Family | Examples | Package Manager | Init |
 |---|---|---|---|
@@ -62,7 +82,6 @@ A distro = kernel + GNU tools + package manager + init system + default apps. Hu
 
 ### Which Distro Should You Use?
 
-- **Beginner** — Ubuntu, Linux Mint, Fedora. Easy install, large community.
 - **Server** — Debian, Ubuntu LTS, RHEL/Rocky, AlmaLinux. Stability, long support.
 - **Learning** — Arch Linux. You build it yourself; you understand every piece.
 - **Minimal/embedded** — Alpine (5 MB), NixOS (reproducible), Void (musl).
@@ -71,29 +90,36 @@ A distro = kernel + GNU tools + package manager + init system + default apps. Hu
 
 ::code-wrapper{language="bash"}
 ```bash
-uname -a            # kernel version, hostname, arch
-hostnamectl         # distro, kernel, arch, hostname (systemd)
-cat /etc/os-release # distro info (portable)
-lsb_release -a      # Ubuntu/Debian distro details
+# Complex Implementation: portable system identification — works across all distros
+# /etc/os-release is FHS-specified (always present); lsb_release is not
+. /etc/os-release                    # source it (sets $NAME, $VERSION_ID, etc.)
+echo "Distro: $PRETTY_NAME"
+echo "Kernel: $(uname -r)"
+echo "Arch:   $(uname -m)"
+echo "Kernel build: $(uname -v)"
+
+# Edge case: $SHELL is your LOGIN shell, not your CURRENT shell
+# If you ran `zsh` from bash, $SHELL still says /bin/bash
+ps -p $$ -o comm=                   # the actual current shell
 ```
 ::
-Example output:
 
-::code-wrapper{language="text"}
-```text
-$ uname -a
-Linux workstation 6.8.0-31-generic #31-Ubuntu SMP PREEMPT_DYNAMIC ... x86_64 GNU/Linux
+### Edge Case: Merged `/usr` on Modern Distros
 
-$ cat /etc/os-release
-PRETTY_NAME="Ubuntu 24.04 LTS"
-NAME="Ubuntu"
-VERSION_ID="24.04"
-ID=ubuntu
+Since Debian/Ubuntu "merged /usr", `/bin` → `/usr/bin` and `/sbin` → `/usr/sbin`. Scripts hardcoding `/bin/foo` still work (symlinks), but the real path is `/usr/bin/foo`:
+
+::code-wrapper{language="bash"}
+```bash
+ls -ld /bin /sbin /lib              # show the symlinks
+# lrwxrwxrwx 1 root root 7 ... /bin -> usr/bin
+# lrwxrwxrwx 1 root root 7 ... /sbin -> usr/sbin
+# lrwxrwxrwx 1 root root 7 ... /lib -> usr/lib
+
+# Anti-Pattern: hardcoding /bin/bash in a shebang on a non-merged distro
+# If the script is copied to an Alpine container (no /bin/bash, only /bin/sh),
+# it breaks. Use #!/usr/bin/env bash for portability.
 ```
 ::
-- `Linux` — kernel name.
-- `6.8.0-31-generic` — kernel version (major.minor.patch-build-flavor).
-- `x86_64` — CPU architecture (also `aarch64`/ARM64, `riscv64`).
 
 ## The Terminal, Shell, and Console
 
@@ -104,16 +130,25 @@ ID=ubuntu
 
 ::code-wrapper{language="bash"}
 ```bash
-tty                 # show your terminal device (/dev/pts/0)
-echo $SHELL         # your default shell (/bin/bash)
-ps -p $$ -o comm=   # your current shell (more reliable than $SHELL)
-chsh -s /usr/bin/zsh  # change default shell
+# Complex Implementation: detect if we're in a TTY, a terminal emulator, or SSH
+# — drives behavior in scripts (color, interactive prompts)
+if [ -t 1 ]; then
+  # stdout is a terminal
+  if [ "$(tty)" = "not a tty" ] 2>/dev/null; then
+    echo "piped/redirected"
+  else
+    echo "interactive: $(tty)"
+  fi
+else
+  echo "stdout redirected (not a tty)"
+fi
+
+# Detect SSH session
+[ -n "$SSH_CONNECTION" ] && echo "SSH session" || echo "local"
 ```
 ::
 
 ## The Filesystem Hierarchy Standard (FHS)
-
-Linux organizes everything under a single root `/`. We cover it in depth in chapter 03; the quick map:
 
 | Path | Contents |
 |---|---|
@@ -137,12 +172,21 @@ A Unix philosophy: nearly everything is a file — regular files, directories, d
 
 ::code-wrapper{language="bash"}
 ```bash
-cat /dev/null           # empty — /dev/null is a "black hole"
-echo "log entry" > /dev/null   # discards output
-cat /proc/cpuinfo | head -5    # CPU info is a file
-echo 1 > /proc/sys/net/ipv4/ip_forward  # toggle a kernel param by writing a file
+# Complex Implementation: toggle a kernel parameter by writing to /proc/sys
+# — IP forwarding for a router/VPN/Docker host
+echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward     # temporary (lost on reboot)
+echo "net.ipv4.ip_forward = 1" | sudo tee /etc/sysctl.d/99-ip-forward.conf  # persistent
+sudo sysctl -p /etc/sysctl.d/99-ip-forward.conf     # apply without reboot
+
+# Read CPU info as a file (kernel generates content on-the-fly)
+cat /proc/cpuinfo | head -5
+
+# /dev/null — discard sink (writes vanish, reads give EOF)
+echo "noise" > /dev/null
+cat /dev/null > bigfile        # truncate bigfile to 0 bytes (common idiom)
 ```
 ::
+
 File types (the first char of `ls -l`):
 
 | Char | Type |
@@ -157,11 +201,17 @@ File types (the first char of `ls -l`):
 
 ::code-wrapper{language="bash"}
 ```bash
+# Edge Case: /proc and /sys are virtual — they exist in RAM, not on disk
 ls -l /dev/sda /dev/null /etc /proc/cpuinfo
 # brw-rw---- ... /dev/sda      (block device)
 # crw-rw-rw- ... /dev/null     (character device)
 # drwxr-xr-x ... /etc          (directory)
-# -r--r--r-- ... /proc/cpuinfo (regular file — but virtual)
+# -r--r--r-- ... /proc/cpuinfo (regular file — but virtual, generated on read)
+
+# Anti-Pattern: backing up /proc, /sys, /dev
+# du -sh /proc reports 0 or errors — it's all in-kernel
+# tar must exclude them:
+# sudo tar -czf backup.tar.gz --exclude=/proc --exclude=/sys --exclude=/dev /
 ```
 ::
 
@@ -201,15 +251,14 @@ man -k cron       # search for "cron" across all sections
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `cat /etc/os-release` (not `lsb_release`) for portable distro detection — `os-release` is specified by the FHS and present on every modern distro; `lsb_release` is missing on minimal installs.
-- **Idiom**: use `hostnamectl` on systemd distros — it shows distro, kernel, arch, hostname, and chassis type in one command. Falls back to `cat /etc/os-release && uname -a`.
+- **Idiom**: use `cat /etc/os-release` (not `lsb_release`) for portable distro detection — `os-release` is FHS-specified and present on every modern distro; `lsb_release` is missing on minimal installs.
 - **Idiom**: use `command -v <name>` (not `which`) to check if a command exists — `command -v` is POSIX, built into the shell, and respects functions/aliases. `which` is an external command and misses shell functions.
-- **Idiom**: bookmark `man 7 hier` — it documents the FHS in man-page form. Run `man 7 hier` for the authoritative description of what each top-level directory is for.
-- **Debug**: use `strace -c <cmd>` to see which syscalls a command makes — reveals what "everything is a file" really means (`openat`, `read`, `close` on `/proc` and `/sys` paths).
+- **Idiom**: use `hostnamectl` on systemd distros — shows distro, kernel, arch, hostname, and chassis type in one command.
+- **Performance**: `strace -c <cmd>` reveals syscall counts — if a tool makes 10,000 `stat` calls, switching to a buffered alternative (like `find -maxdepth 1`) can be 100x faster.
+- **Portability**: Alpine uses musl, not glibc — binaries compiled against glibc (most prebuilt Linux binaries) won't run on Alpine without `gcompat` or a musl build. This bites Docker users pulling glibc binaries into Alpine images.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`/bin` and `/sbin` are symlinks on modern distros**: since Debian/Ubuntu "merged /usr", `/bin → /usr/bin` and `/sbin → /usr/sbin`. Scripts hardcoding `/bin/foo` still work, but the real path is `/usr/bin/foo`. Check with `ls -ld /bin`.
 - **`/proc` and `/sys` are virtual**: they exist in RAM, not on disk. `du -sh /proc` reports 0 or errors. Don't back them up. Writing to `/proc/sys` changes live kernel state — typos can crash the system.
 - **`/dev/null` is not a regular file**: it's a character device. `cp realfile /dev/null` doesn't "save" the file — it discards it. `cat /dev/null > bigfile` truncates `bigfile` to 0 bytes (a common idiom).
 - **`/tmp` is cleared on reboot** (and sometimes hourly by `systemd-tmpfiles`): don't store anything you need to keep. Use `/var/tmp` for files that survive reboots (up to 30 days by default).
@@ -231,5 +280,6 @@ You run `man passwd` and see the command documentation. You actually wanted the 
 man 5 passwd
 ```
 ::
+
 This is the section-number syntax: `man <section> <name>`. When a name exists in multiple sections, always specify the section to avoid ambiguity. Other common pairs: `man 1 crontab` (command) vs `man 5 crontab` (file), `man 2 open` (syscall) vs `man 1 open` (if a command named `open` exists), `man 8 mount` (admin command) vs `man 2 mount` (syscall).
 </details>

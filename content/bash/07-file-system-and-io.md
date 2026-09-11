@@ -1,283 +1,493 @@
-# 07 — File System & I/O
+---
+title: "Bash 07 — File System, Redirection Internals & Safe I/O Patterns"
+description: "Deep-dive into Bash file descriptor mechanics, redirection order semantics, heredoc/herestring internals, find with null-delimited I/O, mktemp race-free patterns, and production-safe file operations. Code-first reference for senior engineers."
+---
 
-Bash is built for file system operations. This chapter covers navigation, file operations, permissions, redirection, and safe file handling.
+# 07 — File System, Redirection Internals & Safe I/O Patterns
 
-## Navigation
+## File Descriptor Mechanics
 
 ::code-wrapper{language="bash"}
 ```bash
-pwd                  # current directory
-cd /path/to/dir      # change directory
-cd ~                 # home
-cd -                 # previous directory
-cd ..                # parent
-ls                   # list
-ls -l                # long format
-ls -a                # all (including hidden)
-ls -la               # long + all
-ls -lt               # by modification time (newest first)
-ls -lh               # human-readable sizes
-ls -R                # recursive
+# ── Every process has 3 standard file descriptors (fds) ──
+# fd 0 = stdin  (input)
+# fd 1 = stdout (output)
+# fd 2 = stderr (errors)
+# Additional fds (3-9) can be opened manually for advanced patterns.
+
+# ── Redirection operators ──
+cmd > file           # fd 1 (stdout) → file (truncate)
+cmd >> file          # fd 1 → file (append)
+cmd 2> file          # fd 2 (stderr) → file
+cmd 2>> file         # fd 2 → file (append)
+cmd &> file          # fd 1 + fd 2 → file (Bash shorthand)
+cmd > file 2>&1     # fd 1 → file, then fd 2 → fd 1 (both to file)
+cmd 2>&1 > file     # ⚠️ fd 2 → fd 1 (old stdout = terminal), then fd 1 → file. stderr stays on terminal!
+cmd > /dev/null 2>&1  # discard stdout and stderr
+cmd < file           # fd 0 (stdin) ← file
+cmd <> file          # fd 0 ← file (open for read AND write — bidirectional)
+cmd >&-              # close fd 1 (stdout)
+cmd 2>&-             # close fd 2 (stderr)
+
+# ── Opening custom fds ──
+exec 3> /tmp/log.txt   # open fd 3 for writing to /tmp/log.txt (persists in the shell)
+echo "log line" >&3    # write to fd 3
+exec 3>&-              # close fd 3 (good practice — fd leak prevention)
+
+exec 4< input.txt      # open fd 4 for reading from input.txt
+read -r line <&4      # read from fd 4
+exec 4<&-              # close fd 4
+
+# ── Save and restore stdout ──
+exec 5>&1              # save current stdout to fd 5
+exec > /tmp/output.txt # redirect stdout to file
+echo "goes to file"
+exec 1>&5 5>&-         # restore stdout from fd 5, close fd 5
+echo "goes to terminal"
 ```
 ::
-## File Operations
+
+## Anti-Pattern: Redirection Order Matters
 
 ::code-wrapper{language="bash"}
 ```bash
-cp source dest            # copy
-cp -r dir dest            # copy recursively
-cp -i source dest         # interactive (prompt before overwrite)
-mv source dest            # move/rename
-mv -i source dest         # interactive
-rm file                   # remove
-rm -r dir                 # remove recursively
-rm -f file                # force (no error if missing)
-rm -rf dir                # recursive + force (⚠️ dangerous)
-mkdir dir                 # create directory
-mkdir -p path/to/dir      # create parents (no error if exists)
-touch file.txt            # create empty file / update timestamp
-ln -s target linkname     # symbolic link
+# ── Redirections are processed LEFT-TO-RIGHT ──
+
+# ❌ WRONG — stderr stays on terminal
+cmd 2>&1 > output.txt
+# Step 1: 2>&1 → fd 2 points to where fd 1 CURRENTLY points (terminal)
+# Step 2: > output.txt → fd 1 points to output.txt
+# Result: stdout → file, stderr → terminal (NOT what you wanted!)
+
+# ✅ CORRECT — stdout first, then stderr follows
+cmd > output.txt 2>&1
+# Step 1: > output.txt → fd 1 points to output.txt
+# Step 2: 2>&1 → fd 2 points to where fd 1 CURRENTLY points (output.txt)
+# Result: both stdout and stderr → output.txt ✓
+
+# ✅ CORRECT — Bash shorthand
+cmd &> output.txt     # both → output.txt (cleaner, but Bash-only, not POSIX)
+cmd &>> output.txt    # both → output.txt (append)
+
+# ── Piping stderr only ──
+cmd 2>&1 >/dev/null | grep "error"
+# 2>&1: stderr → old stdout (which will be the pipe, after the pipe is set up... no, wait)
+# >/dev/null: stdout → /dev/null
+# The pipe `|` connects cmd's stdout to grep's stdin.
+# 2>&1 makes stderr go to stdout, but stdout is redirected to /dev/null AFTER 2>&1.
+# Actually: the pipe is set up first (stdout → pipe), then 2>&1 → stderr goes to the pipe,
+# then >/dev/null → stdout goes to /dev/null (but stderr still goes to the pipe).
+# Result: only stderr reaches grep, stdout is discarded. ✓
+
+# ── Swap stdout and stderr ──
+cmd 3>&1 1>&2 2>&3 3>&-
+# 3>&1: save old stdout to fd 3
+# 1>&2: stdout → old stderr
+# 2>&3: stderr → old stdout (from fd 3)
+# 3>&-: close fd 3
+# Result: stdout and stderr are swapped.
 ```
 ::
-### Safe `rm`
 
-`rm -rf` is dangerous (a typo like `rm -rf $var/ *` with empty `$var` → `rm -rf / *`). Mitigations:
-- Always quote: `rm -rf "$dir"`.
-- Check for empty: `[[ -n "$dir" ]] && rm -rf "$dir"`.
-- Use `rm -i` for interactive confirmation.
-
-## Permissions
+## Heredocs and Herestrings: Internals
 
 ::code-wrapper{language="bash"}
 ```bash
-chmod 755 file        # rwxr-xr-x (owner: rwx, group: rx, other: rx)
-chmod +x file         # add execute
-chmod u+x file        # user execute
-chmod g-w file        # group remove write
-chmod a+r file        # all read
-chmod -R 755 dir      # recursive
-
-chown user file       # change owner
-chown user:group file # owner + group
-chgrp group file      # change group
-```
-::
-### Octal permissions
-
-- 7 = rwx (4+2+1)
-- 6 = rw- (4+2)
-- 5 = r-x (4+1)
-- 4 = r-- (4)
-- 0 = ---
-
-So `755` = owner `rwx`, group `r-x`, other `r-x`. `644` = owner `rw-`, group `r--`, other `r--` (typical file). `600` = owner `rw-`, group/other `---` (private file).
-
-## Redirection
-
-### stdout and stderr
-
-::code-wrapper{language="bash"}
-```bash
-cmd > file            # stdout to file (overwrite)
-cmd >> file           # stdout to file (append)
-cmd 2> file           # stderr to file
-cmd 2>&1              # stderr to stdout
-cmd > file 2>&1       # stdout and stderr to file
-cmd &> file           # stdout and stderr to file (Bash, preferred)
-cmd >> file 2>&1      # append both
-cmd 2> /dev/null      # discard stderr
-cmd > /dev/null 2>&1  # discard all output
-```
-::
-### File descriptors
-
-- 0 = stdin, 1 = stdout, 2 = stderr.
-
-::code-wrapper{language="bash"}
-```bash
-cmd 2>&1 | grep "error"   # pipe stderr (and stdout) to grep
-```
-::
-Order matters: `cmd 2>&1 > file` sends stderr to the old stdout (terminal), then stdout to file — stderr still goes to terminal. `cmd > file 2>&1` sends stdout to file, then stderr to the new stdout (file) — both to file.
-
-### stdin redirection
-
-::code-wrapper{language="bash"}
-```bash
-cmd < file            # file as stdin
-cmd <<EOF             # heredoc
-line 1
-line 2
-EOF
-
-cmd <<< "string"      # here-string (single string as stdin)
-```
-::
-### Heredocs
-
-::code-wrapper{language="bash"}
-```bash
+# ── Heredoc: multi-line stdin ──
 cat <<EOF
-Hello, $USER!
-Today is $(date)
+Line 1: $USER          # variable expansion (unquoted delimiter)
+Line 2: $(date)
 EOF
 
-# No expansion (quoted delimiter)
+# ── Quoted delimiter: no expansion ──
 cat <<'EOF'
-$USER is literal
+$USER is literal       # no expansion — printed as-is
+$(date) too
 EOF
+
+# ── Strip leading tabs (NOT spaces) with <<- ──
+cat <<-EOF
+		Indented line      # tabs stripped, spaces preserved
+		$USER              # expansion works (unquoted)
+EOF
+# ⚠️ <<- strips TABS only. Configure editor to use tabs for heredoc indentation.
+# Spaces are NOT stripped — the heredoc will include leading spaces.
+
+# ── Heredoc to a variable ──
+config=$(cat <<EOF
+host=localhost
+port=8080
+EOF
+)
+echo "$config"
+
+# ── Heredoc to a file ──
+cat <<EOF > config.txt
+host=localhost
+port=8080
+EOF
+
+# ── Herestring: single string as stdin ──
+read -r line <<< "hello world"     # line="hello world" (single string)
+awk '{print $1}' <<< "hello world"  # hello (single string as stdin)
+grep "pattern" <<< "$input_string"  # search in a variable
+
+# ── Heredoc with command substitution ──
+cat <<EOF
+Date: $(date)
+User: $USER
+Home: $HOME
+Files: $(ls | wc -l)
+EOF
+
+# ── Heredoc as a function body (write a file from a script) ──
+write_config() {
+    cat <<EOF > "$1"
+# Generated by $0 on $(date -Iseconds)
+host=${2:-localhost}
+port=${3:-8080}
+EOF
+}
+write_config config.txt "prod.example.com" 9090
 ```
 ::
-`<<EOF` — heredoc (multi-line input). `<<'EOF'` (quoted) — no variable expansion. `<<-EOF` — strips leading tabs (for indentation).
 
-## Finding Files
-
-### `find`
+## `find`: The Complete Reference
 
 ::code-wrapper{language="bash"}
 ```bash
-find . -name "*.py"               # by name
+# ── Basic search ──
+find . -name "*.py"               # by name (case-sensitive)
 find . -iname "*.py"              # case-insensitive
 find . -type f                    # files only
-find . -type d                    # directories
-find . -type f -name "*.log" -delete   # find and delete
+find . -type d                    # directories only
+find . -type l                    # symlinks only
+find . -type f -name "*.py"       # combine: files AND name matches
+
+# ── By time ──
 find . -mtime -7                  # modified in last 7 days
+find . -mtime +30                 # modified more than 30 days ago
 find . -mmin -60                  # modified in last 60 minutes
+find . -mmin +60                  # modified more than 60 min ago
+find . -newer reference.txt       # newer than reference file
+find . -newermt "2024-01-01"     # newer than specific date
+find . -newermt "2024-01-01" ! -newermt "2024-02-01"  # between two dates
+
+# ── By size ──
 find . -size +10M                 # larger than 10MB
-find . -empty                     # empty files/dirs
-find . -perm 644                  # specific permissions
-find . -exec grep -l "pattern" {} +   # grep in each found file
-find . -exec chmod 644 {} \;      # run command on each (one per file)
-find . -exec chmod 644 {} +       # batch (multiple files per command, faster)
+find . -size -1k                  # smaller than 1KB
+find . -size +100M -size -1G     # between 100MB and 1GB
+find . -empty                     # empty files and dirs
+
+# ── By permissions ──
+find . -perm 644                  # exactly 644
+find . -perm -644                 # AT LEAST 644 (has rw-r--r--)
+find . -perm /644                 # ANY of 644 bits set (r for user OR w for group OR r for other)
+find . -perm -u+x                # executable by user
+
+# ── Boolean operators ──
+find . -name "*.py" -o -name "*.sh"          # OR (match .py OR .sh)
+find . -name "*.py" -a -type f               # AND (default, but explicit with -a)
+find . -not -name "*.py"                     # NOT (files not ending in .py)
+find . \( -name "*.py" -o -name "*.sh" \) -type f  # group with parentheses (escape!)
+
+# ── Actions: -exec vs -delete ──
+find . -name "*.tmp" -delete              # delete matching files (fast, no subprocess)
+find . -name "*.tmp" -exec rm {} \;       # run rm for EACH file (one subprocess per file)
+find . -name "*.tmp" -exec rm {} +         # run rm with ALL files at once (batch — faster)
+find . -name "*.log" -exec gzip {} +       # gzip all .log files (batch)
+find . -name "*.py" -exec wc -l {} +      # count lines in all .py files (batch — single wc call)
+
+# ── -exec ... \; vs -exec ... + ──
+# \; — runs command ONCE PER FILE (one subprocess per file — slow for many files)
+# +  — runs command ONCE with ALL files as args (batch — fast, like xargs)
+# Use + when the command accepts multiple file args (rm, chmod, grep, wc).
+# Use \; when the command takes one file at a time (or when order matters).
+
+# ── -exec with shell features ──
+# -exec runs a command directly, NOT through a shell — no pipes, no redirection.
+# For shell features, use `bash -c`:
+find . -name "*.py" -exec bash -c 'echo "$1: $(wc -l < "$1") lines"' _ {} \;
+# _ is $0 (unused), {} becomes $1
+
+# ── -execdir (safer than -exec) ──
+find . -name "*.log" -execdir rm {} \;
+# -execdir runs the command from the directory containing the file (CWD changes).
+# Safer: avoids race conditions where {} could be a path with special chars.
 ```
 ::
-`-exec ... {} \;` runs the command once per file. `-exec ... {} +` batches (faster). `{}` is the file placeholder.
 
-### Safe `find` with spaces
+## Anti-Pattern: `find` Without Null-Delimiter
 
 ::code-wrapper{language="bash"}
 ```bash
-# Handle filenames with spaces/newlines
-find . -name "*.txt" -print0 | while IFS= read -r -d '' file; do
-	echo "Found: $file"
+# ❌ NAIVE — breaks on filenames with spaces, newlines, or special chars
+for file in $(find . -name "*.txt"); do
+    cp "$file" /backup/
 done
+# $(find ...) captures all output as one string, word-splits on spaces.
+# "my file.txt" becomes "my" and "file.txt" — two iterations, both wrong.
+
+# ❌ ALSO BAD — find | xargs (without -0)
+find . -name "*.txt" | xargs cp -t /backup/
+# xargs splits on whitespace too — same problem.
+
+# ✅ CORRECT — null-delimited (handles ALL filenames, including newlines)
+while IFS= read -r -d '' file; do
+    # -d '' = read until null byte
+    # -print0 = separate filenames with null bytes
+    # This is the ONLY safe way to handle arbitrary filenames
+    cp "$file" /backup/
+done < <(find . -name "*.txt" -print0)
+
+# ✅ CORRECT (xargs) — null-delimited
+find . -name "*.txt" -print0 | xargs -0 cp -t /backup/
+
+# ✅ CORRECT (exec batch) — no need for null delimiters, find handles it
+find . -name "*.txt" -exec cp {} /backup/ +
+
+# ── Why null bytes are the only safe delimiter ──
+# Filenames can contain ANY byte EXCEPT null (\x00):
+#   - spaces:  "my file.txt"
+#   - newlines: "my\nfile.txt"  (yes, this is legal on Unix)
+#   - dashes:  "-file.txt" (looks like an option flag)
+#   - stars:   "*.txt"
+# Null bytes (\x00) are the ONLY character not allowed in filenames.
+# So -print0 + read -d '' is the only universally safe approach.
 ```
 ::
-`-print0` separates with null bytes; `read -d ''` reads null-delimited. The only safe way to handle arbitrary filenames.
 
-### `fd` (modern alternative)
+## Permissions: Octal and Symbolic
 
 ::code-wrapper{language="bash"}
 ```bash
-fd "\.py$"            # find .py files (regex by default)
-fd -e py              # by extension
-fd -H pattern         # include hidden
-fd -t f pattern       # files only
+# ── Octal notation: each digit = owner, group, other ──
+# 7 = rwx (4+2+1)    6 = rw- (4+2)    5 = r-x (4+1)    4 = r-- (4)    0 = ---
+chmod 755 file    # rwxr-xr-x (owner: rwx, group: r-x, other: r-x)
+chmod 644 file    # rw-r--r-- (typical file)
+chmod 600 file    # rw------- (private file, e.g. SSH keys)
+chmod 700 dir     # rwx------ (private directory)
+chmod 755 dir     # rwxr-xr-x (typical directory — needs execute to enter)
+chmod 777 file    # rwxrwxrwx (EVERYONE can read/write/exec — usually a mistake)
+
+# ── Symbolic notation: who + action + what ──
+# who:  u (user/owner), g (group), o (other), a (all — default)
+# action: + (add), - (remove), = (set exactly)
+# what:  r (read), w (write), x (execute), X (execute if dir or already exec), s (setuid/setgid), t (sticky)
+chmod u+x file        # add execute for owner
+chmod g-w file        # remove write for group
+chmod a+r file        # add read for all (same as +r)
+chmod u=rwx,go=rx file  # set explicitly: owner rwx, group+other rx
+chmod +x file         # add execute for all (default who = a)
+chmod u+s file        # setuid bit (run as owner — dangerous, use sparingly)
+chmod g+s dir         # setgid bit (new files inherit group — shared dirs)
+chmod +t dir          # sticky bit (only owner can delete files — /tmp uses this)
+
+# ── Recursive ──
+chmod -R 755 dir     # recursive (dirs AND files get 755 — usually wrong for files!)
+# Best practice: separate dirs (need execute) from files (don't need execute):
+find dir -type d -exec chmod 755 {} +    # dirs: rwxr-xr-x
+find dir -type f -exec chmod 644 {} +    # files: rw-r--r--
+
+# ── Special permissions ──
+# 4000 = setuid (chmod u+s)  — runs executable as the file's owner
+# 2000 = setgid (chmod g+s)  — runs as group / new files inherit group
+# 1000 = sticky  (chmod +t)  — only file owner can delete (used on /tmp)
+chmod 4755 /usr/bin/sudo    # setuid root (rwsr-xr-x — the 's' replaces 'x')
+chmod 2755 shared_dir       # setgid (rwxr-sr-x — 's' in group execute position)
+chmod 1777 /tmp             # sticky (rwxrwxrwt — 't' in other execute position)
+
+# ── umask: default permission mask ──
+umask   # current umask (e.g. 022)
+umask 022   # files created with 644 (666 - 022), dirs with 755 (777 - 022)
+umask 077   # files: 600, dirs: 700 (more restrictive — private)
+umask 000   # files: 666, dirs: 777 (least restrictive — dangerous)
 ```
 ::
-`fd` (install separately) is faster, defaults to regex, respects `.gitignore`. Consider it for interactive use.
 
-## Globbing (recap)
+## `mktemp`: Race-Free Temp Files
 
 ::code-wrapper{language="bash"}
 ```bash
-*.txt               # .txt files
-**/*.py             # recursive (shopt -s globstar)
+# ── mktemp creates unique temp files/dirs atomically (race-free) ──
+tmpfile=$(mktemp)           # creates a file in $TMPDIR (or /tmp)
+tmpdir=$(mktemp -d)         # creates a directory (for multiple temp files)
+trap 'rm -f "$tmpfile"; rm -rf "$tmpdir"' EXIT  # cleanup on any exit
+
+# ── Why not /tmp/myscript.$$? ──
+# $$ is the shell PID — predictable (attacker can pre-create a symlink).
+# mktemp uses random names + atomic creation (O_CREAT|O_EXCL) — race-free.
+
+# ── Custom template (GNU mktemp) ──
+tmpfile=$(mktemp /tmp/myapp.XXXXXX)    # XXXXXX is replaced with random chars
+tmpdir=$(mktemp -d /tmp/myapp.XXXXXX)
+
+# ── Custom template (BSD/macOS mktemp) ──
+tmpfile=$(mktemp /tmp/myapp.XXXXXX)    # same syntax on BSD
+
+# ── Temp file in a specific directory ──
+tmpfile=$(mktemp -p "$SCRIPT_DIR/tmp")  # create in a specific directory
+
+# ── Use $TMPDIR if available (respects user's preference) ──
+echo "${TMPDIR:-/tmp}"   # TMPDIR on macOS: /var/folders/...; Linux: often unset, fallback /tmp
 ```
 ::
-## `stat` and `file`
+
+## Anti-Pattern: Predictable Temp File Names
 
 ::code-wrapper{language="bash"}
 ```bash
-stat file.txt       # file metadata (size, times, permissions)
-file file.txt       # file type (text, binary, image, etc.)
+# ❌ DANGEROUS — predictable name, symlink attack risk
+tmpfile="/tmp/myapp.$$"   # $$ is the PID — attacker can guess it
+touch "$tmpfile"           # if attacker pre-created a symlink /tmp/myapp.1234 → /etc/passwd,
+#                          your script overwrites /etc/passwd! (symlink attack)
+
+# ❌ ALSO DANGEROUS — race condition
+tmpfile="/tmp/myapp_$(date +%s).tmp"
+echo "data" > "$tmpfile"   # window between generating name and creating file
+
+# ✅ CORRECT — mktemp (atomic, race-free, unpredictable)
+tmpfile=$(mktemp)          # atomically created with O_CREAT|O_EXCL — no race
+trap 'rm -f "$tmpfile"' EXIT
 ```
 ::
-## Disk Usage
+
+## Disk Usage and File Inspection
 
 ::code-wrapper{language="bash"}
 ```bash
-du -sh dir          # total size of dir (human-readable)
-du -sh *            # size of each item in current dir
-du -sh * | sort -rh # largest first
-df -h               # disk space (human-readable)
-```
-::
-## Temp Files
+# ── du: disk usage ──
+du -sh dir               # total size (human-readable: 1.2G)
+du -sh *                 # size of each item in current dir
+du -sh * | sort -rh      # largest first
+du -sh --max-depth=1 .   # size of immediate subdirs (GNU du)
+du -d 1 -h .             # same on BSD/macOS du
+du -ah dir               # all files (not just dirs)
+du -ch file1 file2 | tail -1  # total of multiple files (-c: grand total)
+du -sh --exclude=node_modules .  # exclude directories (GNU du)
 
-::code-wrapper{language="bash"}
-```bash
-tmpfile=$(mktemp)                # create a temp file
-tmpdir=$(mktemp -d)              # create a temp directory
-trap 'rm -f "$tmpfile"; rm -rf "$tmpdir"' EXIT   # cleanup on exit
+# ── df: disk space ──
+df -h                    # human-readable sizes
+df -h /                  # space on root filesystem
+df -h .                  # space on current filesystem
+df -i                    # inode usage (can run out of inodes before space!)
+
+# ── stat: file metadata ──
+stat file.txt            # full metadata: size, perms, owner, timestamps, inode
+stat -c '%s' file.txt    # size in bytes (GNU)
+stat -f '%z' file.txt    # size in bytes (BSD/macOS)
+stat -c '%y' file.txt    # last modification time (GNU)
+stat -c '%a' file.txt    # octal permissions (GNU)
+stat -f '%A' file.txt    # octal permissions (BSD/macOS)
+
+# ── file: detect file type ──
+file file.txt            # "ASCII text"
+file image.png           # "PNG image data, 1920 x 1080, ..."
+file --mime-type file   # MIME type: "text/plain"
+file -b file.txt         # brief (no filename in output)
 ```
 ::
-**Always use `mktemp`** (not `$RANDOM` or predictable names) and `trap` for cleanup. Avoid `/tmp/myscript.$$` (predictable, symlink attacks).
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: use `mktemp` for temp files and `trap ... EXIT` for cleanup — `tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT` creates a unique temp file and removes it on exit (normal or error). Never use predictable names (`/tmp/myscript.$$`) — symlink attack risk.
-- **Idiom**: use `find -print0 | while IFS= read -r -d '' file` for filenames with spaces/special chars — `-print0` separates with null bytes (the only safe delimiter); `read -d ''` reads null-delimited. `for f in $(find ...)` breaks on spaces.
-- **Idiom**: use `&>` (Bash) to redirect stdout and stderr — `cmd &> file` sends both to a file. `cmd > file 2>&1` is the POSIX form (works in `sh`). Order matters: `2>&1 > file` is wrong (stderr goes to old stdout).
-- **Idiom**: use `mkdir -p` (no error if exists) — `mkdir -p path/to/dir` creates all parents and doesn't fail if the dir exists. Cleaner than `[[ -d dir ]] || mkdir dir`.
-- **Idiom**: quote `rm -rf "$dir"` and check for empty — `rm -rf $var/ *` with empty `$var` becomes `rm -rf / *` (catastrophic). Always quote, and check `[[ -n "$dir" ]]` before destructive commands.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **`rm -rf $var` with empty `$var`**: `rm -rf /some/path` — if `$var` is empty and unquoted, `rm -rf /some/path/ *` (deletes everything in `/some/path`). Always quote `"$var"` and check `[[ -n "$var" ]]`.
-- **`cmd 2>&1 > file` is wrong**: this sends stderr to the *old* stdout (terminal), then stdout to the file — stderr still goes to the terminal. Use `cmd > file 2>&1` or `cmd &> file` (stderr to the new stdout = file).
-- **`find -exec ... {} \;` vs `+`**: `\;` runs the command once per file (slow for many files); `+` batches (faster). Use `+` when the command accepts multiple files (`grep`, `chmod`).
-- **Parsing `ls` is fragile**: `ls` escapes special characters inconsistently. Use `find` or globs instead. `for f in *.txt` is safe (glob expansion); `for f in $(ls)` is not.
-- **`cp`/`mv` overwrite without warning**: `cp src dst` overwrites `dst` silently. Use `cp -i` (interactive) for safety, or `cp -n` (no overwrite).
-- **macOS `cp`/`mv` differ from GNU**: BSD `cp` doesn't have some GNU options (`--backup`). Check `man cp` on your system. Install GNU coreutils (`brew install coreutils`) for `gcp` etc.
-- **`mktemp` templates differ**: `mktemp` (GNU) vs `mktemp` (BSD/macOS) have different template syntax. `mktemp` (no args) works on both (creates a uniquely-named file in `$TMPDIR`).
-- **`trap EXIT` runs on any exit**: including `exit`, end of script, `set -e` abort, and signals (if trapped). It runs in the exiting shell. Multiple `trap EXIT` overwrite (last one wins); combine cleanup in one function.
-- **Heredoc `<<-EOF` strips tabs only (not spaces)**: `<<-` allows indented heredocs, but only leading *tabs* are stripped, not spaces. Configure your editor to use tabs for the heredoc indentation.
-- **`du` and `df` on network filesystems**: sizes can be off (block sizes, sparse files). Use `du -b` (bytes) or `stat -c %s file` (exact bytes) for precision.
-
-## 🧠 Spot the Bug
-
-A developer redirects stderr to a file, but errors still appear in the terminal:
-
 ::code-wrapper{language="bash"}
 ```bash
-cmd 2>&1 > output.txt
+# ── Atomic file writes (crash-safe) ──
+# Write to a temp file, then rename (rename is atomic on most filesystems):
+tmpfile=$(mktemp "$file.XXXXXX")
+echo "content" > "$tmpfile"
+mv "$tmpfile" "$file"    # atomic rename — readers never see a partial write
+# If the script crashes during echo, the original file is intact (temp file is orphaned).
+
+# ── Lock file to prevent concurrent execution ──
+lockfile=$(mktemp /tmp/myapp.lock.XXXXXX)
+exec 9> "$lockfile"        # open fd 9 for writing
+if ! flock -n 9; then     # try to acquire exclusive lock (non-blocking)
+    echo "another instance is running" >&2
+    exit 1
+fi
+# Lock is held until fd 9 is closed (script exits or exec 9>&-)
+# flock is Linux-only; macOS: brew install flock or use mkdir for locking
+
+# ── mkdir-based locking (portable, no flock needed) ──
+lockdir="/tmp/myapp.lock"
+mkdir "$lockdir" 2>/dev/null || { echo "already running" >&2; exit 1; }
+trap 'rmdir "$lockdir" 2>/dev/null' EXIT
+# mkdir is atomic — only one process can create the dir (race-free)
+
+# ── Copy with progress (rsync) ──
+rsync -ah --progress src/ dest/   # -a archive, -h human-readable, --progress
+
+# ── Safe rm with a trash function ──
+trash() {
+    local trash_dir="${TRASH:-$HOME/.trash}"
+    mkdir -p "$trash_dir"
+    for f in "$@"; do
+        mv "$f" "$trash_dir/"  # move instead of delete
+    done
+}
 ```
 ::
 
-What's wrong?
+## ⚠️ Edge Cases & Gotchas
+
+::code-wrapper{language="bash"}
+```bash
+# ── `rm -rf $var` with empty $var is catastrophic ──
+# rm -rf "$var" with var="" → rm -rf "" (no-op, safe with quotes)
+# rm -rf $var with var="" → rm -rf (no arg!) → deletes CWD!
+# Always quote: rm -rf "$var"  AND  check: [[ -n "$var" ]] || die "empty path"
+
+# ── `cp`/`mv` overwrite without warning ──
+cp src dst    # silently overwrites dst!
+# Use: cp -i (interactive) or cp -n (no overwrite)
+# Or check: [[ ! -e "$dst" ]] || { echo "exists"; exit 1; }
+
+# ── macOS `cp`/`mv` differ from GNU ──
+# BSD cp doesn't have --backup. BSD mv has different -i behavior.
+# Install GNU coreutils: brew install coreutils → gcp, gmv, etc.
+
+# ── `ln -s` relative symlinks ──
+ln -s target link          # if target is relative, it's relative to the LINK's dir, not CWD
+ln -s /absolute/path link  # absolute target — always works
+ln -s ../file.txt link     # relative target — resolves relative to link's location
+
+# ── `find` default action is -print (even with -exec) ──
+find . -name "*.txt" -exec echo {} \;   # ALSO prints each filename (default -print)
+find . -name "*.txt" -exec echo {} \; -print  # explicit (same)
+find . -name "*.txt" -exec echo {} \; -not -print  # no — can't negate default
+# To suppress: find . -name "*.txt" -exec echo {} \; | grep -v '^\.\/'  (or just don't worry)
+
+# ── `du` on sparse files reports apparent size, not disk usage ──
+# A 100GB sparse file that uses 0 blocks: du reports 0 (actual), du --apparent-size reports 100G
+```
+::
+
+## 🧠 Quick Quiz
+
+What goes wrong here?
+
+::code-wrapper{language="bash"}
+```bash
+set -e
+find . -name "*.tmp" -exec rm {} \;
+echo "cleaned up"
+```
+::
 
 <details>
 <summary>Answer</summary>
 
-The order of redirections matters. `cmd 2>&1 > output.txt`:
-1. `2>&1` — stderr (fd 2) is redirected to where stdout (fd 1) *currently* points (the terminal).
-2. `> output.txt` — stdout (fd 1) is redirected to `output.txt`.
+If `find` finds no `.tmp` files, `find` exits 0 (success — it ran, just found nothing). So `set -e` is fine.
 
-So stderr goes to the terminal (it was redirected *before* stdout changed), and stdout goes to the file. Errors still appear in the terminal.
+**But**: if `rm` fails on ANY file (permissions, file busy, etc.), `rm` returns non-zero. With `-exec ... \;`, `find` returns the non-zero exit status of the last `rm`. With `set -e`, the script exits — "cleaned up" is NOT printed.
 
-The fix — redirect stdout first, then stderr:
+This might be what you want (fail fast), but if you want to continue even if some files can't be deleted:
 
 ```bash
-cmd > output.txt 2>&1   # stdout to file, then stderr to the new stdout (file)
+find . -name "*.tmp" -exec rm -f {} \; || true   # -f: no error if file missing, || true: don't fail script
 ```
-::
-Or use Bash's `&>`:
 
-```bash
-cmd &> output.txt   # both stdout and stderr to file (Bash shorthand)
-```
-::
-Now:
-1. `> output.txt` — stdout (fd 1) → file.
-2. `2>&1` — stderr (fd 2) → the current stdout (fd 1), which is now the file.
-
-Both go to the file.
-
-**The lesson**: redirections are processed left-to-right. `2>&1 > file` makes stderr go to the *old* stdout (terminal) before stdout is redirected. `> file 2>&1` (or `&> file`) redirects stdout first, then stderr follows it to the file. Order matters.
+**The lesson**: `find -exec cmd {} \;` propagates `cmd`'s exit status. With `set -e`, a single `rm` failure kills the script. Use `-f` (force) or `|| true` if you want best-effort cleanup.
 
 </details>
-
-## Summary
-
-You can navigate (`pwd`/`cd`/`ls`), manipulate files (`cp`/`mv`/`rm`/`mkdir`/`touch`/`ln`), manage permissions (`chmod` octal/symbolic, `chown`), redirect (`>`, `>>`, `2>`, `2>&1`, `&>`, `<`, heredocs, here-strings), find files (`find` with `-name`/`-type`/`-mtime`/`-exec`/`-print0`, `fd`), use `du`/`df`/`stat`/`file`, and create safe temp files (`mktemp` + `trap`) — with the redirection-order and `rm`-empty-var traps internalized. Next: processes and signals.

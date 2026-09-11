@@ -1,360 +1,674 @@
-# 15 — Exercises & Projects
+---
+title: "Bash 15 — Production Projects: Backup, Deploy, Monitor & Capstone"
+description: "Seven production-grade Bash projects from backup scripts to a capstone deployment system. Each project demonstrates real-world patterns: strict mode, traps, error handling, parallelism, retries, health checks, and testing. Code-first reference for senior engineers."
+---
 
-Apply everything from chapters 1–14 in real-world projects. These exercises progress from focused drills to a full capstone.
+# 15 — Production Projects: Backup, Deploy, Monitor & Capstone
 
-## Project 1 — File Backup Script
-
-A script that backs up a directory (chapter 2–8).
-
-**Requirements**:
-- Take source and destination as args.
-- Use `rsync` (or `tar`) to create a timestamped backup.
-- Verify the source exists; error clearly if not.
-- Clean up old backups (keep last N).
-- `trap` cleanup for temp files.
-- Strict mode (`set -euo pipefail`).
-- `--dry-run` flag.
+## Project 1 — Production Backup Script
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
-set -euo pipefail
+# ── Timestamped backup with retention, verification, and dry-run ──
+set -Eeuo pipefail
+
+readonly SCRIPT_NAME=$(basename "${BASH_SOURCE[0]}")
+readonly TS=$(date +%Y%m%d_%H%M%S)
+
+# ── Config ──
+RETENTION=5
+DRY_RUN=false
+COMPRESS=true
+VERBOSE=false
 
 usage() {
-	cat <<EOF
-Usage: $0 [--dry-run] <source> <destination> [keep]
-  --dry-run  Show what would be done
-  keep       Number of old backups to keep (default: 5)
+    cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS] <source> <destination>
+
+Options:
+  -h, --help           Show this help
+  -n, --dry-run        Show what would be done (no execution)
+  -k, --keep N         Keep last N backups (default: $RETENTION)
+  -z, --gzip           Compress backup (default: on)
+  -v, --verbose        Verbose output
+
+Examples:
+  $SCRIPT_NAME /data /backups
+  $SCRIPT_NAME -n -k 10 /data /backups
 EOF
 }
 
-dry_run=false
-keep=5
+log() { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
 
+# ── Parse args ──
 while [[ $# -gt 0 ]]; do
-	case "$1" in
-		--dry-run) dry_run=true; shift ;;
-		-h|--help) usage; exit 0 ;;
-		-*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
-		*) break ;;
-	esac
+    case "$1" in
+        -h|--help)    usage; exit 0 ;;
+        -n|--dry-run) DRY_RUN=true; shift ;;
+        -k|--keep)    RETENTION="${2:?--keep requires a number}"; shift 2 ;;
+        -z|--gzip)    COMPRESS=true; shift ;;
+        --no-gzip)    COMPRESS=false; shift ;;
+        -v|--verbose) VERBOSE=true; shift ;;
+        -*)           die "unknown option: $1" ;;
+        *)            break ;;
+    esac
 done
 
-[[ $# -lt 2 ]] && { usage; exit 1; }
-src="$1"
-dst="$2"
-[[ $# -ge 3 ]] && keep="$3"
+[[ $# -ge 2 ]] || { usage; exit 1; }
+readonly SRC="$1"
+readonly DST="$2"
 
-[[ -d "$src" ]] || { echo "Error: source '$src' not a directory" >&2; exit 1; }
-[[ -d "$dst" ]] || mkdir -p "$dst"
+# ── Validate ──
+[[ -d "$SRC" ]] || die "source not a directory: $SRC"
+[[ -d "$DST" ]] || mkdir -p "$DST" || die "can't create destination: $DST"
 
-timestamp=$(date +%Y%m%d_%H%M%S)
-backup="$dst/backup_${timestamp}.tar.gz"
+# ── Cleanup trap ──
+tmpfile=""
+cleanup() {
+    local code=$?
+    [[ -n "$tmpfile" && -f "$tmpfile" ]] && rm -f "$tmpfile"
+    exit "$code"
+}
+trap cleanup EXIT
 
+# ── Run wrapper (dry-run aware) ──
 run() {
-	if $dry_run; then
-		echo "DRY RUN: $*" >&2
-	else
-		"$@"
-	fi
+    if $DRY_RUN; then
+        log "DRY RUN: $*"
+    else
+        $VERBOSE && log "executing: $*"
+        "$@"
+    fi
 }
 
-echo "Backing up '$src' to '$backup'" >&2
-run tar -czf "$backup" -C "$(dirname "$src")" "$(basename "$src")"
+# ── Create backup ──
+backup_file="$DST/backup_${TS}.tar.$([[ $COMPRESS == true ]] && echo gz || echo tar)"
+log "backing up '$SRC' to '$backup_file'"
 
-# Clean up old backups
-mapfile -t backups < <(ls -1 "$dst"/backup_*.tar.gz 2>/dev/null | sort -r)
-if (( ${#backups[@]} > keep )); then
-	for old in "${backups[@]:keep}"; do
-		echo "Removing old backup: $old" >&2
-		run rm -f "$old"
-	done
+if $COMPRESS; then
+    run tar -czf "$backup_file" -C "$(dirname "$SRC")" "$(basename "$SRC")"
+else
+    run tar -cf "$backup_file" -C "$(dirname "$SRC")" "$(basename "$SRC")"
 fi
 
-echo "Done" >&2
+# ── Verify backup (only if not dry-run) ──
+if ! $DRY_RUN; then
+    log "verifying backup..."
+    if $COMPRESS; then
+        gzip -t "$backup_file" 2>/dev/null || die "backup verification failed (corrupt gzip)"
+    else
+        tar -tf "$backup_file" &>/dev/null || die "backup verification failed (corrupt tar)"
+    fi
+    log "verification passed"
+fi
+
+# ── Cleanup old backups ──
+log "retention: keeping last $RETENTION backups"
+mapfile -t backups < <(ls -1 "$DST"/backup_*.tar.* 2>/dev/null | sort -r)
+if (( ${#backups[@]} > RETENTION )); then
+    for old in "${backups[@]:RETENTION}"; do
+        log "removing old backup: $old"
+        run rm -f "$old"
+    done
+fi
+
+log "done"
 ```
 ::
-**Goal**: a robust backup script with error handling, cleanup, and dry-run.
 
-## Project 2 — Log Analyzer
-
-Analyze a web server log (chapter 6, 9, 10).
-
-**Requirements**:
-- Find the top 10 most requested URLs.
-- Find the top 10 client IPs.
-- Count HTTP status codes (200, 404, 500, etc.).
-- Find the busiest hour.
-- Output a summary report.
+## Project 2 — Log Analyzer with Summary Report
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
+# ── Analyze an access log: top IPs, URLs, status codes, busiest hour ──
 set -euo pipefail
 
-log="${1:-access.log}"
-[[ -f "$log" ]] || { echo "Log not found: $log" >&2; exit 1; }
+readonly LOG="${1:-access.log}"
 
-echo "=== Top 10 URLs ==="
-awk '{print $7}' "$log" | sort | uniq -c | sort -rn | head -10
+[[ -f "$LOG" ]] || { echo "log not found: $LOG" >&2; exit 1; }
 
-echo -e "\n=== Top 10 IPs ==="
-awk '{print $1}' "$log" | sort | uniq -c | sort -rn | head -10
+# ── Summary report ──
+report() {
+    local section=$1; shift
+    printf '\n=== %s ===\n' "$section"
+    "$@"
+}
 
-echo -e "\n=== Status codes ==="
-awk '{print $9}' "$log" | sort | uniq -c | sort -rn
+# ── Top 10 client IPs ──
+report "Top 10 IPs" bash -c "awk '{print \$1}' \"\$1\" | sort | uniq -c | sort -rn | head -10" _ "$LOG"
 
-echo -e "\n=== Busiest hour ==="
-awk '{print $4}' "$log" | cut -d: -f2 | sort | uniq -c | sort -rn | head -1
+# ── Top 10 URLs ──
+report "Top 10 URLs" bash -c "awk '{print \$7}' \"\$1\" | sort | uniq -c | sort -rn | head -10" _ "$LOG"
 
-echo -e "\n=== Total requests ==="
-wc -l < "$log"
+# ── Status code distribution ──
+report "Status Codes" bash -c "awk '{print \$9}' \"\$1\" | sort | uniq -c | sort -rn" _ "$LOG"
+
+# ── Busiest hour ──
+report "Busiest Hour" bash -c "awk '{print \$4}' \"\$1\" | cut -d: -f2 | sort | uniq -c | sort -rn | head -1" _ "$LOG"
+
+# ── Total requests ──
+printf '\n=== Total Requests ===\n'
+wc -l < "$LOG"
+
+# ── Error rate (4xx + 5xx) ──
+printf '\n=== Error Rate ===\n'
+total=$(wc -l < "$LOG")
+errors=$(awk '$9 >= 400' "$LOG" | wc -l)
+if ((total > 0)); then
+    awk -v e="$errors" -v t="$total" 'BEGIN { printf "%.2f%%\n", (e/t)*100 }'
+fi
+
+# ── Top error URLs ──
+report "Top Error URLs (4xx/5xx)" bash -c "awk '\$9 >= 400 {print \$7}' \"\$1\" | sort | uniq -c | sort -rn | head -10" _ "$LOG"
 ```
 ::
-**Goal**: a log analyzer using `awk`/`sort`/`uniq` pipelines.
 
-## Project 3 — Git Commit Hook
-
-A pre-commit hook that runs checks (chapter 5, 8, 12).
-
-**Requirements**:
-- Run ShellCheck on all staged `.sh` files.
-- Run tests (`bats test/`) if they exist.
-- Block the commit if any check fails.
-- Skip with `--no-verify` (Git's built-in).
-
-`.git/hooks/pre-commit`:
+## Project 3 — Git Pre-Commit Hook
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
+# ── .git/hooks/pre-commit: run ShellCheck and tests before commit ──
 set -euo pipefail
 
-# Run ShellCheck on staged .sh files
-staged_sh=$(git diff --cached --name-only --diff-filter=ACM | grep '\.sh$' || true)
-if [[ -n "$staged_sh" ]]; then
-	echo "Running ShellCheck..."
-	echo "$staged_sh" | xargs shellcheck
+log() { printf '[pre-commit] %s\n' "$*" >&2; }
+
+# ── Get staged .sh files ──
+mapfile -t staged_sh < <(git diff --cached --name-only --diff-filter=ACM | grep '\.sh$' || true)
+
+if (( ${#staged_sh[@]} > 0 )); then
+    log "running ShellCheck on ${#staged_sh[@]} file(s)..."
+    # Use xargs for batch processing
+    printf '%s\n' "${staged_sh[@]}" | xargs shellcheck
+    log "ShellCheck passed"
 fi
 
-# Run tests if they exist
+# ── Run bats tests if they exist ──
 if [[ -d test ]] && ls test/*.bats &>/dev/null; then
-	echo "Running bats tests..."
-	bats test/
+    log "running bats tests..."
+    bats test/
+    log "tests passed"
 fi
 
-echo "Pre-commit checks passed."
+# ── Run ShellCheck on staged .bats files too ──
+mapfile -t staged_bats < <(git diff --cached --name-only --diff-filter=ACM | grep '\.bats$' || true)
+if (( ${#staged_bats[@]} > 0 )); then
+    log "running ShellCheck on .bats files..."
+    printf '%s\n' "${staged_bats[@]}" | xargs shellcheck --shell bash
+fi
+
+log "all pre-commit checks passed"
 ```
 ::
 ::code-wrapper{language="bash"}
 ```bash
-chmod +x .git/hooks/pre-commit
+# Install: chmod +x .git/hooks/pre-commit
 ```
 ::
-**Goal**: a Git hook enforcing code quality.
 
-## Project 4 — Process Monitor
-
-Monitor a process and restart it if it dies (chapter 8).
-
-**Requirements**:
-- Start a command (given as args).
-- Monitor it; restart if it exits.
-- Backoff between restarts (1s, 2s, 4s, ..., max 60s).
-- Handle Ctrl-C (stop both the monitor and the child).
-- Log restarts.
+## Project 4 — Process Supervisor with Backoff
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
-set -uo pipefail
+# ── Monitor a process, restart on crash with exponential backoff ──
+set -uo pipefail  # no set -e (we handle errors manually for restart logic)
 
-[[ $# -lt 1 ]] && { echo "Usage: $0 <command> [args...]" >&2; exit 1; }
+log() { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
+
+[[ $# -ge 1 ]] || die "usage: $0 <command> [args...]"
 
 child_pid=0
 backoff=1
 max_backoff=60
+max_restarts=0  # 0 = unlimited
+restart_count=0
 
 cleanup() {
-	[[ $child_pid -gt 0 ]] && kill "$child_pid" 2>/dev/null
-	exit
+    local code=$?
+    if ((child_pid > 0)) && kill -0 "$child_pid" 2>/dev/null; then
+        log "stopping child (PID $child_pid)..."
+        kill -TERM "$child_pid" 2>/dev/null
+        # Wait up to 10s for graceful shutdown
+        for i in {1..10}; do
+            kill -0 "$child_pid" 2>/dev/null || break
+            sleep 1
+        done
+        kill -KILL "$child_pid" 2>/dev/null  # force if still alive
+        wait "$child_pid" 2>/dev/null
+    fi
+    exit "$code"
 }
-trap cleanup INT TERM
+trap cleanup INT TERM EXIT
+
+log "supervisor started: $*"
 
 while true; do
-	echo "[$(date +%T)] Starting: $*" >&2
-	"$@" &
-	child_pid=$!
-	if wait "$child_pid"; then
-		echo "[$(date +%T)] Exited normally" >&2
-		break
-	fi
-	echo "[$(date +%T)] Crashed, restarting in ${backoff}s" >&2
-	sleep "$backoff"
-	backoff=$((backoff * 2))
-	((backoff > max_backoff)) && backoff=$max_backoff
+    log "starting: $*"
+    "$@" &
+    child_pid=$!
+
+    # Wait for the child to exit
+    if wait "$child_pid"; then
+        log "child exited normally"
+        break  # clean exit — stop supervisor
+    fi
+
+    exit_code=$?
+    log "child crashed (exit $exit_code)"
+
+    # Check restart limit
+    ((restart_count++))
+    if ((max_restarts > 0 && restart_count >= max_restarts)); then
+        die "max restarts ($max_restarts) reached"
+    fi
+
+    log "restarting in ${backoff}s (attempt $restart_count)..."
+    sleep "$backoff"
+
+    # Exponential backoff: 1, 2, 4, 8, 16, 32, 60, 60, ...
+    ((backoff *= 2))
+    ((backoff > max_backoff)) && backoff=$max_backoff
 done
+
+log "supervisor stopped"
 ```
 ::
-**Goal**: a supervisor script with backoff and signal handling.
 
-## Project 5 — Batch Image Resizer
-
-Resize all images in a directory (chapter 6, 8, 11).
-
-**Requirements**:
-- Take a directory and a size (e.g., `800x600`).
-- Find all `.jpg`/`.png` files.
-- Resize in parallel (4 at a time) using `xargs -P` or background jobs.
-- Use `convert` (ImageMagick) or `sips` (macOS).
-- `--dry-run` flag.
+## Project 5 — Parallel Batch Image Resizer
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
+# ── Resize images in parallel with xargs -P ──
 set -euo pipefail
 
-size="${1:?Usage: $0 <size> [directory]}"
+size="${1:?usage: $0 <size> [directory]}"
 dir="${2:-.}"
 
 command -v convert &>/dev/null || { echo "ImageMagick not found" >&2; exit 1; }
-[[ -d "$dir" ]] || { echo "Not a directory: $dir" >&2; exit 1; }
+[[ -d "$dir" ]] || { echo "not a directory: $dir" >&2; exit 1; }
 
+# ── Resize function (exported for xargs) ──
 resize_one() {
-	local file="$1" size="$2"
-	local base="${file%.*}"
-	local ext="${file##*.}"
-	local out="${base}_${size}.${ext}"
-	echo "Resizing: $file → $out"
-	convert "$file" -resize "$size" "$out"
+    local file=$1 size=$2
+    local base="${file%.*}"
+    local ext="${file##*.}"
+    local out="${base}_${size}.${ext}"
+    convert "$file" -resize "$size" "$out"
+    printf '%s → %s\n' "$file" "$out"
 }
 export -f resize_one
 
-find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.png" \) -print0 |
-	xargs -0 -P 4 -I {} bash -c 'resize_one "$1" "$2"' _ {} "$size"
+# ── Find images and resize in parallel (4 at a time) ──
+count=0
+while IFS= read -r -d '' file; do
+    resize_one "$file" "$size" &
+    ((count++))
+    # Limit to 4 parallel jobs
+    ((count % 4 == 0)) && wait
+done < <(find "$dir" -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.png" \) -print0)
+wait  # wait for remaining jobs
 
-echo "Done"
+printf 'resized %d images\n' "$count"
 ```
 ::
-**Goal**: a parallel batch processor using `find`/`xargs -P`.
 
 ## Project 6 — Dotfile Manager
-
-Symlink dotfiles from a repo to `$HOME` (chapter 7, 11, 13).
-
-**Requirements**:
-- `link` — symlink dotfiles from the repo to `$HOME`.
-- `unlink` — remove the symlinks.
-- `status` — show what's linked / missing / changed.
-- Backup existing files before overwriting.
-- Idempotent (safe to run multiple times).
 
 ::code-wrapper{language="bash"}
 ```bash
 #!/usr/bin/env bash
+# ── Symlink dotfiles from repo to $HOME with backup and status ──
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly DOTFILES=("bashrc" "vimrc" "gitconfig" "tmux.conf")
+readonly SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+readonly DOTFILES=("bashrc" "vimrc" "gitconfig" "tmux.conf" "zshrc")
 
-usage() { echo "Usage: $0 {link|unlink|status}"; }
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <command>
 
+Commands:
+  link     Symlink dotfiles to $HOME (backups existing files)
+  unlink   Remove symlinks from $HOME
+  status   Show link status
+EOF
+}
+
+log() { printf '%s\n' "$*"; }
+
+# ── Link dotfiles ──
 link() {
-	for dot in "${DOTFILES[@]}"; do
-		local src="$SCRIPT_DIR/$dot"
-		local dst="$HOME/.$dot"
-		[[ -f "$src" ]] || continue
-		if [[ -e "$dst" && ! -L "$dst" ]]; then
-			mv "$dst" "$dst.backup.$(date +%s)"
-			echo "Backed up existing .$dot"
-		fi
-		ln -sf "$src" "$dst"
-		echo "Linked .$dot"
-	done
+    for dot in "${DOTFILES[@]}"; do
+        local src="$SCRIPT_DIR/$dot"
+        local dst="$HOME/.$dot"
+
+        [[ -f "$src" ]] || continue  # skip if source doesn't exist
+
+        # Backup existing file (if it's not already a symlink)
+        if [[ -e "$dst" && ! -L "$dst" ]]; then
+            local backup="$dst.backup.$(date +%s)"
+            mv "$dst" "$backup"
+            log "backed up existing .$dot → $backup"
+        fi
+
+        # Create symlink (force — replaces existing symlink)
+        ln -sf "$src" "$dst"
+        log "linked .$dot → $src"
+    done
 }
 
+# ── Unlink dotfiles ──
 unlink() {
-	for dot in "${DOTFILES[@]}"; do
-		local dst="$HOME/.$dot"
-		[[ -L "$dst" ]] && { rm "$dst"; echo "Unlinked .$dot"; }
-	done
+    for dot in "${DOTFILES[@]}"; do
+        local dst="$HOME/.$dot"
+        if [[ -L "$dst" ]]; then
+            rm "$dst"
+            log "unlinked .$dot"
+        fi
+    done
 }
 
+# ── Show status ──
 status() {
-	for dot in "${DOTFILES[@]}"; do
-		local dst="$HOME/.$dot"
-		if [[ -L "$dst" ]]; then
-			echo " ✓ .$dot → $(readlink "$dst")"
-		elif [[ -e "$dst" ]]; then
-			echo " ! .$dot exists (not a symlink)"
-		else
-			echo " ✗ .$dot missing"
-		fi
-	done
+    for dot in "${DOTFILES[@]}"; do
+        local src="$SCRIPT_DIR/$dot"
+        local dst="$HOME/.$dot"
+        if [[ -L "$dst" ]]; then
+            local target
+            target=$(readlink "$dst")
+            if [[ "$target" == "$src" ]]; then
+                log "  ✓ .$dot → $target"
+            else
+                log "  ⚠ .$dot → $target (wrong target!)"
+            fi
+        elif [[ -e "$dst" ]]; then
+            log "  ! .$dot exists (not a symlink)"
+        elif [[ -f "$src" ]]; then
+            log "  ✗ .$dot missing (not linked)"
+        fi
+    done
 }
 
+# ── Dispatch ──
 case "${1:-}" in
-	link) link ;;
-	unlink) unlink ;;
-	status) status ;;
-	*) usage; exit 1 ;;
+    link)   link ;;
+    unlink) unlink ;;
+    status) status ;;
+    *)      usage; exit 1 ;;
 esac
 ```
 ::
-**Goal**: a dotfile manager with subcommands, idempotent operations, and backups.
 
-## Project 7 — Deployment Script (Capstone)
+## Project 7 — Capstone: Deployment Script
 
-A full deployment script combining all skills (all chapters).
+::code-wrapper{language="bash"}
+```bash
+#!/usr/bin/env bash
+# ── Production deployment script: build, test, deploy, health check, rollback ──
+set -Eeuo pipefail
 
-**Requirements**:
-- **Args**: `./deploy.sh <env> [--dry-run] [--rollback]` (env: `staging`/`prod`).
-- **Config**: per-env config (host, path, service name) in a sourced file or associative array.
-- **Pre-checks**: dependencies (`rsync`, `ssh`), required env vars, branch (must be `main` for prod).
-- **Build**: run tests (`bats test/`), build the app.
-- **Deploy**: `rsync` to the server, restart the service via `ssh`, verify it's up.
-- **Rollback**: keep last N releases, symlink to current, rollback to previous.
-- **Health check**: `curl` the health endpoint, retry with backoff.
-- **Notifications**: log to a file, optionally send a Slack webhook on success/failure.
-- **Strict mode**: `set -euo pipefail`, `trap` cleanup, `die` for errors.
-- **Parallel**: build and test in parallel where possible.
-- **Idempotent**: safe to rerun.
-- **Dry-run**: show what would be done without executing.
-- **Tests**: `bats` tests for the helper functions (parsing, config, rollback logic).
-- **ShellCheck** clean.
+readonly SCRIPT_NAME=$(basename "${BASH_SOURCE[0]}")
+readonly VERSION="2.0.0"
 
-**Bonus**:
-- Blue-green deployment (switch a symlink, no downtime).
-- Canary (deploy to one server, check, then the rest).
-- Slack/Teams notification on success/failure.
-- Lock file to prevent concurrent deploys.
-- Log rotation for the deploy log.
+# ── Config (per-environment) ──
+declare -A ENVS=(
+    [staging_host]="staging.example.com"
+    [staging_path]="/var/www/staging"
+    [staging_service]="myapp-staging"
+    [prod_host]="prod.example.com"
+    [prod_path]="/var/www/prod"
+    [prod_service]="myapp-prod"
+)
+RELEASES_TO_KEEP=5
+DRY_RUN=false
+ROLLBACK=false
+HEALTH_RETRIES=5
+HEALTH_DELAY=5
 
-**Goal**: a production-quality deployment script demonstrating all Bash skills — args, config, error handling, SSH/rsync, retries, health checks, notifications, testing, and idempotency.
+log() { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
 
-## Checklist
+usage() {
+    cat <<EOF
+$SCRIPT_NAME v$VERSION
+
+Usage: $SCRIPT_NAME <env> [OPTIONS]
+
+Arguments:
+  env         Target environment (staging, prod)
+
+Options:
+  -h, --help       Show this help
+  -n, --dry-run    Show what would be done (no execution)
+  --rollback       Rollback to previous release
+  -k, --keep N     Keep last N releases (default: $RELEASES_TO_KEEP)
+
+Examples:
+  $SCRIPT_NAME staging
+  $SCRIPT_NAME prod --dry-run
+  $SCRIPT_NAME prod --rollback
+EOF
+}
+
+# ── Parse args ──
+[[ $# -ge 1 ]] || { usage; exit 1; }
+ENV="$1"; shift
+case "$ENV" in
+    staging|prod) ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "invalid env: $ENV (use: staging, prod)"; ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--dry-run)  DRY_RUN=true; shift ;;
+        --rollback)   ROLLBACK=true; shift ;;
+        -k|--keep)    RELEASES_TO_KEEP="${2:?--keep requires N}"; shift 2 ;;
+        -h|--help)    usage; exit 0 ;;
+        *)            die "unknown option: $1" ;;
+    esac
+done
+
+readonly ENV DRY_RUN ROLLBACK RELEASES_TO_KEEP
+
+# ── Dependencies ──
+require() { command -v "$1" &>/dev/null || die "missing: $1"; }
+require rsync
+require ssh
+require curl
+
+# ── Run wrapper ──
+run() {
+    if $DRY_RUN; then
+        log "DRY RUN: $*"
+    else
+        "$@"
+    fi
+}
+
+# ── Config lookup ──
+get_config() { echo "${ENVS[${ENV}_$1]:-}"; }
+
+readonly HOST=$(get_config host)
+readonly REMOTE_PATH=$(get_config path)
+readonly SERVICE=$(get_config service)
+
+[[ -n "$HOST" ]] || die "no host configured for $ENV"
+[[ -n "$REMOTE_PATH" ]] || die "no path configured for $ENV"
+[[ -n "$SERVICE" ]] || die "no service configured for $ENV"
+
+# ── Pre-deploy checks ──
+pre_check() {
+    log "pre-deploy checks for $ENV"
+
+    # For prod: require branch to be main
+    if [[ "$ENV" == "prod" ]]; then
+        local branch
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        [[ "$branch" == "main" ]] || die "prod deploy requires main branch (current: $branch)"
+    fi
+
+    # Check for uncommitted changes
+    if ! $DRY_RUN; then
+        [[ -z "$(git status --porcelain)" ]] || die "uncommitted changes — commit or stash first"
+    fi
+
+    log "pre-checks passed"
+}
+
+# ── Build and test ──
+build_and_test() {
+    log "building..."
+
+    # Run tests in parallel with bats (if test dir exists)
+    if [[ -d test ]] && ls test/*.bats &>/dev/null; then
+        log "running tests..."
+        run bats test/ || die "tests failed"
+    fi
+
+    # Build (npm, make, etc.)
+    run npm run build || die "build failed"
+    log "build complete"
+}
+
+# ── Deploy ──
+deploy() {
+    local ts=$(date +%Y%m%d_%H%M%S)
+    local release_dir="$REMOTE_PATH/releases/$ts"
+
+    log "deploying to $HOST:$release_dir"
+
+    # Create release directory on remote
+    run ssh "$HOST" "mkdir -p '$release_dir'"
+
+    # Rsync build output to the new release directory
+    log "syncing files..."
+    run rsync -az --delete dist/ "$HOST:$release_dir/"
+
+    # Symlink current → new release (atomic switch)
+    log "switching current symlink..."
+    run ssh "$HOST" "ln -sfn '$release_dir' '$REMOTE_PATH/current'"
+
+    # Restart the service
+    log "restarting $SERVICE..."
+    run ssh "$HOST" "sudo systemctl restart '$SERVICE'"
+
+    # Cleanup old releases
+    cleanup_old_releases
+
+    log "deployed: $ts"
+    echo "$ts"  # return the release timestamp
+}
+
+# ── Health check with retries ──
+health_check() {
+    local url="https://$HOST/health"
+    local attempt=1
+
+    while ((attempt <= HEALTH_RETRIES)); do
+        log "health check $attempt/$HEALTH_RETRIES: $url"
+
+        if curl -sf --max-time 5 "$url" &>/dev/null; then
+            log "health check passed"
+            return 0
+        fi
+
+        log "health check failed (attempt $attempt)"
+        ((attempt++))
+        sleep "$HEALTH_DELAY"
+    done
+
+    die "health check failed after $HEALTH_RETRIES attempts"
+}
+
+# ── Rollback ──
+rollback() {
+    log "rolling back to previous release..."
+
+    # Get the list of releases (sorted by name = by timestamp)
+    local releases
+    mapfile -t releases < <(ssh "$HOST" "ls -1 '$REMOTE_PATH/releases/' 2>/dev/null | sort -r" || true)
+
+    if (( ${#releases[@]} < 2 )); then
+        die "no previous release to rollback to (only ${#releases[@]} release(s))"
+    fi
+
+    local previous="${releases[1]}"  # second-newest
+    log "rolling back to: $previous"
+
+    run ssh "$HOST" "ln -sfn '$REMOTE_PATH/releases/$previous' '$REMOTE_PATH/current'"
+    run ssh "$HOST" "sudo systemctl restart '$SERVICE'"
+
+    log "rollback complete (now on $previous)"
+}
+
+# ── Cleanup old releases ──
+cleanup_old_releases() {
+    log "cleaning up old releases (keeping $RELEASES_TO_KEEP)..."
+
+    local releases
+    mapfile -t releases < <(ssh "$HOST" "ls -1 '$REMOTE_PATH/releases/' 2>/dev/null | sort -r" || true)
+
+    if (( ${#releases[@]} > RELEASES_TO_KEEP )); then
+        for old in "${releases[@]:RELEASES_TO_KEEP}"; do
+            log "removing old release: $old"
+            run ssh "$HOST" "rm -rf '$REMOTE_PATH/releases/$old'"
+        done
+    fi
+}
+
+# ── Main ──
+main() {
+    log "=== $SCRIPT_NAME v$VERSION → $ENV ==="
+
+    pre_check
+
+    if $ROLLBACK; then
+        rollback
+    else
+        build_and_test
+        deploy
+        health_check
+    fi
+
+    log "=== deployment complete ==="
+}
+
+main "$@"
+```
+::
+
+## Production Checklist
 
 ::code-wrapper{language="markdown"}
 ```markdown
-- [ ] `#!/usr/bin/env bash` shebang
-- [ ] `set -euo pipefail` (strict mode)
-- [ ] `trap cleanup EXIT` (cleanup)
-- [ ] All variables quoted (`"$var"`, `"${arr[@]}"`)
-- [ ] `local` for function variables
+- [ ] `#!/usr/bin/env bash` shebang (portable)
+- [ ] `set -Eeuo pipefail` strict mode (-E for ERR trap inheritance)
+- [ ] `trap cleanup EXIT` for temp file cleanup
+- [ ] `trap err_handler ERR` for error logging
+- [ ] All variables quoted: `"$var"`, `"${arr[@]}"`
+- [ ] `local` for all function variables
 - [ ] `readonly` for constants
-- [ ] `main "$@"` entry point
+- [ ] `main "$@"` entry point (functions defined before call)
 - [ ] `usage` function and arg validation
 - [ ] Errors to stderr (`>&2`), data to stdout
-- [ ] Meaningful exit codes
+- [ ] Meaningful exit codes (0=success, 1=failure, 2=usage)
 - [ ] `mktemp` for temp files (not predictable names)
 - [ ] Idempotent operations (`mkdir -p`, `[[ -e ]] || create`)
 - [ ] No `eval` on untrusted input
 - [ ] `find -print0 | while IFS= read -r -d ''` for filenames
-- [ ] ShellCheck clean
-- [ ] `bats` tests for logic
+- [ ] ShellCheck clean (`shellcheck script.sh`)
+- [ ] `bats` tests for logic functions
 - [ ] `--dry-run` for dangerous operations
+- [ ] Dependency checks (`command -v`)
+- [ ] Graceful shutdown (`trap INT TERM`)
+- [ ] Health checks with retries
+- [ ] Atomic operations (temp file + `mv` for writes)
 ```
 ::
-## Summary
-
-You've applied the full Bash toolkit — from a backup script and log analyzer to a Git hook, process monitor, batch resizer, dotfile manager, and a capstone deployment script. You can write robust, strict-mode scripts with proper quoting, error handling, traps, and tests — a production-quality Bash foundation. Bash's power is composing small tools into pipelines and automating system tasks; with discipline (quoting, strict mode, ShellCheck, tests), it's a reliable automation language.

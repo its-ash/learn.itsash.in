@@ -1,27 +1,70 @@
 # 05 — Functions
 
-## Defining Functions
+## Production-Grade Signature Forwarding and Decorator Construction
 
 ::code-wrapper{language="python"}
 ```python
-def greet(name):
-    """Return a friendly greeting for the given name."""
-    return f"Hello, {name}!"
+# ── A production retry decorator with exponential backoff, telemetry, and
+#    full signature preservation — the kind you'd actually ship in a service ──
 
-print(greet("Ada"))   # Hello, Ada!
-print(greet.__doc__)   # Return a friendly greeting for the given name.
-```
-::
+import time, logging, functools
+from typing import Callable, TypeVar, ParamSpec
 
-Functions are **first-class objects** — they can be assigned to variables, stored in data structures, passed as arguments, and returned from other functions. A function with no explicit `return` returns `None`.
+P = ParamSpec("P")      # 3.10+ — captures the full parameter signature
+R = TypeVar("R")
 
-::code-wrapper{language="python"}
-```python
-def no_return():
-    x = 1 + 1   # no return statement
+log = logging.getLogger(__name__)
 
-result = no_return()
-print(result)   # None
+def retry(
+    max_attempts: int = 3,
+    base_delay: float = 0.1,
+    max_delay: float = 10.0,
+    exceptions: tuple[type[Exception], ...] = (Exception,),
+    on_retry: Callable[[Exception, int], None] | None = None,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """
+    Retry with exponential backoff + jitter.
+
+    Args:
+        max_attempts: Total call attempts (including the first).
+        base_delay: Initial delay in seconds; doubles each retry.
+        max_delay: Cap on backoff delay.
+        exceptions: Only these exception types trigger a retry.
+        on_retry: Optional callback(exc, attempt) for metrics/logging.
+    """
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(func)          # preserves __name__, __doc__, __wrapped__, __annotations__
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            last_exc: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as exc:
+                    last_exc = exc
+                    if attempt >= max_attempts:
+                        log.error("%s failed after %d attempts: %s", func.__name__, attempt, exc)
+                        raise          # re-raise the last exception — caller sees the real failure
+                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                    if on_retry:
+                        on_retry(exc, attempt)
+                    log.warning("%s attempt %d failed, retrying in %.2fs: %s", func.__name__, attempt, delay, exc)
+                    time.sleep(delay)
+            raise last_exc  # type: ignore[misc] — unreachable, but satisfies type checker
+        return wrapper
+    return decorator
+
+# Usage — full type safety preserved through the decorator
+@retry(max_attempts=3, exceptions=(ConnectionError, TimeoutError), on_retry=lambda e, a: print(f"retry {a}: {e}"))
+def fetch_user(user_id: int) -> dict:
+    """Fetch a user from the API — retries on network errors."""
+    import random
+    if random.random() < 0.5:
+        raise ConnectionError("network timeout")
+    return {"id": user_id, "name": "Ada"}
+
+# The wrapped function retains the original signature — inspect sees fetch_user, not `wrapper`
+import inspect
+print(inspect.signature(fetch_user))   # (user_id: int) -> dict — preserved by @functools.wraps
 ```
 ::
 
