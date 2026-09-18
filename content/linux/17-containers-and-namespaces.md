@@ -153,6 +153,7 @@ CMD ["/app"]
 
 ### Layer Caching — Order Matters
 
+::code-wrapper{language="dockerfile"}
 ```dockerfile
 # GOOD: package.json changes rarely → npm ci is cached
 COPY package*.json ./
@@ -163,6 +164,7 @@ COPY . .          # source changes often, but only this layer rebuilds
 COPY . .
 RUN npm ci        # rebuilds every time a source file changes
 ```
+::
 
 ## Volumes — Persistent Data
 
@@ -243,6 +245,7 @@ podman run myapp    # rootless by default (container root → high UID on host)
 
 A developer builds a Node.js app image with this Dockerfile:
 
+::code-wrapper{language="dockerfile"}
 ```dockerfile
 FROM node:20
 COPY . /app
@@ -251,6 +254,7 @@ RUN npm install
 EXPOSE 3000
 CMD ["node", "server.js"]
 ```
+::
 
 Every time they change a single source file, the build takes 5 minutes (npm install runs every time). What's wrong, and how do they fix it?
 
@@ -261,6 +265,7 @@ Every time they change a single source file, the build takes 5 minutes (npm inst
 
 **Fix — copy package manifests first, install deps, then copy source:**
 
+::code-wrapper{language="dockerfile"}
 ```dockerfile
 FROM node:20
 WORKDIR /app
@@ -270,6 +275,7 @@ COPY . .                       # source changes often, but only this layer rebui
 EXPOSE 3000
 CMD ["node", "server.js"]
 ```
+::
 
 Now:
 - `package.json` changes rarely → `npm ci` layer is cached → fast rebuilds.

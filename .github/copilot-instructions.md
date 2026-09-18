@@ -19,6 +19,7 @@ rustc src/main.rs && ./main      # produces ./main (or main.exe)
 - Optionally add a `filename` prop: `::code-wrapper{language="rust" filename="main.rs"}`
 - Supported languages: `rust`, `python`, `javascript`, `typescript`, `bash`, `json`, `yaml`, `markdown`, `sql`, `toml`, `ini`, `xml`, `css`, `shell`, `dockerfile`
 - Never use bare fenced code blocks without the `::code-wrapper` wrapper
+- **Exception**: content under `content/prompt-engineering/` does not require coding examples or `::code-wrapper` blocks — this track is about prompting technique, not programming syntax. Prose, prompt-text examples (as plain text/quotes), and diagrams are preferred there instead.
 
 ## Index Files
 

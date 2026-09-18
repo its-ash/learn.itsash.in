@@ -484,9 +484,11 @@ If `find` finds no `.tmp` files, `find` exits 0 (success — it ran, just found 
 
 This might be what you want (fail fast), but if you want to continue even if some files can't be deleted:
 
+::code-wrapper{language="bash"}
 ```bash
 find . -name "*.tmp" -exec rm -f {} \; || true   # -f: no error if file missing, || true: don't fail script
 ```
+::
 
 **The lesson**: `find -exec cmd {} \;` propagates `cmd`'s exit status. With `set -e`, a single `rm` failure kills the script. Use `-f` (force) or `|| true` if you want best-effort cleanup.
 

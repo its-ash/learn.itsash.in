@@ -600,6 +600,7 @@ Two problems:
 
 **Fix**: preserve the exit code:
 
+::code-wrapper{language="bash"}
 ```bash
 set -e
 tmpfile=$(mktemp)
@@ -611,6 +612,7 @@ cleanup() {
 trap cleanup EXIT
 false   # exits 1 → cleanup runs → exits 1 (correct)
 ```
+::
 
 **The lesson**: always capture `$?` as the first thing in an EXIT trap and `exit "$?"` to preserve the original exit code. `exit 0` in cleanup masks failures.
 

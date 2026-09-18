@@ -262,12 +262,14 @@ What's wrong, and how do you fix it?
 
 **`uniq` only deduplicates adjacent duplicates.** The error codes from `awk` are in log order (not sorted), so `E404 E500 E404 E404 E500` has no adjacent duplicates collapsed — `uniq -c` reports each run separately:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 1 E404
 1 E500
 2 E404
 1 E500
 ```
+::
 
 **Fix: `sort` before `uniq`:**
 
@@ -279,8 +281,10 @@ grep "ERROR" app.log | awk '{print $4}' | sort | uniq -c | sort -rn | head
 
 Now `sort` groups identical codes together, and `uniq -c` counts each group correctly:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 3 E404
 2 E500
 ```
+::
 </details>

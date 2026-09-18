@@ -4,7 +4,8 @@ Logs are how you know what's happening on your system. This chapter covers syste
 
 ## The Logging Landscape
 
-```text
+::code-wrapper{language="bash"}
+```bash
 ┌────────────────────────────────────────────────┐
 │  Application / Service                          │
 │     ↓ (stdout/stderr → journald, or syslog API) │
@@ -18,6 +19,7 @@ Logs are how you know what's happening on your system. This chapter covers syste
 │  logrotate (rotates/archives old logs)          │
 └────────────────────────────────────────────────┘
 ```
+::
 
 ## `journalctl` — The Log Viewer
 
@@ -230,11 +232,13 @@ atop -r /var/log/atop/atop_20260910   # press t (forward), T (backward) to navig
 
 systemd captures stdout/stderr automatically:
 
+::code-wrapper{language="ini"}
 ```ini
 [Service]
 StandardOutput=journal      # default
 StandardError=journal       # default
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -280,10 +284,12 @@ logger -p local0.info "Info message"             # custom facility + priority
 
 An admin sets up a web app as a systemd service. Logs are visible via `journalctl -u myapp`. They want logs in a file too, so they add to the unit:
 
+::code-wrapper{language="ini"}
 ```ini
 [Service]
 ExecStart=/usr/bin/node /opt/myapp/server.js >> /var/log/myapp.log 2>&1
 ```
+::
 
 After restart, `journalctl -u myapp` shows nothing, and `/var/log/myapp.log` is owned by root. What went wrong?
 
@@ -298,6 +304,7 @@ Two issues:
 
 **Better approach — use systemd's built-in redirection:**
 
+::code-wrapper{language="ini"}
 ```ini
 [Service]
 ExecStart=/usr/bin/node /opt/myapp/server.js
@@ -306,13 +313,16 @@ StandardError=journal
 # Also append to a file:
 StandardOutput=append:/var/log/myapp.log
 ```
+::
 
 Or use `tee` to split the stream:
 
+::code-wrapper{language="ini"}
 ```ini
 [Service]
 ExecStart=/bin/sh -c '/usr/bin/node /opt/myapp/server.js 2>&1 | tee -a /var/log/myapp.log'
 ```
+::
 
 But the cleanest production approach is to let journald handle logging and use `journalctl -u myapp -f` for live viewing, `journalctl -u myapp --since today -o cat > /var/log/myapp.log` for export.
 </details>

@@ -4,7 +4,8 @@ Networking is how your Linux box talks to other machines — via TCP/IP, DNS, HT
 
 ## The TCP/IP Model
 
-```text
+::code-wrapper{language="bash"}
+```bash
 ┌─────────────────────────────────────┐
 │  Application  (HTTP, SSH, DNS, ...)  │  ← your programs
 ├─────────────────────────────────────┤
@@ -15,6 +16,7 @@ Networking is how your Linux box talks to other machines — via TCP/IP, DNS, HT
 │  Link         (Ethernet, Wi-Fi)      │  ← MAC addresses, switches
 └─────────────────────────────────────┘
 ```
+::
 
 ## Network Interfaces
 
@@ -51,6 +53,7 @@ sudo ip route add default via 192.168.1.1    # default gateway
 
 ### Ubuntu — Netplan
 
+::code-wrapper{language="yaml"}
 ```yaml
 # /etc/netplan/01-netcfg.yaml
 network:
@@ -66,6 +69,7 @@ network:
       nameservers:
         addresses: [8.8.8.8, 1.1.1.1]
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash

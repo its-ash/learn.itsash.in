@@ -55,7 +55,8 @@ sudo firewall-cmd --list-all
 
 ## SSH Hardening
 
-```text
+::code-wrapper{language="bash"}
+```bash
 # /etc/ssh/sshd_config
 PermitRootLogin no                # no root login via SSH
 PasswordAuthentication no         # require key auth (after setting up keys!)
@@ -65,6 +66,7 @@ MaxAuthTries 3                    # limit password guesses
 ClientAliveInterval 300           # idle timeout (5 min)
 X11Forwarding no                  # disable if not needed
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -208,7 +210,8 @@ sudo aide --update            # update after legitimate changes
 
 ## Network Hardening
 
-```text
+::code-wrapper{language="bash"}
+```bash
 # /etc/sysctl.d/99-network-hardening.conf
 net.ipv4.ip_forward = 0
 net.ipv4.conf.all.accept_redirects = 0
@@ -217,6 +220,7 @@ net.ipv4.conf.all.rp_filter = 1
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.tcp_syncookies = 1
 ```
+::
 
 Apply: `sudo sysctl --system`.
 

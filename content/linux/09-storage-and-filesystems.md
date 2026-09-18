@@ -4,7 +4,8 @@ Storage is where data lives persistently. This chapter covers disks, partitions,
 
 ## The Storage Stack
 
-```text
+::code-wrapper{language="bash"}
+```bash
 ┌─────────────────────────────────────┐
 │  Filesystem (ext4, xfs, btrfs...)   │  ← what you mount
 ├─────────────────────────────────────┤
@@ -17,6 +18,7 @@ Storage is where data lives persistently. This chapter covers disks, partitions,
 │  Hardware (SATA, NVMe, USB, RAID)   │
 └─────────────────────────────────────┘
 ```
+::
 
 ## Block Devices
 
@@ -123,7 +125,8 @@ echo "vm.swappiness = 10" | sudo tee /etc/sysctl.d/99-swappiness.conf
 
 LVM abstracts physical disks into flexible logical volumes. You can resize, snapshot, and span multiple disks — impossible with plain partitions.
 
-```text
+::code-wrapper{language="bash"}
+```bash
 Physical Volume (PV)      ← a disk or partition (e.g., /dev/sdb1)
     ↓
 Volume Group (VG)         ← pool of PVs (e.g., vg_data)
@@ -132,6 +135,7 @@ Logical Volume (LV)       ← a slice of the VG, used like a partition
     ↓
 Filesystem                ← ext4/xfs on the LV
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash

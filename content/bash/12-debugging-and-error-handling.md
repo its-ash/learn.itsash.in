@@ -610,6 +610,7 @@ With `set -e`, the script sees exit 0 from `local` and doesn't exit.
 
 **The fix**: separate declaration and assignment:
 
+::code-wrapper{language="bash"}
 ```bash
 set -e
 f() {
@@ -619,6 +620,7 @@ f() {
 }
 f
 ```
+::
 
 **The lesson**: `local x=$(command)` always returns 0 (local's status), masking the command's failure. With `set -e`, use `local x; x=$(command)` so the command's exit status propagates.
 

@@ -170,10 +170,12 @@ cat /proc/sys/vm/overcommit_memory
 
 ### `iostat -x` Key Columns
 
-```text
+::code-wrapper{language="bash"}
+```bash
 Device  r/s  w/s  rkB/s  wkB/s  %util  await
 sda     50   100  800    1600    85     15.2
 ```
+::
 
 | Column | Meaning | Concerning |
 |---|---|---|
@@ -208,7 +210,8 @@ ionice -c 2 -n 0 command                          # best-effort, high priority
 
 ### Network Tuning
 
-```text
+::code-wrapper{language="bash"}
+```bash
 # /etc/sysctl.d/99-network.conf — high-traffic server
 net.core.somaxconn = 65535
 net.core.rmem_max = 16777216
@@ -217,6 +220,7 @@ net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_max_syn_backlog = 65535
 net.ipv4.tcp_congestion_control = bbr
 ```
+::
 
 ### Enable BBR
 
@@ -283,9 +287,11 @@ sudo systemd-run --unit=test --CPUQuota=25% --MemoryMax=256M stress --cpu 4
 
 A server is slow. The admin checks `uptime`:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 load average: 16.20, 15.85, 15.70
 ```
+::
 
 They check `top` — CPU usage is 20% (`us` 15%, `sy` 5%, `id` 80%). They conclude "the load is wrong, CPU is mostly idle." They check CPU count: 4 cores. What's actually happening, and what should they check next?
 

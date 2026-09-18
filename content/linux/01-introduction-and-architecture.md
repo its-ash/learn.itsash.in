@@ -4,7 +4,8 @@ Linux is a monolithic kernel managing CPU, memory, devices, and process scheduli
 
 ## The Layers
 
-```text
+::code-wrapper{language="bash"}
+```bash
 ┌─────────────────────────────────────┐
 │          Applications               │  Firefox, nginx, your scripts
 ├─────────────────────────────────────┤
@@ -17,6 +18,7 @@ Linux is a monolithic kernel managing CPU, memory, devices, and process scheduli
 │          Hardware (CPU/RAM/disk)    │
 └─────────────────────────────────────┘
 ```
+::
 
 - **Kernel space** — privileged, full hardware access (ring 0 on x86).
 - **User space** — unprivileged, goes through the kernel via **syscalls**.

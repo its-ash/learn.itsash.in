@@ -29,13 +29,15 @@ PROMPT_COMMAND='__rc=$?; if [ $__rc -ne 0 ]; then PS1="${PS1%\\$} [\$?]\\$ "; fi
 
 A command line is split into **words** by whitespace:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 $ ls -la /etc
   └┘ └┘ └─┘
    │  │   └ argument (the directory to list)
    │  └ options (-l long, -a all — combined)
    └ command (program name)
 ```
+::
 
 ### `--` Ends Options
 

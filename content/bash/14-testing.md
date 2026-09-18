@@ -663,6 +663,7 @@ If `add` is broken (returns "6"), the `run` call's output ("6") is ignored, and 
 
 **The fix**: use one approach:
 
+::code-wrapper{language="bash"}
 ```bash
 @test "add works" {
     run add 2 3
@@ -670,15 +671,18 @@ If `add` is broken (returns "6"), the `run` call's output ("6") is ignored, and 
     assert_output "5"    # checks the run's output (single call)
 }
 ```
+::
 
 Or (for pure functions):
 
+::code-wrapper{language="bash"}
 ```bash
 @test "add works" {
     result=$(add 2 3)
     [[ "$result" == "5" ]]
 }
 ```
+::
 
 **The lesson**: don't mix `run` and direct `$(...)` calls in the same test. Pick one — `run` + `$output` for commands, or `$()` + `[[ ]]` for pure functions.
 

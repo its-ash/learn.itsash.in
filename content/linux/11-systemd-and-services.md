@@ -36,6 +36,7 @@ sudo systemctl restart nginx  # now the changes take effect
 
 ## Unit File Structure
 
+::code-wrapper{language="ini"}
 ```ini
 # /etc/systemd/system/myapp.service
 [Unit]
@@ -58,6 +59,7 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 ```
+::
 
 ### `Type=` Is Critical
 
@@ -86,12 +88,14 @@ sudo systemctl edit nginx    # opens /etc/systemd/system/nginx.service.d/overrid
 
 Add only the lines you want to change:
 
+::code-wrapper{language="ini"}
 ```ini
 # /etc/systemd/system/nginx.service.d/override.conf
 [Service]
 Restart=always
 RestartSec=3
 ```
+::
 
 ### Caveat: Drop-In Merges, Doesn't Replace
 
@@ -261,11 +265,13 @@ sudo systemd-run --unit=test --CPUQuota=25% --MemoryMax=256M stress --cpu 4
 
 An admin edits the nginx service to add an environment variable. They create `/etc/systemd/system/nginx.service.d/override.conf`:
 
+::code-wrapper{language="ini"}
 ```ini
 [Service]
 Environment=NGINX_WORKERS=8
 ExecStart=/usr/sbin/nginx -g 'daemon off;' --with-debug
 ```
+::
 
 They run `sudo systemctl restart nginx`, but `systemctl status nginx` shows the original `ExecStart` (without `--with-debug`) and the service fails. What happened?
 
@@ -287,12 +293,14 @@ sudo systemctl edit nginx
 ```
 ::
 
+::code-wrapper{language="ini"}
 ```ini
 [Service]
 Environment=NGINX_WORKERS=8
 ExecStart=                                              # clear the original
 ExecStart=/usr/sbin/nginx -g 'daemon off;' --with-debug  # set the new one
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash

@@ -6,7 +6,8 @@ Linux permissions control who can read, write, and execute files, and who owns t
 
 Every file has an owner (user, by UID), a group (by GID), and permissions for three classes: **owner** (user), **group**, and **others**.
 
-```text
+::code-wrapper{language="bash"}
+```bash
 $ ls -l /etc/passwd
 -rw-r--r-- 1 root root 3218 Jun 15 10:23 /etc/passwd
 └──┘└─┘└─┘ └──┘ └──┘
@@ -16,6 +17,7 @@ $ ls -l /etc/passwd
   │   └ permissions for group (r--)
   └ permissions for owner (rw-)
 ```
+::
 
 ## Permission Bits — Meaning by File Type
 

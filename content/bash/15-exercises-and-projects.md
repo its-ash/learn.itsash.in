@@ -672,3 +672,43 @@ main "$@"
 - [ ] Atomic operations (temp file + `mv` for writes)
 ```
 ::
+
+## 💡 Tips & Tricks
+
+- **Debug**: run every script in this chapter through `shellcheck` before trusting it — Project 3's pre-commit hook exists precisely because ShellCheck catches unquoted expansions and word-splitting bugs that only surface on a machine with different `$IFS` or filenames containing spaces.
+- **Idiom**: `run()` wrapper functions (seen in Projects 1 and 7) that gate every side-effecting command behind `$DRY_RUN` are the cheapest insurance you can add to a deploy/backup script — retrofit one into any existing script before it touches production data for the first time.
+- **Performance**: Project 5's `((count % 4 == 0)) && wait` pattern throttles parallelism without a job-control library — for heavier fan-out, `xargs -P N` or GNU `parallel` do the same job with less bookkeeping and built-in output ordering.
+- **Safety**: `trap cleanup EXIT` (Projects 1 and 4) fires on *any* exit path — normal, `die`, or a signal — so it's the one place to guarantee temp files are removed and child processes are reaped, instead of duplicating cleanup at every early return.
+- **Debug**: when a supervised child (Project 4) misbehaves, `kill -0 "$pid"` is the idiomatic "is this PID still alive" check — it sends no signal, only tests permission and existence, and is far cheaper than parsing `ps` output.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`set -e` does not fire inside a conditional**: in Project 7's `build_and_test`, `run npm run build || die "build failed"` works because the failure is caught explicitly — but a bare failing command inside `if`, `while`, `&&`/`||`, or a pipeline (without `pipefail`) silently continues under `set -e`, which is why every project here pairs `set -e` with explicit `|| die` at the calls that matter most.
+- **`mapfile -t releases < <(ssh ... || true)` can silently mask a real SSH failure**: Project 7's rollback trailing `|| true` exists to tolerate "no releases directory yet," but it equally swallows a genuine SSH connection failure — the subsequent `(( ${#releases[@]} < 2 ))` check catches the empty case either way, but the error message ("no previous release") would mislead you if the real cause was a dead host.
+- **Backgrounded jobs in Project 5 inherit the parent's file descriptors**: `resize_one "$file" "$size" &` forked in a loop reading from `find ... -print0` means every background job also holds the same read end of that process substitution pipe open — usually harmless here, but it's the same mechanism that causes classic "background jobs reading stdin steal each other's input" bugs when the loop reads from stdin instead of a `-print0` fd.
+- **`${releases[1]}` in Project 7 assumes `sort -r` gives lexicographic order matching chronological order**: this only holds because the release directory names are `YYYYMMDD_HHMMSS` timestamps — zero-padded, fixed-width, sortable as strings. Swap in an unpadded or non-ISO timestamp format and "previous release" silently picks the wrong one.
+
+## 🧠 Quick Quiz
+
+Project 1's cleanup trap is:
+
+::code-wrapper{language="bash"}
+```bash
+tmpfile=""
+cleanup() {
+    local code=$?
+    [[ -n "$tmpfile" && -f "$tmpfile" ]] && rm -f "$tmpfile"
+    exit "$code"
+}
+trap cleanup EXIT
+```
+::
+
+If the script's main body never assigns anything to `tmpfile`, and later fails with `die "backup verification failed"` (which calls `exit 1`), what does `cleanup` do, and what exit code does the script report?
+
+<details>
+<summary>Answer</summary>
+
+`cleanup` runs (EXIT traps fire even when triggered by an explicit `exit`), reads `code=$?` — which captures `1` from `die`'s `exit 1`, since `$?` is evaluated as the very first statement inside `cleanup`, before anything else changes it — skips the `rm -f` because `tmpfile` is empty, and re-exits with `code`, i.e. `1`. The script correctly reports failure. The subtle part: if `local code=$?` weren't the *first* line of `cleanup`, any earlier command in the trap (even a no-op comparison) could overwrite `$?` before it's captured, and the script would exit `0` despite having failed — this is why every trap handler in this chapter captures `$?` immediately.
+
+</details>

@@ -4,7 +4,8 @@ Linux organizes every file under a single root directory, `/`. There are no driv
 
 ## The Root Directory
 
-```text
+::code-wrapper{language="bash"}
+```bash
 /
 ├── bin/      → /usr/bin    (user binaries)
 ├── sbin/     → /usr/sbin   (system binaries)
@@ -34,6 +35,7 @@ Linux organizes every file under a single root directory, `/`. There are no driv
 ├── media/                 (removable media — USB, CD)
 └── run/                   (runtime data: PID files, sockets)
 ```
+::
 
 ## `/proc` — Process & Kernel Info (Virtual)
 
@@ -76,7 +78,8 @@ sudo tar -czf backup.tar.gz --exclude=/proc --exclude=/sys --exclude=/dev --excl
 
 A filesystem stores files as **inodes** (index nodes), not names. An inode holds the file's metadata and data block pointers; the directory just maps names to inode numbers.
 
-```text
+::code-wrapper{language="bash"}
+```bash
 Directory entry:        Inode (stored in the filesystem):
   "passwd" → inode 123     inode 123:
                               type: regular file
@@ -86,6 +89,7 @@ Directory entry:        Inode (stored in the filesystem):
                               mtime: 2026-06-15
                               data blocks: [block 42, block 87, ...]
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash

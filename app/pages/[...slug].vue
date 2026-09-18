@@ -178,7 +178,7 @@ definePageMeta({
           <BackButton label="Back" />
         </div>
 
-        <ContentRenderer v-if="page" :value="page" />
+        <SplitContentRenderer v-if="page" :value="page" />
         <div v-else-if="pending" class="flex items-center justify-center py-24">
           <span class="code-spinner" style="width: 1.5rem; height: 1.5rem; border-width: 2px;" />
         </div>

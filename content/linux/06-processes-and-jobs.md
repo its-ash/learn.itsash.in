@@ -56,12 +56,14 @@ ps aux --sort=-%mem | head  # top memory consumers
 
 The `ps aux` columns:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
 root         1  0.0  0.1 168924 13140 ?        Ss   Jun15   1:23 /sbin/init
 alice     1240  0.0  0.2  25460  5232 pts/0    Ss   10:00   0:00 -bash
 alice     1305  1.2  0.8 124356 32100 pts/0    S+   10:15   0:05 vim notes.md
 ```
+::
 
 - **VSZ** — virtual memory size (KB) — address space (often large, mostly not in RAM).
 - **RSS** — resident set size (KB) — actual physical memory used.

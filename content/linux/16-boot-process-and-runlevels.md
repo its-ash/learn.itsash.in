@@ -4,7 +4,8 @@ Understanding the Linux boot process is essential for troubleshooting boot failu
 
 ## The Boot Sequence
 
-```text
+::code-wrapper{language="bash"}
+```bash
 1. Power on
    ↓
 2. Firmware (BIOS or UEFI) — POST, hardware init, find boot device
@@ -19,6 +20,7 @@ Understanding the Linux boot process is essential for troubleshooting boot failu
    ↓
 7. Login
 ```
+::
 
 ## Firmware — BIOS or UEFI
 
@@ -97,7 +99,8 @@ systemd-analyze plot > boot.svg    # visual timeline (open in browser)
 
 Example:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 $ systemd-analyze
 Startup finished in 5.123s (kernel) + 8.456s (userspace) = 13.579s
 
@@ -106,6 +109,7 @@ $ systemd-analyze blame | head -5
 5.100s NetworkManager-wait-online.service    ← common culprit
 2.300s snapd.service
 ```
+::
 
 ## Targets — The Modern Runlevels
 

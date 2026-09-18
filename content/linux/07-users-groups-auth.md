@@ -155,7 +155,8 @@ chmod 644 ~/.ssh/id_ed25519.pub      # public key — can be readable
 
 ### `sshd_config` Hardening
 
-```text
+::code-wrapper{language="bash"}
+```bash
 PermitRootLogin no              # disable root login via SSH
 PasswordAuthentication no       # require key auth (after setting up keys!)
 PubkeyAuthentication yes
@@ -163,6 +164,7 @@ AllowUsers alice bob            # whitelist (optional)
 MaxAuthTries 3                  # limit password guesses
 ClientAliveInterval 300         # idle timeout (5 min)
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash

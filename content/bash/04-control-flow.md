@@ -618,6 +618,7 @@ done
 
 **Fix**: increment `i` inside the loop body:
 
+::code-wrapper{language="bash"}
 ```bash
 i=0
 while ((i < 10)); do
@@ -625,6 +626,7 @@ while ((i < 10)); do
     ((i++))    # ← missing increment
 done
 ```
+::
 
 **The lesson**: `while` checks the condition each iteration, but if the condition's variables never change, the loop never exits. Always ensure the loop body modifies the condition variable (or has a `break`).
 

@@ -547,12 +547,14 @@ This is a common surprise: sourcing a "safe" script makes the caller's shell "sa
 
 **The fix**: libraries should NOT set `set -e`. Only executable scripts should. Use the guard:
 
+::code-wrapper{language="bash"}
 ```bash
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set -euo pipefail   # only in executed mode
     main "$@"
 fi
 ```
+::
 
 **The lesson**: `set -e` (and friends) affect the current shell. When a script is sourced, that's the caller's shell. Guard strict mode behind the executed-vs-sourced check.
 

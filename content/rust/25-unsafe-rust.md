@@ -41,6 +41,7 @@ fn main() {
 
 ### The five superpowers, one minimal example each
 
+::code-wrapper{language="rust"}
 ```rust
 // 1. Raw pointer dereference — no lifetime, no aliasing info
 let n = 5;
@@ -64,6 +65,7 @@ union U { i: u32, f: f32 }
 let u = U { i: 1 };
 unsafe { println!("{}", u.i); }
 ```
+::
 
 ### `#[repr(Rust)]` vs `#[repr(C)]` — the ABI layer unsafe code must reason about
 

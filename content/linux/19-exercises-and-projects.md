@@ -9,6 +9,7 @@ Write a script that produces a system inventory report. Covers chapters 02–05 
 **Requirements**: OS, kernel version, architecture, CPU model and core count, total and available memory, disk usage per filesystem, top 5 processes by CPU and memory, listening TCP ports.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -44,6 +45,7 @@ echo
 echo "=== Listening TCP Ports ==="
 ss -tlnp | awk 'NR>1 {print $4, $6}' | column -t
 ```
+::
 
 **Verification**:
 - [ ] Output is formatted in readable tables.
@@ -59,6 +61,7 @@ Build a pipeline to analyze web server logs. Covers chapters 05 (text processing
 **Requirements**: Top 10 requesting IPs, top 10 requested paths, top 10 HTTP status codes, count of 4xx and 5xx errors, total bandwidth.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -88,6 +91,7 @@ echo
 echo "=== Bandwidth ==="
 awk '{sum += $10} END{printf "Total: %.2f MB\n", sum/1024/1024}' "$LOG"
 ```
+::
 
 **Verification**:
 - [ ] Top IPs/paths/status codes are correct (verify with manual `grep | wc`).
@@ -101,6 +105,7 @@ awk '{sum += $10} END{printf "Total: %.2f MB\n", sum/1024/1024}' "$LOG"
 Audit user accounts and sudo access. Covers chapter 07.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -129,6 +134,7 @@ echo
 echo "Accounts with no password or locked:"
 sudo awk -F: '($2 == "!" || $2 == "*" || $2 == "!!") {print "  " $1 ": " $2}' /etc/shadow
 ```
+::
 
 **Verification**:
 - [ ] All regular users listed.
@@ -142,6 +148,7 @@ sudo awk -F: '($2 == "!" || $2 == "*" || $2 == "!!") {print "  " $1 ": " $2}' /e
 Set up an nginx web server with full hardening. Covers chapters 11, 14, 10.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -195,6 +202,7 @@ curl -kI https://localhost/
 ss -tlnp | grep -E ':80|:443'
 sudo ufw status
 ```
+::
 
 **Verification**:
 - [ ] `curl -kI https://localhost/` returns 200.
@@ -209,6 +217,7 @@ sudo ufw status
 Create a backup system using systemd timers (replacing cron). Covers chapters 09, 11.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 # /opt/backup/backup.sh
 set -euo pipefail
@@ -241,6 +250,7 @@ fi
 
 echo "Backup complete: $archive ($(du -h "$archive" | cut -f1))"
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -274,6 +284,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now backup.timer
 systemctl list-timers | grep backup
 ```
+::
 
 **Verification**:
 - [ ] `systemctl start backup.service` creates a backup.
@@ -288,6 +299,7 @@ systemctl list-timers | grep backup
 Build a monitoring script that alerts on resource thresholds. Covers chapters 06, 15, 12.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 # /opt/monitor/monitor.sh
 set -euo pipefail
@@ -333,6 +345,7 @@ while true; do
   sleep 60
 done
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -354,6 +367,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now monitor
 journalctl -t monitor -f
 ```
+::
 
 **Verification**:
 - [ ] High load (use `stress --cpu $(nproc)`) triggers a log entry.
@@ -367,6 +381,7 @@ journalctl -t monitor -f
 Configure a resilient storage setup. Covers chapter 09.
 
 ::code-wrapper{language="bash"}
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -401,6 +416,7 @@ cat /proc/mdstat                    # shows degraded
 sudo mdadm --detail --scan | sudo tee -a /etc/mdadm/mdadm.conf
 sudo update-initramfs -u
 ```
+::
 
 **Verification**:
 - [ ] `lsblk` shows the RAID + LVM stack.
@@ -414,8 +430,8 @@ sudo update-initramfs -u
 
 Deploy a multi-container app stack. Covers chapter 17.
 
+::code-wrapper{language="yaml" filename="docker-compose.yml"}
 ```yaml
-# docker-compose.yml
 version: "3.8"
 
 services:
@@ -476,6 +492,7 @@ volumes:
 networks:
   appnet:
 ```
+::
 
 ::code-wrapper{language="bash"}
 ```bash
@@ -485,6 +502,7 @@ docker compose logs -f
 docker compose down           # stop + remove
 docker compose down -v        # also remove volumes (data!)
 ```
+::
 
 **Verification**:
 - [ ] `docker compose ps` shows all services healthy.
@@ -526,3 +544,44 @@ Combine everything into a fully configured production server.
 - [ ] Monitor is running (`systemctl status monitor`).
 - [ ] Logs are persistent (`ls /var/log/journal/`).
 - [ ] `sysctl vm.swappiness` shows 10.
+
+## 💡 Tips & Tricks
+
+- **Idiom**: every project's verification checklist doubles as a runbook — when Project 4's hardened server goes down at 3am, `curl -kI https://localhost/`, `ufw status`, and `fail2ban-client status sshd` are the fastest first three checks, in that order, because they narrow "network," "firewall," and "auth" independently.
+- **Debug**: `systemctl list-units --state=failed` (used in the Capstone) is the single fastest way to see everything currently broken on a box — run it before diving into individual `journalctl -u` calls, since it tells you *what* to investigate instead of guessing.
+- **Performance**: Project 6's monitor script computes CPU from `/proc/loadavg` rather than parsing `top`/`ps` output — reading `/proc` directly avoids spawning a subprocess per sample, which matters when the check loop runs every 60 seconds indefinitely as a long-lived systemd service.
+- **Safety**: Project 5's `gzip -t "$archive"` integrity check after every backup is the difference between "we have backups" and "we have backups that restore" — untested backups are a liability that looks identical to a working backup strategy until the day you need it.
+- **Idiom**: Project 7's LVM snapshot-then-backup-then-remove pattern (`lvcreate -s` → mount read-only → `tar` → `umount` → `lvremove`) lets you back up a live, mounted filesystem in a crash-consistent state without stopping the service using it — the snapshot freezes a point-in-time view via copy-on-write.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **`awk "BEGIN{printf ...}"` in Project 6 embeds shell variables directly into the AWK program string**: `cpu_pct=$(awk "BEGIN{printf ... ($load / $cores) * 100}")` interpolates `$load`/`$cores` via bash *before* AWK ever sees the program — if `/proc/loadavg` ever produced a non-numeric or empty value (e.g., during a container's very first tick before the file is populated), the resulting AWK program is syntactically broken and errors instead of failing gracefully with a sentinel value.
+- **Project 4 disables `PasswordAuthentication` before confirming key-based login actually works**: the script comments "verify key auth first!" for a reason — running the `sed` hardening steps over an SSH session that itself relies on password auth, without a second confirmed key-based session open, is how you lock yourself out of a remote box with no console access.
+- **`ss -tlnp` (Projects 1 and 4) requires root to show the owning process**: run unprivileged, the `p` (process) column comes back empty rather than erroring — a report generated by a non-root cron job will silently omit the process-per-port mapping without any visible failure.
+- **Project 7's RAID failure simulation (`mdadm --fail` / `--remove`) is destructive and irreversible on that disk**: this is meant for a lab/test VM only — running it against `/dev/sdb` on a system where that device also holds unrelated data (common when experimenting on a box that isn't dedicated to the exercise) destroys that data with no confirmation prompt.
+- **Docker Compose's `depends_on: condition: service_healthy` (Project 8) only gates container *start order*, not application readiness inside the dependent container**: `backend` won't start until `db`'s healthcheck passes, but if `backend` itself opens its DB connection before its own app server is ready to accept traffic, `web`'s `depends_on: - backend` (a plain dependency, no healthcheck) can still route traffic to a backend that isn't actually serving yet.
+
+## 🧠 Quick Quiz
+
+Project 6's monitor loop logs a disk-usage warning like this:
+
+::code-wrapper{language="bash"}
+```bash
+while read -r line; do
+  usage=$(echo "$line" | awk '{print $5}' | tr -d '%')
+  part=$(echo "$line" | awk '{print $6}')
+  if (( usage > DISK_THRESHOLD )); then
+    logger -t monitor -p user.warn "Disk $part at ${usage}%"
+  fi
+done < <(df -h | awk 'NR>1 && /^\/dev/')
+```
+::
+
+A teammate suggests simplifying it to `df -h | awk 'NR>1 && /^\/dev/' | while read -r line; do ... done` (a plain pipe instead of process substitution) to make it "more readable." What breaks if any of the loop body's variables (`usage`, `part`) were meant to be visible *after* the loop ends, and why does the process-substitution version avoid that problem?
+
+<details>
+<summary>Answer</summary>
+
+A plain pipe (`cmd | while read ...`) runs the `while` loop in a subshell, because every command in a pipeline gets its own subshell in bash — any variables set inside the loop (including `usage` and `part`) vanish when the loop exits, since they only existed in the child subshell's memory. The process-substitution form (`done < <(df -h | ...)`) keeps the `while` loop in the *current* shell — only the `df`/`awk` producer runs in a subshell (via `<(...)`), so variables assigned inside the loop persist afterward. Project 6 doesn't rely on this (each iteration is self-contained), but it's the exact reason this idiom — not a plain pipe — appears throughout this course whenever a loop needs to accumulate state (a running total, an array built line-by-line) across iterations.
+
+</details>

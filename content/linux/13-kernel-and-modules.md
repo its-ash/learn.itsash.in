@@ -14,7 +14,8 @@ cat /proc/version      # kernel version + gcc version it was built with
 
 Version numbering:
 
-```text
+::code-wrapper{language="bash"}
+```bash
 6.8.0-31-generic
 └┘└┘└┘ └┘ └─────┘
  │ │  │  │     └ distro/build flavor (Ubuntu: -generic, -aws; RHEL: -el9)
@@ -22,6 +23,7 @@ Version numbering:
  │ │  └ minor
  │ └ major
 ```
+::
 
 - **Distro kernels**: Ubuntu/RHEL patch and backport fixes onto a base version. `6.8.0-31-generic` is Ubuntu's 31st patch level of 6.8.
 - **LTS (Long Term Support)**: some mainline versions get long support (e.g., 6.1, 6.8). Distros often pick LTS bases.
