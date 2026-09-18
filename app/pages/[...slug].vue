@@ -36,6 +36,11 @@ watch(
   { immediate: true }
 )
 
+const isIndexPage = computed(() => {
+  const segments = normalizePath(route.path).split('/').filter(Boolean)
+  return segments.length === 1
+})
+
 const breadcrumbs = computed(() => {
   const segments = route.path.split('/').filter(Boolean)
   const crumbs: { label: string; to: string }[] = [{ label: 'Home', to: '/' }]
@@ -157,7 +162,7 @@ definePageMeta({
   <section class="relative z-10 py-12 md:py-16">
     <ReadingProgress />
 
-    <div class="mx-auto max-w-6xl px-6 md:px-8 lg:px-12">
+    <div class="px-2 md:px-2 lg:px-5" :class="isIndexPage ? 'w-full' : 'mx-auto max-w-6xl'">
       <nav aria-label="Breadcrumb" itemscope itemtype="https://schema.org/BreadcrumbList"
         class="mb-10 flex flex-wrap items-center gap-1.5 font-mono text-xs uppercase tracking-widest text-c-muted-fg">
         <template v-for="(crumb, i) in breadcrumbs" :key="crumb.to">
@@ -178,7 +183,7 @@ definePageMeta({
           <BackButton label="Back" />
         </div>
 
-        <SplitContentRenderer v-if="page" :value="page" />
+        <ContentRenderer v-if="page" :value="page" />
         <div v-else-if="pending" class="flex items-center justify-center py-24">
           <span class="code-spinner" style="width: 1.5rem; height: 1.5rem; border-width: 2px;" />
         </div>
