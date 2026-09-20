@@ -342,6 +342,36 @@ jobs:
 - **Debug**: `cargo test --doc` runs *only* doc tests, useful for isolating whether a CI failure is documentation rot versus a real unit/integration regression.
 - **Performance**: consolidate many small `tests/*.rs` files into fewer files with more `#[test]` fns inside — each file in `tests/` is a separate crate compile + link, so 40 one-test files pay a much higher aggregate compile cost than 4 files with 10 tests each.
 - **Clippy**: `clippy::assertions_on_result_states` flags `assert!(result.is_ok())` and suggests `result.unwrap()` or `assert_matches!` instead, since the former discards the actual error content on failure.
+- **Debug**: the libtest harness accepts its own flags *after* `--` — `cargo test -- --list` prints every test name without running anything; ideal for CI dashboards and for verifying a filter matches what you think it does.
+
+::code-wrapper{language="bash"}
+```bash
+cargo test -- --list                 # enumerate tests, zero execution
+cargo test -- --exact my::test::name  # full-path match, not substring
+cargo test -- --skip integration      # negative filter (repeatable)
+cargo test -- --ignored               # run ONLY #[ignore]d tests (rot detector)
+cargo test -- --include-ignored      # run everything — what release CI should do
+cargo test -- --format=json -Z unstable-options  # machine-readable, nightly
+```
+::
+- **Idiom**: `#[should_panic(expected = "...")]` needs an *exact-enough* message; the expected string is a **substring** match — keep it short and stable ("divide by zero", not the full formatted message with variable data).
+
+::code-wrapper{language="rust"}
+```rust
+#[test]
+#[should_panic(expected = "divide by zero")] // substring: any panic containing this passes
+fn panics_on_zero() {
+    let _ = 1 / 0;
+}
+
+#[test]
+#[should_panic] // NO expected = : any panic at all counts — nearly always a mistake;
+fn panics_for_any_reason() {   // a bug causing a *different* panic still passes the test
+    let v: Vec<i32> = vec![];
+    let _ = v[0];
+}
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
@@ -352,6 +382,10 @@ jobs:
 - **`debug_assert!` vanishes in release builds**: a test suite run with `cargo test --release` silently skips all `debug_assert!` checks inside the code under test — a bug caught only by `debug_assert!` passes in release-mode CI and fails in a production debug build, or vice versa.
 - **`#[ignore]` tests are invisible in normal runs**: `cargo test` reports "0 failed" even if an ignored test would fail, since it never executes without `--ignored` — a slow/expensive test can silently rot for months with nobody noticing it's broken.
 - **A segfault or process abort in one test kills the whole binary's results**: because `cargo test` (without `nextest`) runs tests as threads in one process, a test that triggers UB severe enough to abort the process (stack overflow, FFI crash) takes every other test in that binary down with it, often reported as a confusing "test binary crashed" with no per-test attribution.
+- **The harness is `libtest`, and `--test` is a *rustc mode*, not just a cargo flag**: `rustc --test` forces bin-crate type, links `libtest`, synthesizes a `main` that replaces yours, and enables `cfg(test)` — which is why `cargo test` and `rustc --test` produce the same harness binary cargo then orchestrates.
+- **Tests must be built with the unwind panic strategy**: all tests share one process and catch panics per-test, which `panic = "abort"` makes impossible — a crate compiled with `abort` breaks `cargo test` entirely (only nightly's `-Z panic-abort-tests` works around it by spawning processes).
+- **`--test-threads` and `RUST_TEST_NOCAPTURE` env vars are deprecated**: prefer `cargo test -- --test-threads=1` and `--no-capture` flags — the env forms still work but are scheduled for removal.
+- **`--show-output` vs `--no-capture`**: `--no-capture` streams `println!` live but interleaves when tests run in parallel; `--show-output` waits until everything finishes, then prints each passing test's captured output contiguously — prefer the latter for reading, the former for progress monitoring.
 
 ## 🧠 Spot the Bug
 

@@ -316,6 +316,7 @@ fn handle(req: RawRequest) -> Result<(), &'static str> {
 ## 💡 Tips & Tricks
 
 - **Idiom**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 fn first_word(s: &str) -> &str {
@@ -325,6 +326,7 @@ fn first_word(s: &str) -> &str {
 ```
 ::
 - **Debug**: `dbg!(&value)` before a `match` never moves `value` — it takes a reference:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let x = Some(3);
@@ -335,6 +337,7 @@ match dbg!(&x) {
 ```
 ::
 - **Clippy**: `clippy::single_match` flags a one-armed `match` that should be `if let`:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 // flagged
@@ -345,6 +348,7 @@ if let Some(n) = Some(3) { println!("{n}"); }
 ::
 - **Performance**: verify guard-heavy matches in generated assembly if they're in a hot loop — guards can defeat jump-table codegen.
 - **Idiom**: `@` bindings avoid re-deriving a value inside a guard:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 match 4 {
@@ -358,6 +362,7 @@ match 4 {
 ## ⚠️ Edge Cases & Gotchas
 
 - **Guards with side effects can double-execute**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 fn check(n: i32) -> bool { println!("checking {n}"); n > 0 }
@@ -372,6 +377,7 @@ fn demo(n: i32) {
 ```
 ::
 - **Or-patterns require identical bound types**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 fn f(r: Result<i32, i32>) {
@@ -381,6 +387,7 @@ fn f(r: Result<i32, i32>) {
 ```
 ::
 - **`..` can only appear once per pattern level**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let arr = [1, 2, 3, 4, 5];
@@ -389,6 +396,7 @@ let [a, .., c] = arr; // OK
 ```
 ::
 - **Float range patterns don't compile**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let score = 1.8_f64;
@@ -400,6 +408,7 @@ match score {
 ```
 ::
 - **Refutability errors point at the binding form, not the type**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let opt = Some(5);
@@ -408,6 +417,7 @@ let Some(x) = opt else { return }; // fix: let-else
 ```
 ::
 - **`&mut` vs `&` in a diff silently changes mutation into a no-op**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let mut opt = Some(5);
@@ -416,6 +426,7 @@ if let Some(x) = &opt { let _x = x + 1; } // x: &i32 copied out, opt untouched �
 ```
 ::
 - **A `u8` match that "looks" exhaustive doesn't generalize to `i32`**:
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 fn f_u8(b: u8) -> &'static str {

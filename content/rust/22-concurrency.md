@@ -137,6 +137,45 @@ thread::spawn(move || {
 ```
 ::
 
+Rust inherits its memory model from C++20 wholesale — including its known flaws — because every alternative model is *also* bad, and C/C++ tooling and research transfer directly. The four orderings Rust exposes map to what the compiler and hardware are each forbidden from doing:
+
+- **`Relaxed`** — the absolute weakest. No happens-before edges at all; only atomicity (no torn reads, no lost increments). Correct for counters and statistics where the *count* matters but nothing is synchronized *through* the value. Free reordering both sides.
+- **`Release`** — a *publishing* store: every write (including non-atomic) that happened before it stays before it, in any thread that observes the stored value. Writes after it may still hoist up past it.
+- **`Acquire`** — the matching *subscribe* load: every read after it stays after it. Reads before it may sink down past it. Causality is established **only** when a `Release` store on thread A is observed by an `Acquire` load on thread B — and only between those two threads, on that one location.
+- **`SeqCst`** — everything above plus one total global order all threads agree on: for a data-race-free program using only `SeqCst`, there is a single interleaving every observer agrees on. Requires real memory fences even on x86 — but when in doubt, it is the correct default; downgrading `SeqCst` → `Relaxed` later is mechanically trivial, *proving* the downgrade is safe is the hard part.
+
+::code-wrapper{language="rust"}
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+
+// The classic litmus test SeqCst exists for — neither Acquire/Release alone
+// nor Relaxed can forbid both "y == 2" outcomes below:
+let x = AtomicBool::new(false);
+let y = AtomicBool::new(false);
+let mut z = AtomicBool::new(false); // (bool used for clarity; same result with ints)
+
+let t1 = thread::spawn(|| {
+    x.store(true, Ordering::SeqCst);
+    z.fetch_add(y.load(Ordering::SeqCst) as u8 as usize, Ordering::SeqCst);
+});
+let t2 = thread::spawn(|| {
+    y.store(true, Ordering::SeqCst);
+    z.fetch_add(x.load(Ordering::SeqCst) as u8 as usize, Ordering::SeqCst);
+});
+t1.join().unwrap(); t2.join().unwrap();
+// With SeqCst: at most one of the loads saw true -> z is 0 or 1, NEVER 2-for-2-true reads
+// With Relaxed on the loads: both loads can observe stale false, then both stores land
+// — the total order SeqCst buys is exactly what forbids that outcome.
+let _ = z;
+```
+::
+
+Two asymmetries worth internalizing, straight from the memory model:
+
+- **Strongly-ordered hardware (x86-64) hides your bugs**: acquire/release semantics are often already free there, so too-weak orderings "work" locally. Concurrent algorithms must be validated on weakly-ordered hardware (ARM, RISC-V) or under emulation — passing CI on x86 is not evidence of correctness.
+- **Relaxed on x86 is often not cheaper**: the platform already gives plain moves release semantics, so `Relaxed` mainly wins on weakly-ordered targets. Optimizing `SeqCst` → `Relaxed` on an x86-only workload may buy nothing and cost a correctness proof.
+
 ## Cost, Performance, and Trade-Offs
 
 | Primitive | Uncontended cost | Contended cost | Memory overhead | When it's the wrong tool |

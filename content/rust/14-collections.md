@@ -48,6 +48,31 @@ for i in 0..20 {
 ```
 ::
 
+The layout guarantees `std` actually documents (worth knowing before relying on any of them):
+
+- **It is and always will be a `(ptr, len, capacity)` triplet** — field order is unspecified, so never `transmute` a `Vec` to your own tuple and back
+- **A `Vec` with capacity 0 does not allocate** — `Vec::new()`, `vec![]`, and `Vec::with_capacity(0)` are all allocation-free until first push
+- **`size_of::<T>() * capacity > 0` iff allocation exists** — a `Vec<()>` never allocates, and its `capacity()` reports `usize::MAX`
+- **`push`/`insert` never reallocate when reported capacity suffices** — the `capacity()` value is accurate and reliable, usable for manual memory management
+- **No small-buffer optimization, ever** — elements always live on the heap; a moved `Vec` keeps a stable buffer address (this is why unsafe code can rely on `as_ptr()` staying valid across moves)
+- **`Vec` never shrinks automatically** — emptying and refilling to the same length reuses the existing allocation with zero allocator traffic; only `shrink_to_fit` releases it
+- **Removed data is not zeroed** — don't rely on `remove`/`truncate` to scrub secrets; the optimizer may eliminate "dead" zeroing writes anyway
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+// ZST capacity behavior, straight from the docs:
+let units: Vec<()> = Vec::with_capacity(10);
+assert_eq!(units.capacity(), usize::MAX); // no allocation is ever needed for ()
+
+// Capacity accuracy — the documented contract unsafe code may rely on:
+let mut v = Vec::with_capacity(3);
+v.push(1); v.push(2); v.push(3);
+let ptr_before = v.as_ptr();
+v.push(4); // len == capacity was 3 == 3, so THIS push reallocates
+// ptr_before now dangles — never hold raw pointers across a potential realloc
+```
+::
+
 ### `String`: `Vec<u8>` plus a compiler-enforced invariant
 
 Identical three-word layout to `Vec<u8>`. The only difference is a type-level invariant checked at construction boundaries, not on every access:
@@ -100,6 +125,41 @@ assert_eq!(ordered, vec![&1, &2, &3]); // always sorted — a structural guarant
 for (k, v) in bt.range(1..3) {
     println!("{k} -> {v}"); // prints keys 1 and 2 only
 }
+```
+::
+
+The full default-hashing contract, and what you agree to when you swap it:
+
+- The table is a Rust port of Google's **SwissTable** — open addressing with quadratic probing and SIMD metadata lookup, not a chained-bucket list
+- Default algorithm is **SipHash 1-3**, randomly seeded per hasher from a best-effort secure source; seed quality depends on system entropy at creation (boot-time maps get weaker seeds)
+- Swapping hashers via `with_hasher`/`with_capacity_and_hasher` **removes the DoS resistance** — the docs call this out as exposing a deliberate attack vector, acceptable only for trusted inputs
+- Keys must satisfy `k1 == k2 → hash(k1) == hash(k2)`; violating it (or mutating a key's hash in place through interior mutability) is a *logic error* — results are unspecified but contained (panics, wrong answers, leaks — no UB)
+- Lookup is **`Borrow`-based**: `get` accepts any `Q` where `K: Borrow<Q>` and `Q: Hash + Eq` — that's why a `HashMap<String, V>` is queryable by `&str` without cloning the key
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
+// Borrow-based lookup in action: owned keys, borrowed queries — no allocation
+let mut reviews: HashMap<String, &str> = HashMap::new();
+reviews.insert("Pride and Prejudice".to_string(), "enjoyable");
+assert_eq!(reviews.get("Pride and Prejudice"), Some(&"enjoyable")); // &str probe, no clone
+
+// Hash equality MUST track Eq equality — this key hashes by id only, so it matches
+// any other key with the same id even though `name` differs:
+#[derive(Debug)]
+struct User { id: u32, name: &'static str }
+impl PartialEq for User {
+    fn eq(&self, o: &Self) -> bool { self.id == o.id } // name deliberately ignored
+}
+impl Eq for User {}
+impl Hash for User {
+    fn hash<H: Hasher>(&self, h: &mut H) { self.id.hash(h) } // hash exactly what eq compares
+}
+let mut by_user: HashMap<User, u32> = HashMap::new();
+by_user.insert(User { id: 1, name: "Jessica" }, 100);
+assert!(by_user.contains_key(&User { id: 1, name: "Jess" })); // equal by (id), so it hits
 ```
 ::
 
@@ -363,12 +423,14 @@ struct Node {
 ## 💡 Tips & Tricks
 
 - **Performance**: preallocate the moment you know a rough upper bound.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let mut v = Vec::with_capacity(1_000); // or v.reserve(1_000) on an existing Vec
 ```
 ::
 - **Idiom**: one lookup, not two or three.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::collections::HashMap;
@@ -377,6 +439,7 @@ let mut counts: HashMap<&str, u32> = HashMap::new();
 ```
 ::
 - **Performance**: swap the hasher for trusted, non-adversarial keys — never for attacker-reachable maps.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use rustc_hash::FxHashMap; // 2-4x faster than std's SipHash, no DoS resistance
@@ -384,6 +447,7 @@ let mut m: FxHashMap<u32, u32> = FxHashMap::default();
 ```
 ::
 - **Debug**: check reallocation churn in seconds, before reaching for a profiler.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let mut v = Vec::new();
@@ -393,6 +457,7 @@ dbg!(v.len(), v.capacity()); // capacity >> len after a push-heavy loop signals 
 ::
 - **Idiom**: reach for `BTreeMap` the instant sorted iteration or range queries matter — never rely on `HashMap` "looking stable."
 - **Clippy**: `or_insert(expensive())` always runs eagerly; `or_insert_with(|| expensive())` runs only on insert.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::collections::HashMap;
@@ -400,10 +465,50 @@ let mut m: HashMap<&str, String> = HashMap::new();
 m.entry("k").or_insert_with(|| String::from("computed")); // lazy — flagged by clippy::or_fun_call if written as or_insert(...)
 ```
 ::
+- **Idiom**: the full `Entry` combinator chain covers every get-or-modify pattern in one lookup.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+use std::collections::HashMap;
+let mut stats: HashMap<&str, u32> = HashMap::new();
+
+// insert-if-absent
+stats.entry("health").or_insert(100);
+
+// modify-if-present, insert-if-absent
+stats.entry("mana").and_modify(|m| *m += 200).or_insert(100);
+
+// modify-if-present only
+if let Some(attack) = stats.get_mut("attack") { *attack += 1; }
+```
+::
+- **Gotcha**: `insert` on an existing key updates the *value* but keeps the *original key* — it never swaps in your new key object.
+
+::code-wrapper{language="rust" filename="main.rs"}
+```rust
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
+// A key type where != instances can be == (hash/eq on id only):
+#[derive(Debug)]
+struct Key { id: u32, label: String }
+impl PartialEq for Key { fn eq(&self, o: &Self) -> bool { self.id == o.id } }
+impl Eq for Key {}
+impl Hash for Key { fn hash<H: Hasher>(&self, h: &mut H) { self.id.hash(h) } }
+
+let mut m = HashMap::new();
+m.insert(Key { id: 1, label: "original".into() }, "v");
+// Insert a *different* == key — value updates, but the STORED key stays the original:
+m.insert(Key { id: 1, label: "updated".into() }, "v2");
+let stored = m.get_key_value(&Key { id: 1, label: String::new() }).unwrap();
+assert_eq!(stored.0.label, "original"); // the first key object is what remains
+```
+::
 
 ## ⚠️ Edge Cases & Gotchas
 
 - **`HashMap` iteration order is randomized per process run**, not merely unspecified.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::collections::HashMap;
@@ -412,6 +517,7 @@ println!("{:?}", m.keys().collect::<Vec<_>>()); // different order on the next r
 ```
 ::
 - **Float keys don't compile at all** — `f64`/`f32` implement neither `Hash + Eq` (`NaN != NaN`) nor `Ord`.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::collections::HashMap;
@@ -423,6 +529,7 @@ m.insert(OrderedFloat(1.5), "value");
 ```
 ::
 - **`Vec::swap_remove` silently reorders** — O(1) because it moves the last element into the removed slot.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let mut v = vec![10, 20, 30, 40];
@@ -431,6 +538,7 @@ assert_eq!(v, vec![40, 20, 30]); // NOT [20, 30, 40] — order not preserved
 ```
 ::
 - **`String` indexing panics on non-char-boundary bytes** — ASCII fixtures never catch this.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let s = String::from("héllo"); // 'é' is 2 bytes in UTF-8
@@ -439,6 +547,7 @@ let ok = &s[0..1];    // "h" — fine, ASCII-only slice
 ```
 ::
 - **`Vec::with_capacity(n)` reserves capacity, not length.**
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let v: Vec<i32> = Vec::with_capacity(10);
@@ -448,6 +557,7 @@ assert_eq!(v.len(), 0);       // still empty
 ::
 - **`LinkedList` is good for exactly one thing: O(1) splicing** — `VecDeque` wins almost every other comparison due to cache locality.
 - **`Vec<Option<T>>` gets no niche compression across elements** — each slot still stores a full `Option<T>`, even though a single `Option<T>` outside a `Vec` can niche-optimize to `size_of::<T>()`.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::num::NonZeroU32;
@@ -502,12 +612,14 @@ fn main() {
 ## Summary
 
 - `Vec`: amortized O(1) push, geometric growth, `with_capacity` collapses reallocation to one call.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 let mut v = Vec::with_capacity(1_000); // preallocate whenever size is knowable
 ```
 ::
 - `HashMap`: O(1) avg lookup, pays a deliberate SipHash tax for DoS resistance, iteration order is chaos.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::collections::HashMap;
@@ -516,6 +628,7 @@ let mut m: HashMap<&str, u32> = HashMap::new();
 ```
 ::
 - `BTreeMap`: trades raw speed for sorted, deterministic iteration — use at any diffable boundary.
+
 ::code-wrapper{language="rust" filename="main.rs"}
 ```rust
 use std::collections::BTreeMap;

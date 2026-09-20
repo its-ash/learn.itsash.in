@@ -162,7 +162,7 @@ definePageMeta({
   <section class="relative z-10 py-12 md:py-16">
     <ReadingProgress />
 
-    <div class="px-2 md:px-2 lg:px-5" :class="isIndexPage ? 'w-full' : 'mx-auto max-w-6xl'">
+    <div class="px-2 md:px-2 lg:px-2 mx-auto max-w-6xl">
       <nav aria-label="Breadcrumb" itemscope itemtype="https://schema.org/BreadcrumbList"
         class="mb-10 flex flex-wrap items-center gap-1.5 font-mono text-xs uppercase tracking-widest text-c-muted-fg">
         <template v-for="(crumb, i) in breadcrumbs" :key="crumb.to">
