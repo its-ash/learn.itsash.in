@@ -1,134 +1,61 @@
 # 22 — Async / Await
 
-## Production Async — Concurrent HTTP with Rate Limiting and Backoff
+## Your First Coroutine
 
 ::code-wrapper{language="python"}
 ```python
-# ── Production: async HTTP client with concurrency limiting, retry, and backoff ──
-# This is the pattern you'd use in a real async web scraper or API aggregator.
-
 import asyncio
-import random
-from typing import Any
 
-async def fetch_with_retry(
-    url: str,
-    *,
-    max_retries: int = 3,
-    base_delay: float = 0.5,
-) -> dict[str, Any]:
-    """Fetch a URL with exponential backoff retry — async-native, no blocking."""
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Simulate an async HTTP call — in production use aiohttp or httpx
-            await asyncio.sleep(random.uniform(0.05, 0.2))   # simulated network latency
+async def greet(name):
+    await asyncio.sleep(1)       # pause THIS coroutine; the loop can run others
+    return f"hi {name}"
 
-            if random.random() < 0.3:   # 30% chance of transient failure
-                raise ConnectionError(f"transient error on {url}")
-
-            return {"url": url, "status": 200, "attempt": attempt}
-
-        except (ConnectionError, TimeoutError) as e:
-            if attempt >= max_retries:
-                raise   # re-raise after final attempt — caller handles
-            delay = base_delay * (2 ** (attempt - 1))   # exponential backoff: 0.5, 1.0, 2.0...
-            await asyncio.sleep(delay)
-
-async def rate_limited_fetch(
-    urls: list[str],
-    max_concurrent: int = 10,
-) -> list[dict[str, Any]]:
-    """Fetch many URLs with a concurrency cap — Semaphore prevents overwhelming the server."""
-    semaphore = asyncio.Semaphore(max_concurrent)   # limits concurrent in-flight requests
-
-    async def guarded_fetch(url: str) -> dict[str, Any]:
-        async with semaphore:   # acquire — blocks if max_concurrent are already in flight
-            return await fetch_with_retry(url)
-
-    # gather runs ALL fetches concurrently, return_exceptions collects failures as values
-    results = await asyncio.gather(
-        *(guarded_fetch(url) for url in urls),
-        return_exceptions=True,   # exceptions returned as values, not raised — no silent loss
-    )
-
-    # Separate successes from failures for the caller
-    successes = [r for r in results if not isinstance(r, Exception)]
-    failures = [r for r in results if isinstance(r, Exception)]
-    print(f"  {len(successes)} succeeded, {len(failures)} failed after retries")
-    return successes
-
-async def main():
-    urls = [f"https://api.example.com/item/{i}" for i in range(50)]
-
-    # Run all 50 fetches with at most 10 in flight at any time
-    results = await rate_limited_fetch(urls, max_concurrent=10)
-    print(f"Fetched {len(results)} items successfully")
-
-asyncio.run(main())
+result = asyncio.run(greet("Ada"))   # start the event loop, run until done
+print(result)                        # hi Ada
 ```
 ::
 
+**Tricky**: calling an `async def` function does **not** run it:
+
 ::code-wrapper{language="python"}
 ```python
-# ── ANTI-PATTERN: blocking calls in async code freeze the ENTIRE event loop ──
+coro = greet("Ada")
+print(coro)          # <coroutine object greet at 0x...> — nothing ran yet
+print(type(coro))    # <class 'coroutine'>
+coro.close()         # (avoid "never awaited" warning in this demo)
+```
+::
 
-import asyncio
-import time
+**Tricky**: `await` works only inside `async def`:
 
-async def bad_async_fetch():
-    """BLOCKING call — time.sleep() holds the thread, freezing ALL other coroutines."""
-    time.sleep(2)    # the event loop can't switch to any other task during this
-    return "done"
+::code-wrapper{language="python"}
+```python
+def normal():
+    await asyncio.sleep(1)
+# SyntaxError: 'await' outside async function
+```
+::
 
-async def good_async_fetch():
-    """CORRECT — asyncio.sleep() yields control back to the event loop."""
-    await asyncio.sleep(2)   # other coroutines can run during this wait
-    return "done"
+**Tricky**: `asyncio.sleep` vs `time.sleep`:
 
-# ── When you MUST call blocking code: offload to a thread pool ──
-async def fetch_with_blocking_lib():
-    """For libraries without async support (e.g., requests, sync DB drivers)."""
-    # asyncio.to_thread runs a blocking function in a worker thread
-    # The event loop stays responsive while the thread blocks
-    result = await asyncio.to_thread(time.sleep, 2)   # blocking call in a thread
-    return result
+::code-wrapper{language="python"}
+```python
+import asyncio, time
 
-# ── Production: async context manager for resource lifecycle ──
-class AsyncDBPool:
-    """Async context manager for a database connection pool."""
-    def __init__(self, dsn: str, pool_size: int = 10):
-        self.dsn = dsn
-        self.pool_size = pool_size
-        self._pool: asyncio.Queue = asyncio.Queue(pool_size)
+async def polite():
+    await asyncio.sleep(1)   # gives control back to the loop
 
-    async def __aenter__(self):
-        # __aenter__ is a coroutine — can await during setup
-        for _ in range(self.pool_size):
-            await self._pool.put({"connection": f"conn-{_}", "dsn": self.dsn})
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, tb):
-        # Cleanup runs even if the body raised — close all connections
-        while not self._pool.empty():
-            conn = await self._pool.get()
-            # await conn.close() — in production
-        return False   # don't suppress exceptions
-
-    async def acquire(self):
-        return await self._pool.get()
-
-    async def release(self, conn):
-        await self._pool.put(conn)
+async def rude():
+    time.sleep(1)            # blocks the WHOLE loop — nobody else runs
 
 async def main():
-    async with AsyncDBPool("postgres://localhost/app", pool_size=5) as pool:
-        conn = await pool.acquire()
-        try:
-            # use connection
-            pass
-        finally:
-            await pool.release(conn)
-    # pool is cleaned up here, even if the body raised
+    t = time.perf_counter()
+    await asyncio.gather(polite(), polite())
+    print(f"polite: {time.perf_counter() - t:.1f}s")   # 1.0s
+
+    t = time.perf_counter()
+    await asyncio.gather(rude(), rude())
+    print(f"rude:   {time.perf_counter() - t:.1f}s")   # 2.0s
 
 asyncio.run(main())
 ```

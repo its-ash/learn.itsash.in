@@ -1,91 +1,72 @@
 # 09 — Comprehensions & Generators
 
-## Production Data Pipeline — Lazy Evaluation End-to-End
+## The Four Comprehension Forms
 
 ::code-wrapper{language="python"}
 ```python
-# ── A production-grade log processing pipeline ──
-# Each stage is a generator — no intermediate lists, O(1) memory regardless of file size.
-# This pattern processes multi-GB log files with constant memory.
+nums = [1, 2, 2, 3]
 
-import re
-from collections.abc import Iterator
+print([n * 2 for n in nums])          # list → [2, 4, 4, 6]
+print({n * 2 for n in nums})          # set  → {2, 4, 6}
+print({n: n * 2 for n in nums})       # dict → {1: 2, 2: 4, 3: 6}
+print((n * 2 for n in nums))          # generator → <generator object ...> (lazy!)
 
-# Stage 1: lazy line reader — yields one line at a time, never loads the whole file
-def read_lines(path: str) -> Iterator[str]:
-    """Yield lines from a file — the `open` file object IS a line iterator."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        yield from f   # delegates to the file's own __iter__ — zero boilerplate
-
-# Stage 2: filter — only lines matching a regex (still lazy, one at a time)
-LOG_RE = re.compile(r"(\d{4}-\d{2}-\d{2}) \[(\w+)\] (.+)")
-def parse_entries(lines: Iterator[str]) -> Iterator[tuple[str, str, str]]:
-    """Parse log lines into (date, level, message) tuples — skips unparseable lines."""
-    for line in lines:
-        if match := LOG_RE.match(line.strip()):
-            yield match.groups()   # walrus: assign + test in one expression
-
-# Stage 3: transform — extract structured data from parsed entries
-def errors_only(entries: Iterator) -> Iterator[dict]:
-    """Filter to ERROR level, yield structured dicts."""
-    for date, level, message in entries:
-        if level == "ERROR":
-            yield {"date": date, "message": message, "length": len(message)}
-
-# Stage 4: aggregate — consume the pipeline, produce final result
-def count_errors(path: str) -> dict[str, int]:
-    """Count errors by date — the ENTIRE pipeline is consumed here, at the end."""
-    counts: dict[str, int] = {}
-    for entry in errors_only(parse_entries(read_lines(path))):
-        counts[entry["date"]] = counts.get(entry["date"], 0) + 1
-    return counts
-
-# The pipeline: read_lines → parse_entries → errors_only → count_errors
-# Each stage pulls from the previous on-demand — only ONE line is in memory at any moment.
-# No intermediate list of all lines, all entries, or all errors is ever materialized.
+print(tuple(n * 2 for n in nums))     # (2, 4, 4, 6) — there is no "tuple comprehension"
 ```
 ::
 
+### Filter `if` vs value `if ... else` — position matters
+
 ::code-wrapper{language="python"}
 ```python
-# ── Generator-based coroutine: two-way communication via send() ──
-# Before async/await, generators were Python's coroutine primitive.
-# send() pushes a value INTO the generator at the yield point — still useful
-# for stateful streaming parsers and co-routine-style data pumps.
+nums = range(5)
 
-def streaming_average():
-    """Consume values via .send(), yields the running average after each input.
-    The FIRST .send() must be None (or use next() to prime) — there's no yield
-    expression yet to receive a value at the start."""
-    total = 0
-    count = 0
-    average = None
-    while True:
-        # yield returns the current average to the caller
-        # .send(value) resumes here, assigning `value` to the left side
-        value = yield average
-        total += value
-        count += 1
-        average = total / count
+print([n for n in nums if n % 2])              # [1, 3]           — filter at the END
+print([n if n % 2 else 0 for n in nums])       # [0, 1, 0, 3, 0]  — choose value at the START
 
-# Prime the coroutine — advance to the first yield before sending
-coro = streaming_average()
-next(coro)              # prime: advances to `value = yield average`, returns None
-print(coro.send(10))    # 10.0 — total=10, count=1
-print(coro.send(20))    # 15.0 — total=30, count=2
-print(coro.send(30))    # 20.0 — total=60, count=3
+# [n for n in nums if n % 2 else 0]            # SyntaxError — else not allowed in a filter
+```
+::
 
-# ── Generator exhaustion: the silent failure mode ──
-# ANTI-PATTERN: reusing a generator across multiple consumption passes
-gen = (x * 2 for x in range(5))
-print(sum(gen))   # 0+2+4+6+8 = 20
-print(sum(gen))   # 0! — exhausted, silently produces 0, NOT an error
+### Comprehension variables don't leak
 
-# CORRECT: materialize to a list if multiple passes are needed
-data = [x * 2 for x in range(5)]   # list — reusable, indexable, len()-able
-print(sum(data))   # 20
-print(sum(data))   # 20 — still works
-print(len(data))   # 5 — generators have no len()
+::code-wrapper{language="python"}
+```python
+x = "outer"
+squares = [x * x for x in range(3)]
+print(x)          # 'outer' — the comprehension has its own scope (Python 3)
+
+for x in range(3):
+    pass
+print(x)          # 2 — a normal for loop DOES leak its variable
+```
+::
+
+### Generators are lazy — they see later changes
+
+::code-wrapper{language="python"}
+```python
+n = 1
+gen = (x * n for x in range(3))
+n = 100
+print(list(gen))   # [0, 100, 200]  ← uses n at the time each item is PRODUCED
+
+nums = [1, 2, 3]
+gen = (x * 10 for x in nums)   # BUT the first iterable is grabbed immediately
+nums = [7, 8]
+print(list(gen))   # [10, 20, 30]  ← still the OLD list
+```
+::
+
+**Why**: in a generator expression, only the **first** `for ... in <iterable>` is evaluated right away. Everything else runs later, when you iterate.
+
+### `in` on a generator consumes it
+
+::code-wrapper{language="python"}
+```python
+gen = (x for x in [1, 2, 3, 4])
+print(3 in gen)     # True — but it read 1, 2, 3 to find it
+print(list(gen))    # [4]  — only what's left
 ```
 ::
 

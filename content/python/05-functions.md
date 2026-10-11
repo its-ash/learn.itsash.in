@@ -1,70 +1,66 @@
 # 05 — Functions
 
-## Production-Grade Signature Forwarding and Decorator Construction
+## Defining and Calling Functions
 
 ::code-wrapper{language="python"}
 ```python
-# ── A production retry decorator with exponential backoff, telemetry, and
-#    full signature preservation — the kind you'd actually ship in a service ──
+def greet(name):
+    return f"Hi {name}"
 
-import time, logging, functools
-from typing import Callable, TypeVar, ParamSpec
+print(greet("Ada"))     # Hi Ada
+print(greet)            # <function greet at 0x...> — the function object itself
+print(greet.__name__)   # 'greet'
 
-P = ParamSpec("P")      # 3.10+ — captures the full parameter signature
-R = TypeVar("R")
+say = greet             # functions are objects — you can assign them
+print(say("Bob"))       # Hi Bob
+```
+::
 
-log = logging.getLogger(__name__)
+**Tricky**: a function with no `return` (or a bare `return`) returns `None`:
 
-def retry(
-    max_attempts: int = 3,
-    base_delay: float = 0.1,
-    max_delay: float = 10.0,
-    exceptions: tuple[type[Exception], ...] = (Exception,),
-    on_retry: Callable[[Exception, int], None] | None = None,
-) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """
-    Retry with exponential backoff + jitter.
+::code-wrapper{language="python"}
+```python
+def double(x):
+    x * 2            # computed, then thrown away — forgot `return`
 
-    Args:
-        max_attempts: Total call attempts (including the first).
-        base_delay: Initial delay in seconds; doubles each retry.
-        max_delay: Cap on backoff delay.
-        exceptions: Only these exception types trigger a retry.
-        on_retry: Optional callback(exc, attempt) for metrics/logging.
-    """
-    def decorator(func: Callable[P, R]) -> Callable[P, R]:
-        @functools.wraps(func)          # preserves __name__, __doc__, __wrapped__, __annotations__
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            last_exc: Exception | None = None
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as exc:
-                    last_exc = exc
-                    if attempt >= max_attempts:
-                        log.error("%s failed after %d attempts: %s", func.__name__, attempt, exc)
-                        raise          # re-raise the last exception — caller sees the real failure
-                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-                    if on_retry:
-                        on_retry(exc, attempt)
-                    log.warning("%s attempt %d failed, retrying in %.2fs: %s", func.__name__, attempt, delay, exc)
-                    time.sleep(delay)
-            raise last_exc  # type: ignore[misc] — unreachable, but satisfies type checker
-        return wrapper
-    return decorator
+print(double(5))     # None
 
-# Usage — full type safety preserved through the decorator
-@retry(max_attempts=3, exceptions=(ConnectionError, TimeoutError), on_retry=lambda e, a: print(f"retry {a}: {e}"))
-def fetch_user(user_id: int) -> dict:
-    """Fetch a user from the API — retries on network errors."""
-    import random
-    if random.random() < 0.5:
-        raise ConnectionError("network timeout")
-    return {"id": user_id, "name": "Ada"}
+nums = [3, 1, 2]
+nums = nums.sort()   # .sort() returns None!
+print(nums)          # None — the list is lost
+```
+::
 
-# The wrapped function retains the original signature — inspect sees fetch_user, not `wrapper`
-import inspect
-print(inspect.signature(fetch_user))   # (user_id: int) -> dict — preserved by @functools.wraps
+### Scope: the `UnboundLocalError` trap
+
+::code-wrapper{language="python"}
+```python
+count = 0
+
+def show():
+    print(count)     # reading a global is fine
+show()               # 0
+
+def bump():
+    count += 1       # UnboundLocalError: cannot access local variable 'count'
+bump()
+```
+::
+
+**Why**: Python decides at **compile time** that `count` is local to `bump`, because `bump` assigns to it. So `count += 1` reads a local that has no value yet. Even a read *before* the assignment fails:
+
+::code-wrapper{language="python"}
+```python
+x = 10
+
+def f():
+    print(x)    # UnboundLocalError — x is local for the WHOLE function
+    x = 5
+
+# Fix: declare it (or better, pass it in and return a new value)
+def bump():
+    global count
+    count += 1
 ```
 ::
 
@@ -142,6 +138,25 @@ print(cart1 is cart2)          # False
 ```python
 # You can inspect the trap directly:
 print(add_item.__defaults__)   # (None,) — the sentinel, not a shared list
+```
+::
+
+The same "evaluated once" rule hits non-mutable defaults that you expect to be fresh:
+
+::code-wrapper{language="python"}
+```python
+import time
+
+def log(msg, when=time.time()):    # time.time() runs ONCE, at def time
+    return f"{when:.0f} {msg}"
+
+print(log("a"))
+time.sleep(2)
+print(log("b"))    # SAME timestamp as "a"!
+
+def log(msg, when=None):           # fix
+    when = time.time() if when is None else when
+    return f"{when:.0f} {msg}"
 ```
 ::
 

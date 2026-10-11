@@ -1,69 +1,80 @@
 # 08 — Dictionaries & Sets
 
-## Hash Table Internals — Open Addressing Since 3.6
+## Dictionary Basics
 
 ::code-wrapper{language="python"}
 ```python
-# ── CPython 3.6+ dict implementation: compact hash tables ──
-# Unlike traditional hash maps (separate chaining with linked lists),
-# CPython uses OPEN ADDRESSING with a two-array layout:
-#   1. An index array (hash → slot) — sparse, ~1/3 to 2/3 full
-#   2. A dense entries array (hash, key, value) — compact, insertion-ordered
-# This is why dicts preserve insertion order AND use less memory than older dicts.
+user = {"name": "Ada", "age": 36}
 
-import sys
+print(user["name"])            # 'Ada'
+# user["email"]                # KeyError: 'email'
+print(user.get("email"))       # None — no error
+print(user.get("email", "-"))  # '-'  — custom default
 
-# The hash table's load factor triggers a resize — observable via size jumps
-d = {}
-prev_size = sys.getsizeof(d)
-for i in range(20):
-    d[i] = i * 2
-    size = sys.getsizeof(d)
-    if size != prev_size:
-        print(f"resize at len={len(d):>3}: {prev_size} → {size} bytes")
-        prev_size = size
-# Resize happens at ~2/3 load factor — capacity roughly doubles each time
+user["email"] = "ada@x.com"    # add or overwrite
+del user["age"]                # remove (KeyError if missing)
+print(user.pop("missing", 0))  # 0 — pop with a default never raises
+print(user)                    # {'name': 'Ada', 'email': 'ada@x.com'}
+```
+::
 
-# ── Hash collisions: equal values MUST hash equally ──
-# Python's numeric tower: 1 == 1.0 == True are all equal, so they hash identically
-print(hash(1) == hash(1.0) == hash(True))   # True — all three are the "same" key in a dict/set
-print({1, 1.0, True})                       # {1} — collapses to ONE element (first inserted wins)
+Dicts keep **insertion order** (guaranteed since 3.7). Updating a key does **not** move it:
 
-# ANTI-PATTERN: using 1 and True (or 0 and False) as distinct dict keys
-config = {1: "integer value", True: "boolean value"}
-print(config)   # {1: 'boolean value'} — True overwrote 1! They're the same key!
+::code-wrapper{language="python"}
+```python
+d = {"a": 1, "b": 2}
+d["a"] = 99
+print(d)              # {'a': 99, 'b': 2} — 'a' stays first
 
-# ── Production: a bounded LRU cache built on dict ordering (3.7+) ──
-# Insertion-order preservation makes OrderedDict/dict a natural LRU substrate
-from collections import OrderedDict
+del d["a"]; d["a"] = 1
+print(d)              # {'b': 2, 'a': 1}  — delete + re-add moves it to the end
+```
+::
 
-class LRUCache:
-    """Least-recently-used cache with O(1) get/set — production pattern."""
-    def __init__(self, capacity: int):
-        self.capacity = capacity
-        self._store: OrderedDict = OrderedDict()
+### Tricky keys: `1`, `1.0` and `True` are the same key
 
-    def get(self, key):
-        """Return value and mark as most-recently-used, or None on miss."""
-        if key not in self._store:
-            return None
-        self._store.move_to_end(key)   # move to tail = most recently used
-        return self._store[key]
+::code-wrapper{language="python"}
+```python
+d = {1: "int", 1.0: "float", True: "bool"}
+print(d)              # {1: 'bool'}  ← one key! first key form kept, last value wins
 
-    def put(self, key, value):
-        """Insert/update key. Evicts LRU entry if over capacity."""
-        if key in self._store:
-            self._store.move_to_end(key)   # update = also marks as MRU
-        self._store[key] = value
-        if len(self._store) > self.capacity:
-            self._store.popitem(last=False)   # pop from HEAD = least recently used
+print({1, 1.0, True}) # {1}
+print({0, False, 0.0, ""})  # {0, ''}  — "" is not equal to 0
+```
+::
 
-cache = LRUCache(3)
-cache.put("a", 1); cache.put("b", 2); cache.put("c", 3)
-cache.get("a")         # "a" is now MRU
-cache.put("d", 4)      # evicts "b" (LRU), not "a" (was accessed)
-print(cache.get("b"))  # None — evicted
-print(cache.get("a"))  # 1 — still present
+**Why**: dict lookup uses `hash()` and then `==`. `1 == 1.0 == True`, and they all hash to `1`.
+
+### `get()` vs `setdefault()`
+
+::code-wrapper{language="python"}
+```python
+tags = {}
+tags.get("py", []).append("x")      # appends to a TEMPORARY list
+print(tags)                          # {}  ← nothing saved!
+
+tags.setdefault("py", []).append("x")   # inserts [] if missing, then returns it
+tags.setdefault("py", []).append("y")
+print(tags)                          # {'py': ['x', 'y']}
+```
+::
+
+### Changing a dict while looping
+
+::code-wrapper{language="python"}
+```python
+prices = {"a": 1, "b": 0, "c": 3}
+# for k in prices:
+#     if prices[k] == 0:
+#         del prices[k]    # RuntimeError: dictionary changed size during iteration
+
+for k in list(prices):     # loop over a COPY of the keys
+    if prices[k] == 0:
+        del prices[k]
+print(prices)              # {'a': 1, 'c': 3}
+
+# Or build a new dict:
+prices = {k: v for k, v in prices.items() if v != 0}
 ```
 ::
 
@@ -196,7 +207,7 @@ print(affordable)   # {'apple': 1.5, 'milk': 2.5}
 
 # Set comprehension
 unique_lengths = {len(word) for word in ["cat", "dog", "bird", "ox"]}
-print(unique_lengths)   # {3, 4, 2}  — duplicates (cat/dog both len 3) collapse automatically
+print(unique_lengths)   # {2, 3, 4} — cat/dog both len 3, so 3 appears once (order not guaranteed)
 ```
 ::
 
@@ -235,6 +246,23 @@ print(sorted(unique_emails))            # sort explicitly if order matters
 # since dicts preserve insertion order but sets do not:
 ordered_unique = list(dict.fromkeys(emails))
 print(ordered_unique)   # ['a@x.com', 'b@x.com', 'c@x.com'] — first-seen order preserved
+```
+::
+
+### Set gotchas
+
+::code-wrapper{language="python"}
+```python
+empty = {}            # this is a DICT, not a set!
+print(type(empty))    # <class 'dict'>
+empty = set()         # the only way to write an empty set
+
+print(set("hello"))   # {'h', 'e', 'l', 'o'} — a string is split into chars (order varies)
+print({"hello"})      # {'hello'}            — set literal keeps the string whole
+
+s = {1, 2, 3}
+# s[0]                # TypeError: 'set' object is not subscriptable — no order, no index
+print(s.pop() in {1, 2, 3})   # True — pop() removes an ARBITRARY item
 ```
 ::
 

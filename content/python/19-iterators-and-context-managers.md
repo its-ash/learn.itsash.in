@@ -59,6 +59,34 @@ while True:
 
 `iter()` and `next()` are the built-in functions that invoke `__iter__`/`__next__` — understanding a `for` loop as sugar for this exact `while`/`try`/`except StopIteration` loop demystifies why generators (which raise `StopIteration` automatically when they `return`) slot into `for` loops seamlessly.
 
+## Tricky Iterator Behavior
+
+::code-wrapper{language="python"}
+```python
+# 1. An iterator is consumed — a list is not
+nums = [1, 2]
+it = iter(nums)
+print(list(it), list(it))     # [1, 2] []
+print(list(nums), list(nums)) # [1, 2] [1, 2]
+
+# 2. zip() on the SAME iterator twice → pairs (chunking trick)
+it = iter([1, 2, 3, 4, 5, 6])
+print(list(zip(it, it)))      # [(1, 2), (3, 4), (5, 6)]
+# both arguments pull from one shared iterator, so they take turns
+
+# 3. A list iterator sees items appended later
+nums = [1, 2, 3]
+it = iter(nums)
+next(it)
+nums.append(4)
+print(list(it))               # [2, 3, 4]
+
+# 4. zip(strict=True) (3.10+) catches length mismatches
+# list(zip([1, 2], [3], strict=True))
+# ValueError: zip() argument 2 is shorter than argument 1
+```
+::
+
 ## Generators Satisfy the Iterator Protocol Automatically
 
 ::code-wrapper{language="python"}

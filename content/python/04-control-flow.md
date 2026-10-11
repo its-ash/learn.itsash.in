@@ -1,76 +1,69 @@
 # 04 — Control Flow
 
-## Production State Machine with `match`/`case` (3.10+)
+## `if` / `elif` / `else`
 
 ::code-wrapper{language="python"}
 ```python
-# ── Real-world: async task state machine using structural pattern matching ──
-# Models a job scheduler's lifecycle — each state transition is a pattern match
-# against the current state + event tuple, with guards for conditional transitions.
+def grade(score):
+    if score >= 90:
+        return "A"
+    elif score >= 80:
+        return "B"
+    elif score >= 70:
+        return "C"
+    else:
+        return "F"
 
-from dataclasses import dataclass
-from enum import Enum, auto
+print(grade(95), grade(80), grade(0))   # A B F
+```
+::
 
-class State(Enum):
-    PENDING = auto()
-    RUNNING = auto()
-    PAUSED = auto()
-    COMPLETED = auto()
-    FAILED = auto()
+**Tricky**: order matters. Only the **first** true branch runs:
 
-@dataclass
-class Task:
-    id: str
-    state: State = State.PENDING
-    retries: int = 0
-    error: str | None = None
+::code-wrapper{language="python"}
+```python
+def grade_wrong(score):
+    if score >= 70:
+        return "C"        # 95 stops here!
+    elif score >= 90:
+        return "A"        # never reached
+    return "F"
 
-def transition(task: Task, event: str, payload: dict | None = None) -> Task:
-    """State machine: (current_state, event) → new_state, with guard clauses."""
-    payload = payload or {}
+print(grade_wrong(95))    # 'C'
+```
+::
 
-    match (task.state, event):
-        case (State.PENDING, "start"):
-            task.state = State.RUNNING
+### Conditional expression (Python's "ternary")
 
-        case (State.RUNNING, "pause"):
-            task.state = State.PAUSED
+::code-wrapper{language="python"}
+```python
+age = 20
+status = "adult" if age >= 18 else "minor"
+print(status)   # adult
 
-        case (State.PAUSED, "resume"):
-            task.state = State.RUNNING
+# Tricky: it binds LOOSER than `+`
+n = 5
+print("n=" + str(n) if n > 0 else "none")   # 'n=5'
+print("x" + "y" if False else "z")          # 'z'  ← NOT 'xz' — whole "x"+"y" is the true branch
+```
+::
 
-        case (State.RUNNING, "complete") if payload.get("success", True):
-            task.state = State.COMPLETED
+### Edge cases in conditions
 
-        case (State.RUNNING, "complete"):
-            task.error = payload.get("error", "unknown")
-            task.state = State.FAILED
+::code-wrapper{language="python"}
+```python
+items = []
+if items:                     # empty list is falsy — idiomatic emptiness check
+    print("has items")
+else:
+    print("empty")            # prints
 
-        case (State.FAILED, "retry") if task.retries < 3:   # guard: max 3 retries
-            task.retries += 1
-            task.error = None
-            task.state = State.PENDING
+if items == []:               # works, but not idiomatic
+    pass
 
-        case (State.FAILED, "retry"):
-            raise RuntimeError(f"Task {task.id} exhausted retries ({task.retries})")
-
-        case (State.COMPLETED, _):
-            pass   # terminal state — any event is a no-op
-
-        case (state, event):
-            raise ValueError(f"Invalid transition: {state.name} + {event}")
-
-    return task
-
-# Drive the state machine through a realistic lifecycle
-task = Task("job-42")
-transition(task, "start")
-transition(task, "pause")
-transition(task, "resume")
-transition(task, "complete", {"success": False, "error": "OOM"})
-print(task)   # Task(id='job-42', state=<State.FAILED: 5>, retries=0, error='OOM')
-transition(task, "retry")
-print(task.state)   # State.PENDING — back in queue
+x = 0
+if x is not None and 10 / x > 1:   # short-circuit protects nothing here →
+    pass                            # ZeroDivisionError! x is 0, not None
 ```
 ::
 
@@ -89,21 +82,31 @@ print(collatz_steps(27))   # 111
 ```
 ::
 
-### `while True` with `break` — the idiomatic "loop until condition found inside"
+### `while True` with `break` — loop until the exit is found inside
 
 ::code-wrapper{language="python"}
 ```python
-import random
+commands = ["ls", "pwd", "", "never-read"]
+i = 0
+while True:
+    cmd = commands[i]
+    i += 1
+    if not cmd:           # empty string → stop
+        break
+    print("run", cmd)
+# run ls
+# run pwd
+```
+::
 
-def guess_number(target):
-    attempts = 0
-    while True:
-        attempts += 1
-        guess = random.randint(1, 100)
-        if guess == target:
-            return attempts
-        if attempts > 10_000:   # safety valve against infinite loops
-            raise RuntimeError("too many attempts")
+**Tricky**: a `while` condition is re-checked only at the **top** of each pass:
+
+::code-wrapper{language="python"}
+```python
+n = 3
+while n > 0:
+    n -= 1
+    print(n)    # prints 2, 1, 0 — the 0 prints because the check happens AFTER
 ```
 ::
 
@@ -305,6 +308,57 @@ def process_command(parts):
 print(process_command(["echo", "hello", "world"]))   # hello world
 print(process_command(["move", 3, 4]))                 # move to 3, 4
 print(process_command([]))                               # empty command
+```
+::
+
+## Mutating a List While Looping
+
+::code-wrapper{language="python"}
+```python
+nums = [1, 2, 2, 3]
+for n in nums:
+    if n == 2:
+        nums.remove(n)
+print(nums)    # [1, 2, 3]  ← one 2 survived!
+```
+::
+
+**Why**: the loop keeps an index. Removing item 1 shifts the second `2` into index 1, and the loop moves on to index 2 — it skips it.
+
+::code-wrapper{language="python"}
+```python
+nums = [1, 2, 2, 3]
+nums = [n for n in nums if n != 2]   # build a new list
+print(nums)    # [1, 3]
+```
+::
+
+## The `match` Capture Trap
+
+::code-wrapper{language="python"}
+```python
+OK = 200
+
+def check(code):
+    match code:
+        case OK:            # NOT a comparison — captures ANY value into a new name `OK`
+            return "ok"
+
+print(check(404))           # 'ok'  ← every code "matches"!
+# Add any `case` after it → SyntaxError: name capture 'OK' makes remaining patterns unreachable
+
+# Correct: use a dotted name (compared by value)
+class Status:
+    OK = 200
+
+def check(code):
+    match code:
+        case Status.OK:     # dotted → compares with ==
+            return "ok"
+        case _:
+            return "other"
+
+print(check(200), check(404))   # ok other
 ```
 ::
 

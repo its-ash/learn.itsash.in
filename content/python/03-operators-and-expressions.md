@@ -4,73 +4,51 @@
 
 ::code-wrapper{language="python"}
 ```python
-# Python's // and % follow MATHEMATICAL flooring, not C/Java truncation.
-# This matters in pagination, hashing, ring buffers, and modular arithmetic.
-
-# ── Truncation (C/Java/Rust) vs Flooring (Python) ──
-#   C:     -7 / 2  = -3   (truncates toward zero)
-#   Python: -7 // 2 = -4  (floors toward -∞)
-
-# Production: ring buffer index computation
-BUFFER_SIZE = 256
-
-def ring_index_c_style(offset):
-    """WRONG — C-style truncation produces negative indices for negative offsets."""
-    return int(offset / BUFFER_SIZE) % BUFFER_SIZE   # truncation, not flooring
-
-def ring_index_python(offset):
-    """CORRECT — Python's % always returns a value with the sign of the DIVISOR."""
-    return offset % BUFFER_SIZE   # always 0..255, even for negative offsets
-
-print(ring_index_c_style(-1))     # 255 — accidentally works here, but breaks at other values
-print(ring_index_python(-1))      # 255 — guaranteed correct: -1 % 256 = 255
-print(ring_index_python(-257))    # 255 — correct: -257 % 256 = 255
-
-# ── The divmod() builtin — quotient + remainder in one operation ──
-# More efficient than computing // and % separately (one division operation)
-quotient, remainder = divmod(-17, 5)
-print(quotient, remainder)        # -4, 3  — q*floors*, r takes sign of divisor
-# Verify: quotient * divisor + remainder == dividend
-assert quotient * 5 + remainder == -17
+print(7 / 2)      # 3.5  — `/` ALWAYS returns a float
+print(6 / 2)      # 3.0  — even when it divides evenly
+print(7 // 2)     # 3    — floor division
+print(7 % 2)      # 1
+print(2 ** 10)    # 1024
 ```
 ::
 
+**Tricky**: Python's `//` rounds **down** (toward −∞), not toward zero like C, Java or JavaScript:
+
 ::code-wrapper{language="python"}
 ```python
-# ── Production: parsing binary protocols with bitwise operators ──
-# TCP header flag extraction — real-world bit manipulation, not toy examples
+print(-7 // 2)        # -4   (C gives -3)
+print(int(-7 / 2))    # -3   — int() truncates toward zero
+print(-7 % 2)         # 1    — result takes the sign of the DIVISOR
+print(7 % -2)         # -1
+print(7.5 // 2)       # 3.0  — // on floats returns a float
+```
+::
 
-def parse_tcp_flags(flags_byte: int) -> dict:
-    """Extract TCP header flags from a single byte — bit masking in production code."""
-    return {
-        "FIN":  bool(flags_byte & 0x01),   # bit 0 — AND isolates single bit, bool() normalizes
-        "SYN":  bool(flags_byte & 0x02),   # bit 1
-        "RST":  bool(flags_byte & 0x04),   # bit 2
-        "PSH":  bool(flags_byte & 0x08),   # bit 3
-        "ACK":  bool(flags_byte & 0x10),   # bit 4
-        "URG":  bool(flags_byte & 0x20),   # bit 5
-        "ECE":  bool(flags_byte & 0x40),   # bit 6
-        "CWR":  bool(flags_byte & 0x80),   # bit 7
-    }
+**Why**: Python keeps this rule true for every input: `(a // b) * b + (a % b) == a`. With `-7 // 2 == -4`, the remainder must be `1`.
 
-# SYN+ACK = 0x02 | 0x10 = 0x12 = 18
-flags = 0x12
-parsed = parse_tcp_flags(flags)
-print(parsed)   # {'FIN': False, 'SYN': True, 'RST': False, 'PSH': False, 'ACK': True, ...}
+This makes `%` great for wrap-around (clocks, circular lists):
 
-# ── Packed bitfield construction (e.g., for protocol headers) ──
-def build_tcp_flags(fin=False, syn=False, rst=False, psh=False, ack=False, urg=False):
-    """Pack boolean flags into a single byte using bit shifts and OR."""
-    flags = 0
-    flags |= (fin << 0)   # shift each flag to its bit position, OR into result
-    flags |= (syn << 1)
-    flags |= (rst << 2)
-    flags |= (psh << 3)
-    flags |= (ack << 4)
-    flags |= (urg << 5)
-    return flags
+::code-wrapper{language="python"}
+```python
+days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+today = 0                       # Mon
+print(days[(today - 1) % 7])    # 'Sun' — never a negative index
+print((10 - 13) % 12)           # 9    — 3 hours before 10 o'clock
 
-print(build_tcp_flags(syn=True, ack=True))   # 18 = 0x12
+q, r = divmod(-17, 5)           # quotient and remainder in one call
+print(q, r)                     # -4 3
+```
+::
+
+Edge cases:
+
+::code-wrapper{language="python"}
+```python
+print(1 / 0)       # ZeroDivisionError: division by zero
+print(1.0 / 0)     # ZeroDivisionError — Python does NOT return inf like C
+print(0 ** 0)      # 1
+print(10 ** -1)    # 0.1 — negative power gives a float
+print(True + 1)    # 2   — bool is an int
 ```
 ::
 
@@ -154,8 +132,8 @@ print(0 < noisy(5) < 10)
 ```python
 # A beginner might write this expecting "is x equal to 1 OR 2?"
 x = 3
-print(x == 1 or 2)     # TRUTHY — this is (x == 1) or (2), and 2 is truthy!
-print(bool(x == 1 or 2))  # True — ALWAYS true, regardless of x, because `2` is truthy
+print(x == 1 or 2)        # 2 — this is (x == 1) or 2, and 2 is truthy!
+print(bool(x == 1 or 2))  # True — ALWAYS true, whatever x is
 
 # What they meant:
 print(x == 1 or x == 2)   # False — correct
@@ -220,6 +198,30 @@ print(5 >> 1)           # 2    — right shift (floor-divide by 2**1)
 # Sets also overload these for set algebra (see chapter 08)
 print({1, 2, 3} & {2, 3, 4})   # {2, 3} — intersection
 print({1, 2, 3} | {2, 3, 4})   # {1, 2, 3, 4} — union
+```
+::
+
+Simple flags with bits:
+
+::code-wrapper{language="python"}
+```python
+READ, WRITE, EXEC = 1, 2, 4      # 0b001, 0b010, 0b100
+
+perm = READ | WRITE              # 3 → combine flags
+print(bool(perm & WRITE))        # True  — is WRITE set?
+print(bool(perm & EXEC))         # False
+perm &= ~WRITE                   # remove WRITE
+print(perm)                      # 1
+```
+::
+
+**Tricky**: `&` binds **weaker** than `==`, so this "is even" check is wrong:
+
+::code-wrapper{language="python"}
+```python
+x = 4
+print(x & 1 == 0)      # False!  parsed as x & (1 == 0) → 4 & False → 0
+print((x & 1) == 0)    # True    — parenthesize bitwise ops
 ```
 ::
 

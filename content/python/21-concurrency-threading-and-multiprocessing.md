@@ -1,119 +1,69 @@
 # 21 — Concurrency: Threading & Multiprocessing
 
-## The GIL in Practice — When Threading Helps and When It Doesn't
+## Starting a Thread
 
 ::code-wrapper{language="python"}
 ```python
-# ── Production: benchmarking I/O-bound vs CPU-bound across threading/multiprocessing ──
-# Demonstrates the GIL's impact with real timing, not theoretical claims.
+import threading, time
 
-import threading
-import multiprocessing as mp
-import time
-import requests
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+def work(name, delay):
+    time.sleep(delay)          # sleeping/waiting releases the GIL
+    print(f"{name} done")
 
-# ── I/O-bound: threading WINS (GIL released during network waits) ──
-def fetch_url(url: str) -> tuple[str, int]:
-    """I/O-bound task — releases GIL during socket recv, allowing true concurrency."""
-    try:
-        resp = requests.get(url, timeout=5)
-        return url, resp.status_code
-    except Exception as e:
-        return url, -1
-
-def io_bound_benchmark(urls: list[str]):
-    # Sequential — one at a time, total = sum of all latencies
-    t0 = time.perf_counter()
-    for url in urls:
-        fetch_url(url)
-    sequential = time.perf_counter() - t0
-
-    # Threaded — overlapping I/O waits, total ≈ slowest single request
-    t0 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        list(pool.map(fetch_url, urls))
-    threaded = time.perf_counter() - t0
-
-    print(f"I/O-bound: sequential={sequential:.2f}s, threaded={threaded:.2f}s")
-    print(f"  speedup: {sequential/threaded:.1f}x — threading helps (GIL released during I/O)")
-
-# ── CPU-bound: multiprocessing WINS (GIL blocks true parallelism in threads) ──
-def cpu_intensive(n: int) -> int:
-    """Pure Python computation — GIL prevents parallel bytecode execution across threads."""
-    total = 0
-    for i in range(n):
-        total += i * i
-    return total
-
-def cpu_bound_benchmark(n: int, workers: int):
-    tasks = [n] * workers
-
-    # Sequential
-    t0 = time.perf_counter()
-    for task in tasks:
-        cpu_intensive(task)
-    sequential = time.perf_counter() - t0
-
-    # Threaded — NO speedup (GIL serializes bytecode execution)
-    t0 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(cpu_intensive, tasks))
-    threaded = time.perf_counter() - t0
-
-    # Multiprocessing — TRUE parallelism (separate interpreters, separate GILs)
-    t0 = time.perf_counter()
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(cpu_intensive, tasks))
-    multiprocess = time.perf_counter() - t0
-
-    print(f"CPU-bound: sequential={sequential:.2f}s, threaded={threaded:.2f}s, multiprocess={multiprocess:.2f}s")
-    print(f"  threading speedup: {sequential/threaded:.1f}x (≈1.0 — GIL blocks parallelism)")
-    print(f"  multiprocessing speedup: {sequential/multiprocess:.1f}x (≈workers — true parallelism)")
-
-if __name__ == "__main__":   # REQUIRED for ProcessPoolExecutor (spawn re-imports module)
-    cpu_bound_benchmark(n=5_000_000, workers=4)
+t1 = threading.Thread(target=work, args=("A", 1))
+t2 = threading.Thread(target=work, args=("B", 1))
+t1.start(); t2.start()         # both sleep AT THE SAME TIME
+t1.join(); t2.join()           # wait for both — total ≈ 1s, not 2s
 ```
 ::
 
+### Three classic mistakes
+
 ::code-wrapper{language="python"}
 ```python
-# ── Race condition: demonstrating the lost-update problem ──
-# counter += 1 is NOT atomic — it's LOAD + ADD + STORE, interruptible between any step.
+# 1. Calling the function instead of passing it
+threading.Thread(target=work("A", 1))   # runs work() NOW, in the main thread,
+                                        # then passes its return value (None) as target
 
-import threading
+# 2. args must be a tuple — (5) is just 5
+def show(n): print(n)
+threading.Thread(target=show, args=(5)).start()
+# Exception in thread ...: TypeError: show() argument after * must be an iterable, not int
+threading.Thread(target=show, args=(5,)).start()   # correct: trailing comma
 
-counter = 0
-lock = threading.Lock()
+# 3. run() vs start()
+t = threading.Thread(target=show, args=(1,))
+t.run()      # runs in the CURRENT thread — no concurrency at all
+t.start()    # runs in a NEW thread (and only once — a second start() raises RuntimeError)
+```
+::
 
-def increment_unsafe(n: int):
-    """RACE CONDITION: counter += 1 compiles to multiple bytecodes, GIL can switch mid-way."""
-    global counter
-    for _ in range(n):
-        counter += 1   # LOAD_FAST counter; LOAD_CONST 1; BINARY_OP +=; STORE_FAST counter
-                       # GIL can release between LOAD and STORE → two threads read same old value
+### Exceptions in threads do not reach the main thread
 
-def increment_safe(n: int, lock: threading.Lock):
-    """CORRECT: lock serializes the read-modify-write, no interleaving possible."""
-    global counter
-    for _ in range(n):
-        with lock:           # acquire on entry, release on exit (even on exception)
-            counter += 1     # only one thread can be inside this block at a time
+::code-wrapper{language="python"}
+```python
+results = []
 
-# Demonstrate the race
-counter = 0
-threads = [threading.Thread(target=increment_unsafe, args=(100_000,)) for _ in range(4)]
-for t in threads: t.start()
-for t in threads: t.join()
-print(f"Unsafe (expected 400000): {counter}")   # e.g. 387,341 — lost updates!
+def fetch(i):
+    if i == 3:
+        raise ValueError("bad item")
+    results.append(i)
 
-# Demonstrate the fix
-counter = 0
-lock = threading.Lock()
-threads = [threading.Thread(target=increment_safe, args=(100_000, lock)) for _ in range(4)]
-for t in threads: t.start()
-for t in threads: t.join()
-print(f"Safe (expected 400000):   {counter}")   # 400000 — always correct
+ts = [threading.Thread(target=fetch, args=(i,)) for i in range(5)]
+for t in ts: t.start()
+for t in ts: t.join()
+print(len(results))   # 4 — a traceback is printed to stderr, but the main thread keeps going
+```
+::
+
+`ThreadPoolExecutor` fixes this — `.result()` (and `map`) **re-raise** the worker's exception in your thread:
+
+::code-wrapper{language="python"}
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+with ThreadPoolExecutor() as ex:
+    list(ex.map(fetch, range(5)))   # ValueError: bad item — raised right here
 ```
 ::
 
@@ -135,7 +85,29 @@ for t in threads:
     t.start()
 for t in threads:
     t.join()
-print(counter)   # expected 400,000 — often prints something LESS, e.g. 391,842 — a lost-update race condition
+print(counter)   # expected 400,000 — MAY print less (lost updates)
+```
+::
+
+On CPython 3.10+ with the GIL, this exact loop rarely shows the bug, because thread switches happen only at certain points. That makes it **worse**: the code passes tests and fails later (another Python version, the free-threaded build, more load). Force a switch between the read and the write and the bug shows every time:
+
+::code-wrapper{language="python"}
+```python
+import threading, time
+
+counter = 0
+
+def increment_unsafe():
+    global counter
+    for _ in range(1000):
+        value = counter        # read
+        time.sleep(0)          # let another thread run
+        counter = value + 1    # write — overwrites the other thread's work
+
+threads = [threading.Thread(target=increment_unsafe) for _ in range(4)]
+for t in threads: t.start()
+for t in threads: t.join()
+print(counter)   # expected 4000 — prints something like 1064
 ```
 ::
 
@@ -386,64 +358,60 @@ if __name__ == "__main__":
 
 ## 🧠 Spot the Bug
 
-A script fans out ten "download and process" tasks across threads and accumulates results into a shared list. It occasionally produces fewer than ten results, with no exception raised. Find the bug.
+Ten threads each add one result. The total is sometimes below 10, but no error stops the program. Why?
 
 ::code-wrapper{language="python"}
 ```python
-import threading
+import threading, time
 
-results = []
+count = 0
 
 def fetch_and_store(item_id):
-    data = f"result-{item_id}"
-    if len(results) < 10:
-        results.append(data)
+    global count
+    if item_id == 7:
+        raise ConnectionError("timeout")
+    current = count
+    time.sleep(0.001)          # simulates work between read and write
+    count = current + 1
 
 threads = [threading.Thread(target=fetch_and_store, args=(i,)) for i in range(10)]
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-
-print(len(results))   # sometimes 10, sometimes less
+for t in threads: t.start()
+for t in threads: t.join()
+print(count)
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`list.append()` itself is thread-safe in CPython (it's a single bytecode-level operation protected by the GIL), but `if len(results) < 10: results.append(data)` is **two separate operations** — a length check, then an append — with no atomicity guarantee across the two. Between one thread checking `len(results) < 10` and it actually calling `.append()`, other threads can interleave, but that's not even the real bug here (all 10 threads should still append since none of them exceed 10 in this scenario) — the actual issue is subtler: `len(results) < 10` is a check-then-act race in general, and in a variation of this pattern with more threads than the limit, some threads pass the check with a stale length, all append, and the list ends up *larger* than intended, or (as observed here) if any exception occurs inside a thread's target function it is silently swallowed by `threading.Thread` — printed to stderr but never re-raised to the main thread — masking a `fetch_and_store` failure entirely and undercounting `results` with no visible traceback in the main thread's flow.
+Two bugs:
 
-The fix is a lock around the read-modify-write of the shared list, and explicit propagation of any exception raised inside a thread:
+1. **Race condition** — `current = count` … `count = current + 1` is a read-modify-write. Threads read the same old value and overwrite each other. Result: often `1`, not `9`.
+2. **Swallowed exception** — item 7 raises `ConnectionError`. `threading.Thread` prints the traceback to stderr, but the main thread never sees it and prints a number as if all is fine.
+
+Fix both with a lock and a pool that re-raises:
+
 ::code-wrapper{language="python"}
 ```python
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
-results = []
+count = 0
 lock = threading.Lock()
-errors = []
 
 def fetch_and_store(item_id):
-    try:
-        data = f"result-{item_id}"
-        with lock:
-            results.append(data)
-    except Exception as exc:
-        errors.append(exc)
+    global count
+    if item_id == 7:
+        raise ConnectionError("timeout")
+    with lock:
+        count += 1
 
-threads = [threading.Thread(target=fetch_and_store, args=(i,)) for i in range(10)]
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-
-if errors:
-    raise errors[0]
-print(len(results))   # reliably 10
+with ThreadPoolExecutor() as ex:
+    list(ex.map(fetch_and_store, range(10)))   # ConnectionError is raised HERE
 ```
 ::
 
-**The lesson**: `threading.Thread` swallows exceptions raised inside the target function (printing a traceback to stderr but not stopping the main thread or `.join()`), and any check-then-act sequence on shared mutable state needs a `Lock` around the whole sequence, not just the final mutation — always assume interleaving can happen between any two lines touching shared state.
+**The lesson**: protect every read-modify-write of shared state with a `Lock`, and use `concurrent.futures` so worker errors reach your code.
 
 </details>
 

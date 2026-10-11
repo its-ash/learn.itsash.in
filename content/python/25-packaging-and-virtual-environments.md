@@ -59,6 +59,29 @@ python -m pip install requests
 
 `pip` as a bare command is resolved via `PATH` lookup, which can point to an unexpected `pip` executable if a virtual environment wasn't activated cleanly (a common issue in CI scripts, subshells, or IDE-launched terminals). `python -m pip` instead runs `pip` as a module *of the currently resolved `python` interpreter*, removing that entire class of "installed into the wrong place" bugs. **Best practice**: use `python -m pip install ...` in scripts and CI, especially anywhere the active environment can't be visually confirmed.
 
+### Small commands, big surprises
+
+::code-wrapper{language="bash"}
+```bash
+# 1. zsh treats [ ] as a glob pattern
+pip install -e .[dev]          # zsh: no matches found: .[dev]
+pip install -e ".[dev]"        # quote it — works in every shell
+
+# 2. A venv remembers its absolute path
+mv .venv ../other/.venv
+../other/.venv/bin/pip --version   # may fail: bad interpreter / wrong path
+# fix: delete and recreate the venv — never move or copy it
+
+# 3. Activation is per-shell
+source .venv/bin/activate
+bash -c "which python"         # a NEW shell inherits PATH, but scripts run by cron/IDE may not
+.venv/bin/python script.py     # calling the venv's python directly needs no activation at all
+
+# 4. "pip install" outside a venv on modern Linux/macOS Homebrew Python
+pip install requests           # error: externally-managed-environment
+```
+::
+
 ## `requirements.txt`: Simple, but Limited
 
 ::code-wrapper{language="bash"}
@@ -300,8 +323,8 @@ pip install -r requirements.txt
 `requirements.txt` contains only `requests` with **no version specifier at all** — every `pip install -r requirements.txt` resolves to whatever the *latest* `requests` (and its latest-compatible transitive dependencies, like `urllib3` and `certifi`) happens to be on the day it runs, not the version actually used and tested in production. Two installs performed weeks apart, or on different machines, can silently resolve to entirely different dependency trees, since nothing in the file pins anything.
 
 The fix is either an exact pin generated from the actual working environment, or (better) a proper lockfile-based workflow:
-::code-wrapper{language="python"}
-```python
+::code-wrapper{language="bash"}
+```bash
 # requirements.txt regenerated from the REAL, working environment:
 pip freeze > requirements.txt
 # certifi==2024.7.4
@@ -313,8 +336,8 @@ pip freeze > requirements.txt
 ::
 
 or, migrating to a tool with a real resolver and lockfile:
-::code-wrapper{language="python"}
-```python
+::code-wrapper{language="bash"}
+```bash
 uv add requests   # writes an exact, hash-pinned resolution into uv.lock
 uv sync           # every teammate and CI run gets the IDENTICAL resolved tree
 ```

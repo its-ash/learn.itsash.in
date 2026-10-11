@@ -54,11 +54,53 @@ t.celsius = 30              # looks like plain assignment, but calls the setter 
 print(t.celsius)               # 30
 
 # t.celsius = -300         # ValueError: Below absolute zero
-# t.fahrenheit = 100        # AttributeError: can't set attribute (no setter defined)
+# t.fahrenheit = 100        # AttributeError: property 'fahrenheit' of 'Temperature' object has no setter
 ```
 ::
 
 Callers can't tell from the call site whether `t.celsius` is a plain attribute or a `@property` — this is the point: you can start with a plain attribute and refactor to a property later without changing any calling code, unlike languages where you must commit to `getX()`/`setX()` method syntax from day one if you might ever need validation.
+
+### The infinite-recursion trap
+
+::code-wrapper{language="python"}
+```python
+class Person:
+    def __init__(self, age):
+        self.age = age               # calls the setter — good
+
+    @property
+    def age(self):
+        return self.age              # BUG: calls the getter again → forever
+
+    @age.setter
+    def age(self, value):
+        self.age = value             # BUG: calls the setter again → forever
+
+# Person(30)   # RecursionError: maximum recursion depth exceeded
+```
+::
+
+**Why**: inside the property, `self.age` *is* the property. Store the real value under a **different** name:
+
+::code-wrapper{language="python"}
+```python
+class Person:
+    def __init__(self, age):
+        self.age = age               # still goes through the setter → validated
+
+    @property
+    def age(self):
+        return self._age
+
+    @age.setter
+    def age(self, value):
+        if value < 0:
+            raise ValueError("age must be >= 0")
+        self._age = value
+
+# Person(-1)   # ValueError: age must be >= 0  ← __init__ is validated too
+```
+::
 
 ## Read-Only Properties and `@x.deleter`
 
@@ -85,7 +127,7 @@ del acc.balance   # Account closed — calls the deleter, NOT actual attribute d
 ```
 ::
 
-A property with only a getter (no `@x.setter`) is effectively read-only from the outside — attempting `obj.x = value` raises `AttributeError: can't set attribute`, which is a clean, explicit way to expose computed or immutable-after-construction values.
+A property with only a getter (no `@x.setter`) is effectively read-only from the outside — attempting `obj.x = value` raises `AttributeError: property 'x' of '...' object has no setter` (older versions: `can't set attribute`), which is a clean, explicit way to expose computed or immutable-after-construction values.
 
 ## `functools.cached_property` — Compute Once, Cache on the Instance
 

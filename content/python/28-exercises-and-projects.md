@@ -9,6 +9,48 @@ Each section has:
 - **Projects**: end-to-end builds with concrete requirements and stretch goals.
 - **Solutions**: don't look anything up until you've tried for at least 30 minutes.
 
+## Warm-Up: Predict the Output
+
+Answer each one **before** you run it. Every line comes from a gotcha in chapters 02–19.
+
+::code-wrapper{language="python"}
+```python
+print([] == False, bool([]) == False)        # 1
+
+a = [1, 2, 3]; b = a; a = a + [4]; print(b)  # 2
+a = [1, 2, 3]; b = a; a += [4];    print(b)  # 3
+
+print(sorted([3, 1, 2]).reverse())           # 4
+
+def f(x=[]):
+    x.append(1)
+    return len(x)
+print(f(), f(), f([]))                       # 5
+
+print((3 > 2) > 1, 3 > 2 > 1)                # 6
+print(all([]), any([]))                      # 7
+print(len(" ".split(" ")))                   # 8
+```
+::
+
+<details>
+<summary>Answers</summary>
+
+::code-wrapper{language="bash"}
+```bash
+False True       # 1  [] is falsy, but it is not EQUAL to False
+[1, 2, 3]        # 2  a + [4] builds a new list; b keeps the old one
+[1, 2, 3, 4]     # 3  += mutates the shared list in place
+None             # 4  .reverse() mutates and returns None
+1 2 1            # 5  the default list is shared; an explicit [] is fresh
+False True       # 6  (3 > 2) is True == 1, and 1 > 1 is False; the chain is 3>2 and 2>1
+True False       # 7  all() of nothing is True; any() of nothing is False
+2                # 8  " ".split(" ") → ['', '']
+```
+::
+
+</details>
+
 ## Beginner Exercises
 
 ### 1. FizzBuzz with Comprehensions
@@ -56,7 +98,7 @@ Poll a directory for new/modified files using `asyncio` and `pathlib`, printing 
 
 ### 8. Concurrent Counter with Threads
 
-Spawn 10 threads, each incrementing a shared counter 100,000 times. Demonstrate the race condition with no lock, then fix it with `threading.Lock`. Measure and report the difference in final (wrong vs. correct) totals (chapter 21).
+Spawn 10 threads, each incrementing a shared counter 1,000 times as `value = counter; time.sleep(0); counter = value + 1`. Show the lost updates with no lock, then fix it with `threading.Lock`. Report the wrong vs. correct totals. Bonus: explain why plain `counter += 1` often does **not** show the bug on CPython 3.10+ — and why that is not proof the code is safe (chapter 21).
 
 ### 9. Custom Iterator for Fibonacci
 

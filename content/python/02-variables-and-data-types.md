@@ -1,309 +1,314 @@
 # 02 — Variables & Data Types
 
-## The Object Model — Every Value Is a Heap-Allocated `PyObject`
+## Names Are Labels, Not Boxes
+
+In Python, a variable is a **name that points to an object**. Assignment never copies — it adds another label to the same object.
 
 ::code-wrapper{language="python"}
 ```python
-# Every Python object starts with a C-level PyObject header:
-#   struct PyObject { Py_ssize_t ob_refcnt; PyTypeObject *ob_type; }
-# `id()` returns the address of this struct — that's why `is` is a pointer compare.
-
-import sys, ctypes
-
-# ── Refcount introspection ──
-# Every object tracks how many names/containers reference it.
-# When refcnt hits 0, CPython IMMEDIATELY deallocates (no GC pause needed).
-obj = [1, 2, 3]
-print(sys.getrefcount(obj))   # 2 — `obj` + the temporary arg passed to getrefcount
-
-alias = obj                    # refcnt → 3
-print(sys.getrefcount(obj))   # 3
-
-import weakref
-weak = weakref.ref(obj)       # weakref does NOT increment refcnt
-print(sys.getrefcount(obj))   # still 3 — weak references don't keep objects alive
-
-# ── The cycle-collecting generational GC ──
-# Refcounting can't handle reference cycles. A separate 3-generation GC handles those.
-import gc
-gc.disable()                  # pause GC to observe refcount-only behavior
-
-a = {}; b = {}
-a["link"] = b                 # a → b: b.refcnt = 2 (b + a['link'])
-b["link"] = a                 # b → a: a.refcnt = 2 (a + b['link'])
-del a; del b                   # both refcnts are now 1 — they reference EACH OTHER but nothing references them
-                               # refcounting can't free them — only the cycle GC can
-gc.enable()
-collected = gc.collect()       # manually triggers cycle detection — frees the orphaned cycle
-print(f"GC collected {collected} objects in cycles")
+a = [1, 2, 3]
+b = a            # b points to the SAME list
+b.append(4)
+print(a)         # [1, 2, 3, 4]  ← a "changed" too
+print(a is b)    # True — one object, two names
 ```
 ::
+
+With immutable types (int, str, tuple) you never notice, because you cannot change the object — you can only point the name somewhere else:
 
 ::code-wrapper{language="python"}
 ```python
-# ── Production: zero-copy data exchange via the buffer protocol ──
-# Different types (bytes, bytearray, array.array, numpy.ndarray, memoryview)
-# can share raw memory without copying — the buffer protocol exposes the C-level pointer.
-
-import array, struct
-
-# Pack binary data into an array — contiguous C memory, not Python int objects
-buf = array.array('I', [0xDEADBEEF, 0xCAFEBABE, 0x12345678])
-view = memoryview(buf)          # zero-copy view — no data copied, just a pointer + length
-
-# Cast the view to bytes to inspect raw memory layout (little-endian on x86)
-raw = view.cast('B')            # reinterpret as unsigned bytes
-print(bytes(raw[:4]))           # b'\xef\xbe\xad\xde' — DEADBEEF in LE
-
-# Modify through the view — original buffer changes, no copy
-view[0] = 0xFFFFFFFF
-print(buf[0])                   # 4294967295 — mutated through the view
+x = 10
+y = x
+y += 1           # creates a NEW int 11, and points y at it
+print(x, y)      # 10 11  ← x is untouched
 ```
 ::
 
-## Dynamic Typing
-
-Types belong to **objects**, not to the names bound to them. A name can be rebound to a value of any type at any time — there is no compile-time type declaration.
+**Tricky**: `+=` on a list changes the object in place, but `+=` on an int makes a new object. Same operator, different result:
 
 ::code-wrapper{language="python"}
 ```python
-x = 42          # x refers to an int
-x = "forty-two" # now x refers to a str — perfectly legal
-x = [42]        # now a list
+a = [1]; b = a
+b += [2]
+print(a)         # [1, 2]  — list += mutates in place
+
+a = (1,); b = a
+b += (2,)
+print(a)         # (1,)    — tuple += creates a new tuple
 ```
 ::
 
-This is different from *weak* typing. Python is dynamically **but strongly** typed — it will not silently coerce incompatible types.
+## Dynamic but Strong Typing
+
+Types belong to **objects**, not names. A name can point to any type at any time:
 
 ::code-wrapper{language="python"}
 ```python
-"3" + 3
-# TypeError: can only concatenate str (not "int") to str
+x = 42
+x = "forty-two"   # legal
+x = [42]          # legal
 ```
 ::
 
-Compare to JavaScript, which is dynamically and *weakly* typed: `"3" + 3` produces `"33"` silently. Python demands you be explicit:
+But Python is **strongly** typed — it does not silently mix types:
 
 ::code-wrapper{language="python"}
 ```python
-int("3") + 3      # 6
-"3" + str(3)      # "33"
+"3" + 3          # TypeError: can only concatenate str (not "int") to str
+"3" * 3          # '333'  ← this one IS allowed (str repetition)
+int("3") + 3     # 6
+"3" + str(3)     # '33'
 ```
 ::
 
-## Scalar Type Internals — What's Actually in Memory
+Compare JavaScript, where `"3" + 3` silently gives `"33"`.
+
+## The Built-in Scalar Types
+
+### `int` — no overflow, ever
 
 ::code-wrapper{language="python"}
 ```python
-import sys, struct, ctypes
-
-# ── int: arbitrary precision via digit arrays ──
-# Small ints (-5..256) are pre-allocated singletons — `is` accidentally works.
-# Large ints are PyLongObject with an array of 30-bit digits.
-print(sys.getsizeof(0))           # 24 bytes — base PyObject overhead
-print(sys.getsizeof(1))           # 28 bytes — one digit
-print(sys.getsizeof(2**30))       # 32 bytes — one 30-bit digit
-print(sys.getsizeof(2**60))       # 36 bytes — two 30-bit digits
-print(sys.getsizeof(2**1000))     # 160 bytes — ~34 digits, no overflow ever
-
-# The small-int cache is observable — and is a CPython implementation detail, not a guarantee
-a, b = 256, 256
-print(a is b)                     # True — both resolve to the cached singleton
-a, b = 257, 257
-print(a is b)                     # False (usually) — separate allocations outside cache range
-# NEVER use `is` for value comparison — use `==`. `is` on ints is a latent bug.
-
-# ── float: IEEE-754 binary64, 8 bytes ──
-# Sign(1) + exponent(11) + mantissa(52) = 64 bits
-x = -0.0
-packed = struct.pack('>d', x)     # big-endian IEEE-754 bytes
-print(packed.hex())               # 8000000000000000 — sign bit set, rest zero
-print(x == 0.0)                   # True — -0.0 == 0.0 per IEEE-754
-print(struct.pack('>d', 0.0).hex())  # 0000000000000000 — different bit pattern, same value
-
-# float('inf'), float('nan') are valid IEEE-754 special values
-inf = float('inf')
-print(inf > 1e308)                # True
-print(inf + 1 == inf)             # True — infinity absorbs addition
-nan = float('nan')
-print(nan == nan)                 # False! NaN is never equal to itself — use math.isnan()
-print(nan is nan)                 # True — same object, but == is False
-
-# ── bool: a subclass of int with singleton instances ──
-# True and False are the ONLY two bool instances. bool inherits ALL int operations.
-print(isinstance(True, int))      # True — bool IS-A int in the type hierarchy
-print(True + True + True)         # 3 — bool arithmetic produces int
-print(sum([True, False, True]))   # 2 — bools are 1/0 in numeric contexts
-
-# ANTI-PATTERN: using `isinstance(x, int)` to validate a "count" — bools pass!
-def bad_count_validator(x):
-    if isinstance(x, int):
-        return x               # True/False silently accepted as 1/0
-    raise TypeError
-
-# CORRECT: exclude bool explicitly when the distinction matters
-def good_count_validator(x):
-    if isinstance(x, int) and not isinstance(x, bool):
-        return x
-    raise TypeError(f"expected int, got {type(x).__name__}")
+print(2 ** 100)        # 1267650600228229401496703205376 — exact, no overflow
+print(10 ** 20 + 1)    # 100000000000000000001
+print(1_000_000)       # 1000000 — underscores are just for reading
 ```
 ::
 
-### `None` is not "falsy zero" — it's a distinct singleton
+### `float` — binary, so decimals are approximate
 
 ::code-wrapper{language="python"}
 ```python
-def get_config(key):
-    config = {"debug": False, "timeout": 0}
-    return config.get(key)  # returns None if key is absent
+print(0.1 + 0.2)            # 0.30000000000000004
+print(0.1 + 0.2 == 0.3)     # False
+print(1e16 + 1 == 1e16)     # True  ← the +1 is lost, floats have ~16 digits
 
-value = get_config("missing_key")
-if value == 0:
-    print("This never runs — None != 0")
-if value is None:
-    print("Correct check")   # this runs
+import math
+print(math.isclose(0.1 + 0.2, 0.3))   # True — the correct way to compare floats
+
+from decimal import Decimal
+print(Decimal("0.1") + Decimal("0.2"))  # 0.3 — exact, use for money
+print(Decimal(0.1))   # 0.1000000000000000055511151231257827021181583404541015625
+                      # ↑ passing a float copies its error — always pass a STRING
 ```
 ::
 
-Always compare `None` with `is`/`is not`, never `==`. `None` is a **singleton** — there is only ever one `None` object in a running process, so identity comparison is both correct and idiomatic (enforced by linters like `ruff`/`flake8` via `E711`).
+**Why**: `0.1` has no exact base-2 form, the same way `1/3` has no exact base-10 form (`0.333...`).
+
+`round()` also surprises people — it uses **banker's rounding** (ties go to the even number):
+
+::code-wrapper{language="python"}
+```python
+print(round(0.5))      # 0   ← not 1
+print(round(1.5))      # 2
+print(round(2.5))      # 2   ← not 3
+print(round(2.675, 2)) # 2.67 ← not 2.68, because 2.675 is really 2.67499999...
+```
+::
+
+Special float values:
+
+::code-wrapper{language="python"}
+```python
+nan = float("nan")
+print(nan == nan)      # False — NaN is never equal to anything, even itself
+print(nan in [nan])    # True  — `in` checks `is` first, then ==
+print(math.isnan(nan)) # True  — the correct check
+
+inf = float("inf")
+print(inf + 1 == inf)  # True
+print(inf > 10**400)   # True
+print(-0.0 == 0.0)     # True
+```
+::
+
+### `bool` — a subclass of `int`
+
+::code-wrapper{language="python"}
+```python
+print(True + True)           # 2
+print(sum([True, False, True]))  # 2 — handy for counting
+print(isinstance(True, int)) # True
+print(True == 1)             # True
+
+d = {1: "one", True: "true"}
+print(d)                     # {1: 'true'}  ← True and 1 are the SAME key!
+```
+::
+
+**Tricky**: because `True == 1` and `hash(True) == hash(1)`, a dict treats them as one key. The key keeps the first form (`1`) but the value is overwritten.
+
+Validating "must be an int" lets bools in by mistake:
+
+::code-wrapper{language="python"}
+```python
+def set_retries(n):
+    if not isinstance(n, int):
+        raise TypeError("int expected")
+    return n
+
+print(set_retries(True))     # 1 — accepted! probably a bug
+
+# Correct: exclude bool
+def set_retries(n):
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise TypeError(f"int expected, got {type(n).__name__}")
+    return n
+```
+::
+
+### `None` — the "no value" singleton
+
+::code-wrapper{language="python"}
+```python
+config = {"debug": False, "timeout": 0}
+
+print(config.get("missing"))        # None
+print(config.get("timeout") == None) # False — 0 is not None
+print(config.get("missing") is None) # True  — always use `is None`
+
+# WRONG: `if not value` treats 0 and False like "missing"
+timeout = config.get("timeout")
+if not timeout:
+    print("no timeout set")   # prints! but timeout IS set — to 0
+
+# RIGHT
+if timeout is None:
+    print("no timeout set")   # does not print
+```
+::
+
+## `is` vs `==`
+
+- `==` asks "same **value**?"
+- `is` asks "same **object**?"
+
+::code-wrapper{language="python"}
+```python
+a = [1, 2]
+b = [1, 2]
+print(a == b)    # True  — same contents
+print(a is b)    # False — two different lists
+```
+::
+
+**Tricky**: CPython caches small ints (`-5` to `256`), so `is` sometimes "works" by accident:
+
+::code-wrapper{language="python"}
+```python
+x = int("256"); y = int("256")
+print(x is y)    # True  — both use the cached 256
+
+x = int("257"); y = int("257")
+print(x is y)    # False — two separate objects
+```
+::
+
+And it gets stranger — in one script file, the compiler may reuse equal constants, so `a = 257; b = 257; a is b` is `True` in a file but `False` when typed on two REPL lines. **Never** use `is` to compare numbers or strings. Use `is` only for `None`, `True`/`False` singletons and sentinels.
 
 ## `type()` vs `isinstance()`
 
 ::code-wrapper{language="python"}
 ```python
-class Animal:
-    pass
-
-class Dog(Animal):
-    pass
+class Animal: pass
+class Dog(Animal): pass
 
 d = Dog()
+print(type(d) == Animal)       # False — exact type only
+print(isinstance(d, Animal))   # True  — respects inheritance
 
-print(type(d) == Dog)          # True
-print(type(d) == Animal)       # False — type() is exact, no inheritance awareness
-print(isinstance(d, Animal))   # True — isinstance() respects the class hierarchy
-print(isinstance(d, Dog))      # True
-print(isinstance(True, int))   # True — bool IS-A int
-print(type(True) == int)       # False — exact type is bool, not int
+print(type(True) == int)       # False — it is bool
+print(isinstance(True, int))   # True
+
+print(isinstance(3.0, int | float))   # True — union syntax (3.10+)
 ```
 ::
 
-**Best practice**: use `isinstance()` for type checks in almost all real code — it correctly handles inheritance and is the only option that works with `Protocol`/ABC-based duck typing (chapter 20). Reserve `type(x) == Y` for the rare case where you deliberately want to *exclude* subclasses (e.g., security-sensitive `pickle` deserialization checks, chapter 27).
+**Best practice**: use `isinstance()`. Use `type(x) is Y` only when you want to reject subclasses on purpose.
+
+## Duck Typing and EAFP
+
+Python cares what an object **can do**, not what it **is**:
 
 ::code-wrapper{language="python"}
 ```python
-# isinstance also accepts a tuple of types
-def normalize(value):
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return value.strip().lower()
-    raise TypeError(f"Unsupported type: {type(value).__name__}")
+def total_length(items):
+    return sum(len(x) for x in items)
+
+print(total_length(["ab", [1, 2, 3], {"k": 1}]))   # 6 — str, list, dict all have len()
+print(total_length([42]))   # TypeError: object of type 'int' has no len()
 ```
 ::
 
-## Duck Typing
-
-"If it walks like a duck and quacks like a duck, it's a duck." Python cares about what an object *can do* (its methods/attributes), not its declared type.
+Idiomatic Python **tries first and handles failure** (EAFP) instead of checking first (LBYL):
 
 ::code-wrapper{language="python"}
 ```python
-class Duck:
-    def quack(self):
-        return "Quack!"
+data = {"port": "8080"}
 
-class Person:
-    def quack(self):
-        return "I'm quacking (I'm a person)"
+# LBYL — check, then act
+if "port" in data and data["port"].isdigit():
+    port = int(data["port"])
 
-def make_it_quack(thing):
-    # No isinstance check at all — we just trust it has .quack()
-    return thing.quack()
-
-print(make_it_quack(Duck()))
-print(make_it_quack(Person()))
-```
-::
-
-This is why Python favors **EAFP** ("Easier to Ask Forgiveness than Permission") over **LBYL** ("Look Before You Leap"):
-
-::code-wrapper{language="python"}
-```python
-# LBYL — checks first, then acts (race conditions possible, verbose)
-if hasattr(obj, "quack") and callable(obj.quack):
-    obj.quack()
-
-# EAFP — idiomatic Python: try it, handle failure
+# EAFP — try, handle the failure
 try:
-    obj.quack()
-except AttributeError:
-    print("Object can't quack")
+    port = int(data["port"])
+except (KeyError, ValueError):
+    port = 80
 ```
 ::
 
-EAFP is preferred in idiomatic Python partly for readability and partly because LBYL checks can be invalidated by the time you act on them (a classic TOCTOU — time-of-check to time-of-use — bug, especially relevant with files and dicts under concurrent modification).
-
-## Checking and Converting Types
+## Converting Types
 
 ::code-wrapper{language="python"}
 ```python
-x = "42"
-print(type(x))          # <class 'str'>
-print(int(x))            # 42          — parses a numeric string
-print(int("3.14"))       # ValueError: invalid literal for int() with base 10: '3.14'
-print(int(float("3.14"))) # 3          — go through float first, truncates toward zero
-print(str(42))            # "42"
-print(bool(""))            # False — empty string is falsy
-print(bool("False"))       # True  — NON-empty string, even "False", is truthy!
+print(int("42"))        # 42
+print(int("  42\n"))    # 42    — whitespace is stripped
+print(int("1_000"))     # 1000  — underscores allowed
+print(int("3.14"))      # ValueError — int() won't parse a float string
+print(int(float("3.14")))   # 3
+print(int(-3.7))        # -3    — truncates toward zero (NOT floor)
+print(int("ff", 16))    # 255
+print(float("1e3"))     # 1000.0
+print(str(None))        # 'None'
+print(bool("False"))    # True  ← any NON-EMPTY string is truthy
 ```
 ::
 
-## Truthiness — What Counts as `False`
+## Truthiness
 
-Every object has an implicit boolean value via `bool(obj)`, used by `if`, `while`, `and`, `or`, `not`.
+**Falsy**: `False`, `None`, `0`, `0.0`, `0j`, `""`, `()`, `[]`, `{}`, `set()`, `range(0)`.
 
-**Falsy values**: `False`, `None`, `0`, `0.0`, `0j`, `""`, `()`, `[]`, `{}`, `set()`, and any object whose `__bool__` (or fallback `__len__`) returns `False`/`0`.
-
-**Everything else is truthy** — including `"0"`, `"False"`, `[0]`, and `{0: False}` (all non-empty).
+**Everything else is truthy**, including some surprises:
 
 ::code-wrapper{language="python"}
 ```python
-values = [0, 1, "", "0", [], [0], {}, None, False, True, 0.0, -0.0]
-for v in values:
-    print(f"{v!r:>8} -> {bool(v)}")
+print(bool("0"))       # True  — non-empty string
+print(bool(" "))       # True  — a space is a character
+print(bool([0]))       # True  — non-empty list
+print(bool([[]]))      # True  — a list holding an empty list is not empty
+print(bool(-1))        # True  — only 0 is falsy
+print(bool(0.0))       # False
+print(bool(-0.0))      # False
 ```
 ::
 
-::code-wrapper{language="python"}
-```python
-       0 -> False
-       1 -> True
-      '' -> False
-     '0' -> True
-      [] -> False
-     [0] -> True
-      {} -> False
-    None -> False
-   False -> False
-    True -> True
-     0.0 -> False
-    -0.0 -> False
-```
-::
-
-## Variable Naming Rules and Conventions
+## Naming Rules and Conventions
 
 ::code-wrapper{language="python"}
 ```python
-# Valid identifiers: letters, digits, underscore; can't start with a digit
-valid_name = 1
-_private_by_convention = 2
-__name_mangled_in_classes = 3
-CONSTANT_STYLE = 4          # convention only — Python has no true constants
+user_name = "ada"        # snake_case for variables/functions
+MAX_RETRIES = 3          # UPPER_CASE for constants (convention only)
+_internal = 1            # leading underscore = "private" hint
 
-# Invalid:
-# 1st_place = "x"    # SyntaxError — can't start with digit
-# my-var = "x"       # SyntaxError — hyphen is the subtraction operator
+# 1st = 1               # SyntaxError — can't start with a digit
+# my-var = 1            # SyntaxError — that's "my minus var"
+
+list = [1, 2, 3]         # legal, but now the built-in list() is hidden!
+# list("abc")            # TypeError: 'list' object is not callable
+del list                 # removes your name, built-in comes back
+print(list("abc"))       # ['a', 'b', 'c']
 ```
 ::
 
@@ -311,66 +316,83 @@ CONSTANT_STYLE = 4          # convention only — Python has no true constants
 |---|---|
 | `snake_case` | Variables and functions (PEP 8). |
 | `PascalCase` | Class names. |
-| `UPPER_SNAKE_CASE` | Module-level constants (by convention only — still reassignable). |
-| `_leading_underscore` | "Internal use" hint — not enforced, just a signal to other developers. |
-| `__leading_double_underscore` | Triggers **name mangling** inside classes (`self.__x` becomes `self._ClassName__x`) — see chapter 12. |
-| `__dunder__` | Reserved for Python itself (`__init__`, `__len__`) — never invent your own dunder names. |
+| `UPPER_SNAKE_CASE` | Constants — still reassignable. |
+| `_leading_underscore` | "Internal" hint, not enforced. |
+| `__double_leading` | Name mangling inside classes (chapter 12). |
+| `__dunder__` | Reserved for Python (`__init__`, `__len__`). |
 
-## 💡 Tips & Tricks
-
-- **`type(x).__name__` for clean error messages** — `f"Expected int, got {type(x).__name__}"` prints `int`/`str`/`list` instead of the noisy `<class 'int'>` you'd get from `type(x)` directly in an f-string.
-- **`sys.intern()` for large sets of repeated strings** — In hot paths comparing many repeated strings (e.g., parser tokens), `sys.intern()` guarantees identical strings share one object, making `is` comparison valid and fast — CPython already auto-interns short identifier-like literals, but not all strings.
-- **Underscore digit separators** — `1_000_000` and `0x_FF_FF` are valid literals since Python 3.6; use them for readability in large numeric constants.
-- **`isinstance` with `|` union syntax (3.10+)** — `isinstance(x, int | float)` works identically to the tuple form `isinstance(x, (int, float))` and reads closer to type-hint syntax.
-- **`None` as a sentinel default, never a mutable literal** — Use `def f(cache=None): cache = cache if cache is not None else {}` instead of a mutable default — chapter 05 explains exactly why the mutable form is dangerous.
-
-## ⚠️ Edge Cases & Gotchas
-
-- **Small integer caching (`is` vs `==` on ints)** — CPython pre-allocates and caches integers in `[-5, 256]` as singletons. `a = 100; b = 100; a is b` is `True`, but `a = 1000; b = 1000; a is b` is often `False` (implementation detail, not guaranteed by the language spec) because they're separately allocated objects with equal value but different identity. **Never use `is` to compare integer values** — always use `==`; `is` is only correct for `None`, and for deliberate singleton/sentinel checks.
-- **String interning is inconsistent across literal forms** — Short strings that look like identifiers (`"hello"`) are often interned by CPython and compare equal with `is`, but strings built at runtime (`"".join(["h","e","l","l","o"])`) usually are not, even with equal content. Relying on `is` for string equality is a latent bug that "works in testing" and fails in production.
-- **`bool` being a subclass of `int` breaks naive type dispatch** — `isinstance(True, int)` is `True`, so a function branching only on `isinstance(x, int)` silently also matches booleans, which can produce nonsensical results like treating `True` as the integer `1` in arithmetic contexts you didn't intend. Explicitly exclude booleans (`isinstance(x, int) and not isinstance(x, bool)`) when the distinction matters (e.g., validating "this must be a count, not a flag").
-- **Floating-point representation is binary, not decimal** — `0.1 + 0.2 == 0.3` is `False` because `0.1` and `0.2` have no exact binary (base-2) fractional representation — the same reason `1/3` has no exact finite decimal representation. Use `math.isclose(0.1 + 0.2, 0.3)` for float comparisons, or the `decimal.Decimal` type for money/precision-critical arithmetic.
-- **`0.0 == -0.0` is `True`, but they are distinct bit patterns** — IEEE-754 defines signed zero. `1 / 0.0` raises `ZeroDivisionError` in Python (unlike C, which yields `inf`), but `1 / -0.0` — if you get a `-0.0` from a computation rather than division by an int-cast zero — behaves per IEEE-754 rules; this rarely matters, but has bitten numerical code comparing `float('-0.0')` bit-for-bit via `struct.pack`.
-
-## 🧠 Spot the Bug
-
-What does this print, and why does it differ from what most beginners expect?
+## Multiple Assignment
 
 ::code-wrapper{language="python"}
 ```python
-a = 256
-b = 256
-print(a is b)     # ?
+a, b = 1, 2
+a, b = b, a           # swap — right side is built first
+print(a, b)           # 2 1
 
-c = 257
-d = 257
-print(c is d)     # ?
+x = y = []            # ONE list, two names
+x.append(1)
+print(y)              # [1]  ← surprise!
 
-e = -5
-f = -5
-print(e is f)     # ?
+x, y = [], []         # two separate lists
+```
+::
 
-g = -6
-h = -6
-print(g is h)     # ?
+## 💡 Tips & Tricks
+
+- **Debug** — `type(x).__name__` gives a clean `"int"` for error messages instead of `<class 'int'>`.
+- **Readability** — use `1_000_000` for big numbers.
+- **Idiom** — `sum(flags)` counts `True` values in a list of bools.
+- **Idiom** — `x if x is not None else default` keeps valid falsy values like `0` and `""`; `x or default` does not.
+- **Precision** — use `Decimal("0.1")` (a string!) for money, never `Decimal(0.1)`.
+- **Safety** — don't name variables `list`, `dict`, `str`, `id`, `type`, `input` — you hide the built-in.
+
+## ⚠️ Edge Cases & Gotchas
+
+- **Identity** — `is` on ints/strings works "sometimes" because of caching. It is an implementation detail. Use `==`.
+- **Bool** — `True` is an `int`. `{1: "a", True: "b"}` has only one key. `isinstance(True, int)` is `True`.
+- **Float** — `0.1 + 0.2 != 0.3`. Use `math.isclose()` or `Decimal`.
+- **Rounding** — `round(2.5) == 2`. Python uses banker's rounding.
+- **Truncation** — `int(-3.7) == -3` (toward zero), but `-7 // 2 == -4` (floor). See chapter 03.
+- **NaN** — `nan != nan`, so `nan in [nan]` is `True` only because `in` checks identity first.
+- **Chained assignment** — `a = b = []` shares one list.
+
+## 🧠 Quick Quiz
+
+What does each line print?
+
+::code-wrapper{language="python"}
+```python
+print(bool("False"))
+print({True: "yes", 1: "no", 1.0: "maybe"})
+print(round(3.5) + round(4.5))
+print(int("08"))
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`a is b` → `True`, `c is d` → usually `False`, `e is f` → `True`, `g is h` → usually `False`.
+::code-wrapper{language="bash"}
+```bash
+True
+{True: 'maybe'}
+8
+8
+```
+::
 
-CPython caches integer objects in the range `[-5, 256]` inclusive at interpreter startup as a performance optimization (small integers are used constantly, so reusing objects avoids repeated allocation). `256` falls inside that range, so both names bind to the *same* cached object — `is` returns `True`. `257` falls outside it, so each literal typically creates a *new* int object — `is` returns `False` (though in the same statement/constant-folding context the compiler might occasionally intern identical literals — never rely on this). The same boundary applies at `-5`.
-
-**The lesson**: `is` tests object identity, not value equality — it only ever gives value-correct results for integers by accident of an implementation detail (the small-int cache), never by language guarantee. Always use `==` for comparing values, and reserve `is` for `None`, sentinels, and deliberate singleton checks.
+1. `"False"` is a non-empty string → truthy.
+2. `True`, `1` and `1.0` are equal and have the same hash → one key. The first key form (`True`) stays, the last value (`'maybe'`) wins.
+3. Banker's rounding: `round(3.5) == 4`, `round(4.5) == 4` → `8`.
+4. `int()` on a string accepts leading zeros. (The **literal** `08` in code is a `SyntaxError`, though!)
 
 </details>
 
 ## Key Takeaways
 
-- Names are references to objects, not boxes containing values — assignment binds, it never copies.
-- Python is dynamically but *strongly* typed: types live on objects, and there's no silent cross-type coercion like JavaScript's `"3" + 3`.
-- `int` has arbitrary precision (no overflow); `float` is IEEE-754 double precision (subject to rounding); `bool` is a subclass of `int`.
-- Prefer `isinstance()` over `type() ==` for type checks — it respects inheritance and duck typing.
-- Never use `is` to compare values (especially ints and strings) — the small-int cache and string interning are implementation details, not guarantees. Use `is` only for `None` and sentinel/singleton checks.
+- Names point to objects. Assignment never copies.
+- Python is dynamically but strongly typed — no silent `"3" + 3`.
+- `int` never overflows; `float` is approximate; `bool` is an `int`.
+- Use `==` for values, `is` only for `None` and sentinels.
+- Prefer `isinstance()` over `type() ==`.
+- Use `is None`, not truthiness, when `0`, `""` or `False` are valid values.

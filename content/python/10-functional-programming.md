@@ -1,107 +1,60 @@
 # 10 — Functional Programming
 
-## Production Pipeline — `functools.partial` + `operator` + Composition
+## Functions Are Values
 
 ::code-wrapper{language="python"}
 ```python
-# ── A data transformation pipeline using functional composition ──
-# Each stage is a curried/partial function — no lambdas, all named, all testable.
+def shout(s):
+    return s.upper() + "!"
 
-import functools
-import operator
-from dataclasses import dataclass
+ops = {"loud": shout, "quiet": str.lower}   # store functions in a dict
+print(ops["loud"]("hi"))     # HI!
+print(ops["quiet"]("HI"))    # hi
 
-@dataclass
-class Order:
-    id: int
-    items: list[dict]    # each: {"name": str, "price": float, "qty": int}
-    status: str
+def apply_twice(f, x):        # take a function as an argument
+    return f(f(x))
 
-# ── A complete pipeline: filter → map → reduce, all lazy, all composable ──
-def process_orders(orders: list[Order], target_status: str) -> dict:
-    """Filter by status, compute per-order totals, return summary statistics."""
-    import statistics
-
-    # Stage 1: filter — generator expression, lazy
-    matching = (o for o in orders if o.status == target_status)
-
-    # Stage 2: map — compute order total via sum of (price * qty) per item
-    totals = (
-        sum(item["price"] * item["qty"] for item in o.items)
-        for o in matching
-    )
-
-    # Stage 3: reduce — materialize for multi-pass (mean AND max AND count)
-    totals_list = list(totals)   # must materialize — we need 3 passes (mean, max, len)
-
-    return {
-        "count": len(totals_list),
-        "mean": statistics.mean(totals_list) if totals_list else 0,
-        "max": max(totals_list) if totals_list else 0,
-        "total": sum(totals_list),
-    }
-
-orders = [
-    Order(1, [{"name": "book", "price": 20.0, "qty": 2}], "shipped"),
-    Order(2, [{"name": "pen", "price": 5.0, "qty": 10}], "pending"),
-    Order(3, [{"name": "laptop", "price": 999.0, "qty": 1}], "shipped"),
-]
-print(process_orders(orders, "shipped"))
-# {'count': 2, 'mean': 519.5, 'max': 999.0, 'total': 1039.0}
-
-# ── operator module: replace common lambdas with named, C-implemented functions ──
-people = [{"name": "Ada", "age": 36}, {"name": "Grace", "age": 85}]
-
-# ANTI-PATTERN: lambdas for trivial property access — slower, no name in tracebacks
-by_age_lambda = sorted(people, key=lambda p: p["age"])
-
-# CORRECT: operator.itemgetter — C-implemented, named, faster
-by_age = sorted(people, key=operator.itemgetter("age"))
-by_name = sorted(people, key=operator.itemgetter("name"))
-# itemgetter("age") returns a callable equivalent to lambda p: p["age"] but faster
+print(apply_twice(lambda n: n * 3, 2))   # 18
 ```
 ::
 
+**Tricky**: `shout` is the function, `shout()` calls it. Forgetting `()` gives no error:
+
 ::code-wrapper{language="python"}
 ```python
-# ── Production: lru_cache memory leak on instance methods — the silent killer ──
-# ANTI-PATTERN: @lru_cache on an instance method keeps every instance alive forever
+if shout:                    # always True — a function object is truthy
+    print("oops")
 
-from functools import lru_cache
-import gc
-
-class ExpensiveService:
-    def __init__(self, dataset_id: str):
-        self.dataset_id = dataset_id
-
-    @lru_cache(maxsize=None)   # BUG: caches on (self, *args) — self is part of the key!
-    def compute(self, key: str) -> float:
-        """Expensive computation — but the cache holds a STRONG reference to self."""
-        return hash(f"{self.dataset_id}:{key}") % 1000
-
-# Demonstrate the leak: create and drop instances, observe they're NOT collected
-service = ExpensiveService("ds-1")
-service.compute("x")           # caches result — cache now holds a ref to `service`
-del service                    # drop our reference
-gc.collect()
-# The service object is STILL alive — lru_cache's internal dict holds (service, "x") -> result
-# In a long-running web process creating millions of service objects, this is a memory leak.
-
-# CORRECT: cache a module-level function taking only hashable args, not `self`
-@lru_cache(maxsize=1024)
-def _compute_cached(dataset_id: str, key: str) -> float:
-    """Module-level cache — no instance reference, bounded by maxsize."""
-    return hash(f"{dataset_id}:{key}") % 1000
-
-class ExpensiveServiceFixed:
-    def __init__(self, dataset_id: str):
-        self.dataset_id = dataset_id
-
-    def compute(self, key: str) -> float:
-        return _compute_cached(self.dataset_id, key)   # delegate to module-level cache
-
-# Now instances are freely collectable — the cache only holds (str, str) -> float
+print(sorted(["b", "A"], key=str.lower))    # ['A', 'b'] — pass the function
+# sorted(["b", "A"], key=str.lower())       # TypeError — you called it with no args
 ```
+::
+
+## `lambda` — One-Expression Functions
+
+::code-wrapper{language="python"}
+```python
+square = lambda x: x * x
+print(square(4))             # 16
+print(square.__name__)       # '<lambda>' — no real name in tracebacks
+
+pairs = [(1, "b"), (2, "a"), (1, "a")]
+print(sorted(pairs, key=lambda p: p[1]))           # [(2, 'a'), (1, 'a'), (1, 'b')]
+print(sorted(pairs, key=lambda p: (p[0], p[1])))   # [(1, 'a'), (1, 'b'), (2, 'a')]
+print(sorted(pairs, key=lambda p: (-p[0], p[1])))  # [(2, 'a'), (1, 'a'), (1, 'b')] — desc, then asc
+```
+::
+
+**Tricky**: the sort is **stable** — equal keys keep their original order. That is why `(2, 'a')` stays before `(1, 'a')` in the first result.
+
+`max()`/`min()` return the **first** item on a tie:
+
+::code-wrapper{language="python"}
+```python
+words = ["bb", "aa", "c"]
+print(max(words, key=len))   # 'bb' — first of the longest
+```
+::
 
 ::code-wrapper{language="python"}
 ```python
@@ -144,6 +97,14 @@ strings = ["1", "2", "3"]
 numbers = list(map(int, strings))
 print(numbers)   # [1, 2, 3]
 
+# Tricky: map/filter are one-shot iterators, like generators
+m = map(int, strings)
+print(list(m))   # [1, 2, 3]
+print(list(m))   # []  ← already used up
+
+# Tricky: filter(None, ...) removes every FALSY item, not just None
+print(list(filter(None, [0, 1, "", "a", None, []])))   # [1, 'a']
+
 # vs. the comprehension equivalent — about equally readable here
 numbers_comp = [int(s) for s in strings]
 ```
@@ -167,6 +128,10 @@ print(product)   # 120
 words = ["the", "quick", "brown", "fox"]
 longest = reduce(lambda a, b: a if len(a) >= len(b) else b, words)
 print(longest)   # "quick" (first of the tied-longest, due to >=)
+
+# Edge case: empty input
+# reduce(lambda a, b: a + b, [])    # TypeError: reduce() of empty iterable with no initial value
+print(reduce(lambda a, b: a + b, [], 0))   # 0 — always pass an initial value
 ```
 ::
 

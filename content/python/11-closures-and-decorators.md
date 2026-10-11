@@ -1,56 +1,60 @@
 # 11 — Closures & Decorators
 
-## Closure Mechanics — `__closure__` and Cell Objects
+## What a Closure Is
+
+A **closure** is an inner function that remembers variables from the function that created it — even after that outer function has returned.
 
 ::code-wrapper{language="python"}
 ```python
-# ── Under the hood: closures store variables in "cell" objects, not a dict ──
-# A cell is a mutable container shared between the enclosing scope and the closure.
-# The closure doesn't copy the value — it holds a REFERENCE to the same cell.
+def make_multiplier(n):
+    def multiply(x):
+        return x * n        # `n` comes from the outer scope
+    return multiply
 
-def make_counter(start: int = 0):
-    """Each call creates a fresh scope with its own cell for `count`."""
-    count = start                    # local variable in make_counter's scope
+double = make_multiplier(2)
+triple = make_multiplier(3)
+print(double(5), triple(5))    # 10 15 — each closure has its own `n`
 
-    def increment() -> int:
-        nonlocal count               # binds `count` to the ENCLOSING cell, not a new local
-        count += 1
-        return count
+print(double.__closure__[0].cell_contents)   # 2 — where `n` is stored
+```
+::
 
-    return increment
+**Tricky**: a closure reads the variable's value **when it is called**, not when it is created:
 
-counter_a = make_counter(10)
-counter_b = make_counter(100)
+::code-wrapper{language="python"}
+```python
+def outer():
+    msg = "first"
+    def show():
+        return msg
+    msg = "second"          # changed AFTER show was defined
+    return show
 
-print(counter_a())   # 11 — counter_a's cell holds count=10, incremented to 11
-print(counter_a())   # 12 — same cell, persistent state
-print(counter_b())   # 101 — DIFFERENT cell, independent state
+print(outer()())            # 'second'
+```
+::
 
-# Introspect the closure's captured cells — the actual mechanism
-print(counter_a.__closure__)                         # (<cell at 0x...: int object at 0x...>,)
-print(counter_a.__closure__[0].cell_contents)        # 12 — the current value in the cell
+**Tricky**: mutating a captured list needs no `nonlocal`, but reassigning it does:
 
-# ── The late-binding trap: closures capture VARIABLES, not VALUES ──
-# ANTI-PATTERN: creating closures in a loop — they all share the SAME loop variable
-callbacks = []
-for i in range(3):
-    callbacks.append(lambda: i)      # captures `i` by reference, not by value at creation
+::code-wrapper{language="python"}
+```python
+def make_log():
+    items = []
+    def add(x):
+        items.append(x)     # OK — mutates the object, does not rebind the name
+        return items
+    return add
 
-print([cb() for cb in callbacks])    # [2, 2, 2] — all return the FINAL value of i
+add = make_log()
+add("a")
+print(add("b"))             # ['a', 'b']
 
-# FIX 1: default argument — evaluated once at def time, captures the CURRENT value
-callbacks_fixed = []
-for i in range(3):
-    callbacks_fixed.append(lambda i=i: i)   # i=i binds current i as default arg
-
-print([cb() for cb in callbacks_fixed])    # [0, 1, 2] — correct
-
-# FIX 2: factory function — each call creates a genuinely new scope with its own cell
-def make_callback(i: int):
-    return lambda: i               # `i` here is a parameter — fresh cell per call
-
-callbacks_factory = [make_callback(i) for i in range(3)]
-print([cb() for cb in callbacks_factory])  # [0, 1, 2] — correct
+def make_total():
+    total = 0
+    def add(x):
+        total = total + x   # UnboundLocalError — assignment makes `total` local
+        return total
+    return add
 ```
 ::
 
@@ -152,6 +156,45 @@ def greet2(name):
     return f"hello, {name}"
 greet2 = shout(greet2)
 print(greet2("ada"))   # HELLO, ADA
+```
+::
+
+### Decorators run at definition time
+
+::code-wrapper{language="python"}
+```python
+registry = []
+
+def register(func):
+    print(f"registering {func.__name__}")   # runs ONCE, when `def` runs
+    registry.append(func)
+    return func                              # return the SAME function, unwrapped
+
+@register
+def a(): pass
+# prints "registering a" immediately — no call needed
+
+@register
+def b(): pass
+
+print([f.__name__ for f in registry])   # ['a', 'b']
+```
+::
+
+**Tricky**: a decorator that forgets `return` replaces your function with `None`:
+
+::code-wrapper{language="python"}
+```python
+def broken(func):
+    print("decorating")
+    # no return!
+
+@broken
+def hello():
+    return "hi"
+
+print(hello)       # None
+# hello()          # TypeError: 'NoneType' object is not callable
 ```
 ::
 

@@ -1,97 +1,81 @@
 # 16 — Error Handling
 
-## Production Exception Hierarchy — Structured Errors for API Boundaries
+## `try` / `except` / `else` / `finally`
 
 ::code-wrapper{language="python"}
 ```python
-# ── A production exception hierarchy for a service layer ──
-# Design goals:
-#   1. One base exception (ServiceError) for catch-all by callers
-#   2. Category exceptions (AuthError, ValidationError) for domain-specific handling
-#   3. Specific exceptions carry structured data for programmatic response building
-#   4. All exceptions chain from their cause via `raise ... from e`
-
-from typing import Any
-
-class ServiceError(Exception):
-    """Base for all service-layer errors. Catch this for 'anything from our code'."""
-    def __init__(self, message: str, *, code: str = "SERVICE_ERROR"):
-        super().__init__(message)
-        self.code = code   # machine-readable error code for API responses
-
-class ValidationError(ServiceError):
-    """Input validation failure with per-field error details."""
-    def __init__(self, errors: list[dict[str, str]]):
-        self.errors = errors   # [{"field": "email", "message": "required"}, ...]
-        message = "; ".join(f"{e['field']}: {e['message']}" for e in errors)
-        super().__init__(message, code="VALIDATION_ERROR")
-
-class AuthError(ServiceError):
-    """Authentication/authorization failure."""
-    pass
-
-class RateLimitError(ServiceError):
-    """Rate limit exceeded — carries retry-after hint."""
-    def __init__(self, retry_after: float):
-        self.retry_after = retry_after
-        super().__init__(f"rate limited, retry after {retry_after}s", code="RATE_LIMITED")
-
-# ── Usage: translating low-level errors into domain-specific ones ──
-def parse_user(raw: dict[str, Any]) -> dict:
-    """Parse and validate user input — raises ValidationError with field details."""
-    errors = []
-
-    if not raw.get("email"):
-        errors.append({"field": "email", "message": "required"})
-    elif "@" not in raw["email"]:
-        errors.append({"field": "email", "message": "invalid format"})
-
-    age = raw.get("age")
-    if age is None:
-        errors.append({"field": "age", "message": "required"})
-    elif not isinstance(age, int):
-        errors.append({"field": "age", "message": "must be integer"})
-    elif age < 0 or age > 150:
-        errors.append({"field": "age", "message": "must be 0-150"})
-
-    if errors:
-        raise ValidationError(errors)   # structured data attached, not just a string
-
-    return raw
-
-# ── Exception chaining: translate a DB error into a domain error ──
-class DatabaseError(ServiceError):
-    pass
-
-def load_user(user_id: int) -> dict:
+def parse(text):
     try:
-        # simulate a DB call that might fail
-        if user_id < 0:
-            raise KeyError(f"user {user_id} not found")
-        return {"id": user_id, "name": "Ada"}
-    except KeyError as e:
-        # `from e` preserves the original traceback — debuggable, not just "user not found"
-        raise DatabaseError(f"user {user_id} not found") from e
+        n = int(text)            # only the line that can fail
+    except ValueError:
+        print("not a number")
+        return None
+    else:
+        print("parsed OK")       # runs only if NO exception happened
+        return n
+    finally:
+        print("always runs")     # runs no matter what — even after return
 
-# ── API layer: converting exceptions to HTTP responses ──
-def handle_request(raw_input: dict):
-    """Simulated API handler — maps exceptions to structured HTTP-like responses."""
-    try:
-        user = parse_user(raw_input)
-        return {"status": 200, "body": user}
-    except ValidationError as e:
-        return {"status": 422, "body": {"code": e.code, "errors": e.errors}}
-    except ServiceError as e:
-        return {"status": 500, "body": {"code": e.code, "message": str(e)}}
-
-# Test: validation failure with multiple field errors
-result = handle_request({"age": -5})
-print(result)
-# {'status': 422, 'body': {'code': 'VALIDATION_ERROR',
-#   'errors': [{'field': 'email', 'message': 'required'},
-#              {'field': 'age', 'message': 'must be 0-150'}]}}
+parse("42")    # parsed OK / always runs
+parse("x")     # not a number / always runs
 ```
 ::
+
+**Why `else`?** Code in `else` is **not** protected by the `except`. If it raises, you see the real error instead of hiding it under "not a number".
+
+### `finally` beats `return`
+
+::code-wrapper{language="python"}
+```python
+def f():
+    try:
+        return "try"
+    finally:
+        return "finally"     # overrides the return above!
+
+print(f())                   # 'finally'
+
+def g():
+    try:
+        1 / 0
+    finally:
+        return "swallowed"   # the ZeroDivisionError silently disappears!
+
+print(g())                   # 'swallowed'
+```
+::
+
+Python 3.14 warns about this: `SyntaxWarning: 'return' in a 'finally' block`. Never `return`, `break` or `continue` inside `finally`.
+
+**Tricky**: the return value is computed **before** `finally` runs:
+
+::code-wrapper{language="python"}
+```python
+def h():
+    x = 1
+    try:
+        return x       # value 1 is saved now
+    finally:
+        x = 2          # changes x, but not the saved return value
+
+print(h())             # 1
+```
+::
+
+### The exception variable is deleted after `except`
+
+::code-wrapper{language="python"}
+```python
+try:
+    1 / 0
+except ZeroDivisionError as e:
+    pass
+
+print(e)    # NameError: name 'e' is not defined
+```
+::
+
+**Why**: Python runs `del e` at the end of the `except` block (to break a reference cycle with the traceback). Copy it to another name if you need it later.
 
 ## Exception Hierarchy and Catching Specifically
 
@@ -342,7 +326,7 @@ def set_discount(percent):
 
 ## 🧠 Spot the Bug
 
-A retry helper is supposed to retry a flaky operation up to 3 times, but it swallows a critical bug that should have crashed the program immediately. Find the issue.
+A retry helper should retry a flaky call up to 3 times. Instead it hides a real bug. Find it.
 
 ::code-wrapper{language="python"}
 ```python
@@ -355,8 +339,8 @@ def fetch_with_retry(fetch_fn, attempts=3):
     raise RuntimeError("All attempts failed")
 
 def fetch_data():
-    respones = {"status": "ok"}   # typo: should be `response`
-    return respones["status"]
+    respones = {"status": "ok"}
+    return response["status"]      # typo: respones vs response
 
 fetch_with_retry(fetch_data)
 ```
@@ -365,9 +349,19 @@ fetch_with_retry(fetch_data)
 <details>
 <summary>Answer</summary>
 
-`fetch_data` actually has no bug in the shown snippet — but suppose the real function had a genuine typo like `response["staus"]` (a `KeyError` from a misspelled key, i.e., a real programming mistake, not a transient failure). The bare `except:` in `fetch_with_retry` catches *that* exactly the same way it catches a legitimate transient failure (like a `ConnectionError`) — it retries three times, fails three times for the exact same reason (the typo doesn't go away on retry), and then raises a generic `RuntimeError("All attempts failed")` that completely hides the real `KeyError`/`NameError` and its traceback.
+::code-wrapper{language="bash"}
+```bash
+Attempt 1 failed, retrying...
+Attempt 2 failed, retrying...
+Attempt 3 failed, retrying...
+RuntimeError: All attempts failed
+```
+::
 
-The fix is to only catch the specific, genuinely-transient exception types that retrying could plausibly fix, and let programming errors propagate immediately:
+The typo raises `NameError` — a programming bug that no retry can fix. The bare `except:` catches it like a network error, retries it 3 times, then hides it under a generic `RuntimeError`. The real `NameError` and its line number are lost.
+
+Fix: catch only errors that a retry can fix.
+
 ::code-wrapper{language="python"}
 ```python
 def fetch_with_retry(fetch_fn, attempts=3):
@@ -375,14 +369,14 @@ def fetch_with_retry(fetch_fn, attempts=3):
         try:
             return fetch_fn()
         except (ConnectionError, TimeoutError) as e:
-            print(f"Attempt {attempt + 1} failed: {e}, retrying...")
+            print(f"Attempt {attempt + 1} failed: {e}")
     raise RuntimeError("All attempts failed")
 ```
 ::
 
-Now a `KeyError`/`NameError`/`TypeError` from a real bug propagates immediately on the first attempt, with its original traceback intact, instead of being disguised as a generic "all attempts failed" after three pointless retries.
+Now the `NameError` crashes immediately with its real traceback.
 
-**The lesson**: a bare (or overly broad) `except` inside a retry loop is especially dangerous — it doesn't just hide one bug, it wastes time re-attempting a failure that retrying can never fix, then buries the real error under a misleading top-level message.
+**The lesson**: a broad `except` in a retry loop hides bugs **and** wastes time retrying them.
 
 </details>
 

@@ -59,6 +59,48 @@ print(m.annual_bonus())   # 90000*0.05 + 5*100 = 4500 + 500 = 5000.0
 
 **Best practice**: always call `super().__init__(...)` in a subclass's `__init__` unless you have a specific, deliberate reason not to (a common pattern in mixins) — skipping it means the parent's setup logic silently never runs, leaving the instance in a partially-initialized state that only fails later, far from the actual bug.
 
+### The parent-calls-overridden-method trap
+
+::code-wrapper{language="python"}
+```python
+class Base:
+    def __init__(self):
+        self.setup()            # calls the CHILD's setup() if overridden
+
+    def setup(self):
+        pass
+
+class Child(Base):
+    def __init__(self):
+        super().__init__()      # Base.__init__ → Child.setup() runs NOW
+        self.items = []         # ...but items is created only AFTER
+
+    def setup(self):
+        self.items.append(1)
+
+# Child()   # AttributeError: 'Child' object has no attribute 'items'
+```
+::
+
+**Why**: `self.setup()` is dispatched on the real object type (`Child`), even inside `Base.__init__`. Set up attributes **before** calling `super().__init__()`, or avoid calling overridable methods from `__init__`.
+
+### Forgetting `super().__init__()`
+
+::code-wrapper{language="python"}
+```python
+class Animal:
+    def __init__(self, name):
+        self.name = name
+
+class Bird(Animal):
+    def __init__(self, name, can_fly):
+        self.can_fly = can_fly      # forgot super().__init__(name)
+
+b = Bird("Tweety", True)
+# b.name    # AttributeError: 'Bird' object has no attribute 'name'
+```
+::
+
 ## Multiple Inheritance and the Diamond Problem
 
 ::code-wrapper{language="python"}
@@ -280,7 +322,7 @@ print(isinstance(rw, (int, str, Reader)))   # True — matches Reader
 
 ## 🧠 Spot the Bug
 
-A plugin framework uses mixins to compose functionality. Some plugins mysteriously never get their setup code executed. Find the bug.
+A plugin uses two mixins. The logger never starts. Why?
 
 ::code-wrapper{language="python"}
 ```python
@@ -295,35 +337,40 @@ class LoggingMixin:
         self.log = []
         print("Logger initialized")
 
-class Plugin(LoggingMixin, CachingMixin):
+class Plugin(CachingMixin, LoggingMixin):
     def __init__(self, name):
         super().__init__()
         self.name = name
 
 p = Plugin("analytics")
-print(hasattr(p, "cache"))
+print(hasattr(p, "log"))
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-Prints only `Logger initialized` (never `Cache initialized`), and `hasattr(p, "cache")` is `False`. `Plugin.__mro__` is `[Plugin, LoggingMixin, CachingMixin, object]`. `Plugin.__init__` calls `super().__init__()`, which runs `LoggingMixin.__init__`; that correctly calls `super().__init__(*args, **kwargs)`, advancing to `CachingMixin.__init__` — so far so good. But `CachingMixin.__init__` does **not** call `super().__init__(*args, **kwargs)` — it just sets `self.cache` and returns, silently stopping the cooperative chain right there.
+::code-wrapper{language="bash"}
+```bash
+Cache initialized
+False
+```
+::
 
-In this particular example `CachingMixin` is last before `object` so nothing further is skipped — but the real bug is structural: `CachingMixin` breaks the contract of cooperative multiple inheritance. Swap the class order to `Plugin(CachingMixin, LoggingMixin)` and now `LoggingMixin.__init__` (which does the right thing) never runs at all, because `CachingMixin.__init__` runs first and never calls `super()`.
+The MRO is `[Plugin, CachingMixin, LoggingMixin, object]`. `Plugin.__init__` calls `super().__init__()`, which runs `CachingMixin.__init__`. That method **does not** call `super().__init__()`, so the chain stops there. `LoggingMixin.__init__` never runs, and `self.log` never exists.
 
-The fix is to make every mixin in a cooperative hierarchy always call `super().__init__(*args, **kwargs)`, even if it appears to be "the last one":
+Swap the order to `Plugin(LoggingMixin, CachingMixin)` and it "works" — but only by luck. The fix is to make every mixin cooperative:
+
 ::code-wrapper{language="python"}
 ```python
 class CachingMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cache = {}
-        print("Cache initialized")
 ```
 ::
 
-**The lesson**: every class participating in cooperative multiple inheritance must call `super().__init__(*args, **kwargs)`, regardless of where you assume it sits in the MRO — assuming your class is "the base" is exactly the assumption that breaks when someone reorders the inheritance list later.
+**The lesson**: in cooperative multiple inheritance, every class must call `super().__init__(...)` — even the one you think is last.
 
 </details>
 

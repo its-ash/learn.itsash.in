@@ -1,78 +1,93 @@
 # 07 — Lists & Tuples
 
-## Memory Layout and Amortized Append — Why Lists Are Fast
+## Lists — Ordered, Mutable, Mixed Types
 
 ::code-wrapper{language="python"}
 ```python
-import sys
+nums = [3, 1, 2]
+nums.append(4)          # [3, 1, 2, 4]
+nums.insert(0, 0)       # [0, 3, 1, 2, 4]
+nums.remove(1)          # removes the first VALUE 1 → [0, 3, 2, 4]
+last = nums.pop()       # removes and returns the last item → 4
+print(nums, last)       # [0, 3, 2] 4
 
-# ── List over-allocation: lists pre-grow to amortize append to O(1) ──
-# A list of N elements has capacity > N — the underlying PyObject*[] array
-# is over-allocated by ~(N/8 + 3) slots, so most appends don't trigger a realloc.
-
-def show_capacity(n: int):
-    """Build a list of n elements, show its actual byte size and over-allocation."""
-    lst = []
-    for i in range(n):
-        lst.append(i)
-    # sys.getsizeof reports the list object size, NOT the pointed-to objects
-    # Each slot is 8 bytes (a pointer) on 64-bit CPython
-    size = sys.getsizeof(lst)
-    slots = (size - sys.getsizeof([])) // 8   # subtract list header, divide by pointer size
-    print(f"len={len(lst):>6}  sizeof={size:>6}  capacity≈{slots:>6}  overalloc={slots - len(lst):>4}")
-
-show_capacity(0)      # len=     0  capacity≈     0  — empty list, no pointer array
-show_capacity(10)     # len=    10  capacity≈    16  — 6 spare slots
-show_capacity(100)    # len=   100  capacity≈   116  — ~16% over-allocated
-show_capacity(1000)   # len=  1000  capacity≈  1030  — ~3% over-allocated (ratio shrinks)
-
-# ── Tuple: no over-allocation (immutable, no growth needed) → smaller footprint ──
-lst = [1, 2, 3, 4, 5]
-tup = (1, 2, 3, 4, 5)
-print(f"list sizeof: {sys.getsizeof(lst)}")   # ~120 bytes — header + 8 spare pointer slots
-print(f"tuple sizeof: {sys.getsizeof(tup)}")  # ~64 bytes — header + exactly 5 slots, no spare
-
-# Tuples of constants can be folded into the code object's co_consts at compile time
-# (a "constant tuple" optimization) — the tuple is created once, reused on each access
+mixed = [1, "two", 3.0, None, [5]]   # any types allowed
+print(len(mixed))       # 5 — the inner list counts as ONE item
 ```
 ::
+
+### `append` vs `extend` vs `+`
 
 ::code-wrapper{language="python"}
 ```python
-# ── Production: building a 2D matrix correctly ──
-# The #1 Python gotcha — shared inner references in list multiplication
+a = [1, 2]
+a.append([3, 4])
+print(a)          # [1, 2, [3, 4]]  — adds ONE item (the list itself)
 
-# ANTI-PATTERN: [[0] * cols] * rows — all rows are the SAME list object
-def bad_matrix(rows, cols):
-    return [[0] * cols] * rows    # inner [0]*cols is created ONCE, referenced `rows` times
+b = [1, 2]
+b.extend([3, 4])
+print(b)          # [1, 2, 3, 4]    — adds EACH item
 
-board = bad_matrix(3, 3)
-board[0][0] = 1
-print(board)   # [[1, 0, 0], [1, 0, 0], [1, 0, 0]] — ALL rows changed! same inner list object
+c = [1, 2]
+c.extend("hi")
+print(c)          # [1, 2, 'h', 'i'] ← a string is iterable, so each char is added!
 
-# CORRECT: comprehension creates a fresh inner list per row
-def good_matrix(rows, cols):
-    return [[0] * cols for _ in range(rows)]   # [0]*cols evaluated fresh each iteration
-
-board = good_matrix(3, 3)
-board[0][0] = 1
-print(board)   # [[1, 0, 0], [0, 0, 0], [0, 0, 0]] — only row 0 changed
-
-# ── Production: in-place filtering without allocation ──
-# Remove items matching a predicate WITHOUT creating a new list (memory-constrained environments)
-def filter_inplace(lst: list, predicate):
-    """Remove items where predicate(item) is True — O(n), no second allocation."""
-    lst[:] = [x for x in lst if not predicate(x)]   # slice assignment mutates in place
-    # `lst[:] = ...` replaces the CONTENTS of lst, keeping the same object identity
-    # All external references to `lst` see the update (unlike `lst = [...]` which rebinds)
-
-data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-ref = data   # external reference
-filter_inplace(data, lambda x: x % 3 == 0)
-print(data)   # [1, 2, 4, 5, 7, 8, 10] — filtered
-print(ref is data)   # True — same object, ref sees the change too
+c += "ok"         # += on a list works like extend
+print(c)          # [1, 2, 'h', 'i', 'o', 'k']
+# c = c + "ok"    # TypeError: can only concatenate list (not "str") to list
 ```
 ::
+
+### Methods that return `None`
+
+::code-wrapper{language="python"}
+```python
+nums = [3, 1, 2]
+result = nums.sort()
+print(result)          # None — sort() changes the list in place
+print(nums)            # [1, 2, 3]
+
+print(sorted([3, 1, 2]))   # [1, 2, 3] — sorted() returns a NEW list
+print(reversed([1, 2, 3])) # <list_reverseiterator ...> — lazy, wrap in list()
+```
+::
+
+### Edge cases
+
+::code-wrapper{language="python"}
+```python
+empty = []
+# empty[0]        # IndexError: list index out of range
+# empty.pop()     # IndexError: pop from empty list
+print(empty[:1])  # []  — slicing never raises
+print(max([], default=0))   # 0 — max([]) alone raises ValueError
+
+nums = [1, 2, 3]
+# nums.remove(9)  # ValueError: list.remove(x): x not in list
+print(nums.index(2))        # 1
+print([1, 2] * 0)           # []
+print([1, 2] * -1)          # []  — negative repeat is just empty
+
+print([1, 2, 3] < [1, 3])   # True — compares item by item, 2 < 3 decides
+print([1, 2] < [1, 2, 0])   # True — shorter prefix is smaller
+```
+::
+
+### The shared-row matrix trap
+
+::code-wrapper{language="python"}
+```python
+board = [[0] * 3] * 3      # ONE inner list, referenced 3 times
+board[0][0] = 1
+print(board)               # [[1, 0, 0], [1, 0, 0], [1, 0, 0]]  ← all rows changed!
+
+board = [[0] * 3 for _ in range(3)]   # a NEW inner list per row
+board[0][0] = 1
+print(board)               # [[1, 0, 0], [0, 0, 0], [0, 0, 0]]
+```
+::
+
+`[0] * 3` is fine — ints are immutable. The trap is `*` on a list that **contains mutable objects**.
 
 ## Slicing Deep Dive
 

@@ -1,126 +1,53 @@
 # 20 — Type Hints & Typing
 
-## Production Type System — Generics, Protocols, and API Boundaries
+## Hints Are Not Checked at Run Time
+
+Type hints are **notes for tools** (mypy, pyright, your editor). Python itself ignores them:
 
 ::code-wrapper{language="python"}
 ```python
-# ── Production: a fully typed repository pattern with generics and protocols ──
-# Demonstrates the real-world type system: TypeVar bounds, Protocol (structural typing),
-# TypedDict for JSON shapes, and overload for API ergonomics.
+x: int = "hello"        # no error
+print(x)                # hello
 
-from typing import (
-    Protocol, TypeVar, Generic, TypedDict, NotRequired,
-    overload, Callable, Final, TYPE_CHECKING,
-)
-from dataclasses import dataclass
-from abc import abstractmethod
+def add(a: int, b: int) -> int:
+    return a + b
 
-# ── Protocol: structural typing — "if it has these methods, it qualifies" ──
-# No inheritance required — any class with matching methods satisfies the Protocol.
-class Repository(Protocol[T := TypeVar("T", bound="Entity")]):
-    """Repository protocol — any class implementing these methods is a valid repo."""
-    @abstractmethod
-    def get_by_id(self, id: int) -> T | None: ...
-    @abstractmethod
-    def save(self, entity: T) -> T: ...
-    @abstractmethod
-    def delete(self, id: int) -> bool: ...
-
-# ── TypedDict: typed JSON API shapes — validated by mypy, invisible at runtime ──
-class UserAPIResponse(TypedDict):
-    id: int
-    email: str
-    name: str
-    roles: list[str]
-    metadata: NotRequired[dict[str, str]]   # 3.11+ — key may be absent entirely
-
-class CreateUserRequest(TypedDict):
-    email: str
-    name: str
-    roles: NotRequired[list[str]]   # optional with default in the handler
-
-# ── Generic repository implementation ──
-@dataclass
-class Entity:
-    id: int
-
-@dataclass
-class User(Entity):
-    email: str
-    name: str
-
-class InMemoryRepository(Generic[T]):
-    """A generic in-memory repository — type-safe for any Entity subclass."""
-    def __init__(self) -> None:
-        self._store: dict[int, T] = {}
-
-    def get_by_id(self, id: int) -> T | None:
-        return self._store.get(id)
-
-    def save(self, entity: T) -> T:
-        self._store[entity.id] = entity   # type: ignore[attr-defined] — Entity has .id
-        return entity
-
-    def delete(self, id: int) -> bool:
-        return self._store.pop(id, None) is not None
-
-    def find_all(self) -> list[T]:
-        return list(self._store.values())
-
-# ── Usage: mypy verifies the entire chain ──
-user_repo: InMemoryRepository[User] = InMemoryRepository()
-user_repo.save(User(id=1, email="ada@example.com", name="Ada"))
-
-found = user_repo.get_by_id(1)   # mypy infers: User | None
-if found:
-    print(found.email)            # mypy knows `found` is User here (narrowed by `if`)
-
-# mypy catches type mismatches at the call site:
-# user_repo.save("not a user")   # mypy error: Argument 1 has incompatible type "str"; expected "User"
+print(add("a", "b"))    # 'ab' — no error at run time
+print(add.__annotations__)
+# {'a': <class 'int'>, 'b': <class 'int'>, 'return': <class 'int'>}
 ```
 ::
 
+**Tricky**: an annotation without a value creates **no** variable:
+
 ::code-wrapper{language="python"}
 ```python
-# ── TYPE_CHECKING: avoid runtime import costs for type-only imports ──
-# Imports inside `if TYPE_CHECKING:` are invisible at runtime — no circular imports,
-# no heavy module load, but mypy/pyright see them and type-check correctly.
+y: int          # only a note — y does not exist yet
+print(y)        # NameError: name 'y' is not defined
+```
+::
 
-from typing import TYPE_CHECKING
+**Tricky**: you cannot use a generic hint with `isinstance`:
 
-if TYPE_CHECKING:
-    # These imports exist ONLY for the type checker — zero runtime cost
-    import expensive_module   # would be slow/circular at runtime, fine for mypy
-    from myapp.models import HeavyModel   # forward reference, resolved by mypy only
+::code-wrapper{language="python"}
+```python
+isinstance([1, 2], list[int])
+# TypeError: isinstance() argument 2 cannot be a parameterized generic
 
-def process(item: "HeavyModel") -> "expensive_module.Result":
-    # The string annotations ("HeavyModel") are not evaluated at runtime —
-    # they're parsed as strings and resolved by mypy from the TYPE_CHECKING imports
-    return item.process()   # type: ignore[attr-defined] — runtime doesn't know the type
+isinstance([1, 2], list)                          # True — check the outer type only
+all(isinstance(n, int) for n in [1, 2])           # True — check items yourself
+```
+::
 
-# ── Final: preventing reassignment of constants and overriding of methods ──
-MAX_CONNECTIONS: Final[int] = 100   # mypy flags any reassignment as an error
-# MAX_CONNECTIONS = 200   # mypy error: Cannot assign to final name
+**Tricky**: a hint does not fix a mutable default (chapter 05):
 
-class BaseService:
-    def handle(self) -> None: ...
+::code-wrapper{language="python"}
+```python
+def add_tag(tag: str, tags: list[str] = []) -> list[str]:   # still ONE shared list
+    tags.append(tag)
+    return tags
 
-class CachedService(BaseService):
-    @property
-    def is_cached(self) -> bool: ...
-
-# ── overload: multiple signatures for the same function ──
-@overload
-def parse_value(raw: str) -> str: ...
-@overload
-def parse_value(raw: bytes) -> bytes: ...
-def parse_value(raw: str | bytes) -> str | bytes:
-    """Actual implementation — mypy uses the overloads for call-site type checking."""
-    return raw.strip()
-
-# mypy knows: parse_value("x") returns str, parse_value(b"x") returns bytes
-result_str: str = parse_value("  hello  ")     # mypy: OK — str overload
-result_bytes: bytes = parse_value(b"  hello  ")  # mypy: OK — bytes overload
+print(add_tag("a"), add_tag("b"))   # ['a', 'b'] ['a', 'b']
 ```
 ::
 
@@ -225,8 +152,8 @@ Python 3.12 introduced a terser native syntax for generics that replaces `TypeVa
 
 ::code-wrapper{language="python"}
 ```python
-# Python 3.12+ — no TypeVar import needed
-def first(items: list[T]) -> T:
+# Python 3.12+ — no TypeVar import needed; declare [T] after the name
+def first[T](items: list[T]) -> T:
     return items[0]
 
 class Stack[T]:
@@ -461,20 +388,29 @@ print(get_display_name(2, {1: "ada"}))       # crashes
 <details>
 <summary>Answer</summary>
 
-`dict.get(user_id)` returns `None` when the key is missing — that's exactly why `name` is correctly annotated `Optional[str]`. But the very next line, `name.upper()`, calls `.upper()` unconditionally on `name`, without ever checking for `None` first. If `mypy` is run with default (non-strict) settings, this specific pattern can slip through depending on configuration and mypy version, but under proper strict settings (`strict = true` or at minimum `--strict-optional`, which is on by default in modern mypy), this SHOULD be flagged as `error: Item "None" of "Optional[str]" has no attribute "upper"`. The scenario here is the common real failure mode: the type checker isn't run at all in CI, or is run with settings loose enough to miss it, so the `Optional` annotation was correctly written but never actually enforced before deployment — `users.get(2)` returns `None` at runtime, and `None.upper()` raises `AttributeError: 'NoneType' object has no attribute 'upper'`.
+`users.get(2)` returns `None`, and `None.upper()` raises `AttributeError: 'NoneType' object has no attribute 'upper'`.
 
-The fix handles the `None` case explicitly, which is the entire point of marking something `Optional` in the first place:
+The hint `Optional[str]` is correct — and `mypy` **does** report it:
+
+::code-wrapper{language="bash"}
+```bash
+error: Item "None" of "str | None" has no attribute "upper"  [union-attr]
+```
+::
+
+The real bug is that nobody ran `mypy` in CI, so the warning never stopped the deploy. Python itself never checks hints. Fix the code:
+
 ::code-wrapper{language="python"}
 ```python
 def get_display_name(user_id: int, users: dict[int, str]) -> str:
     name = users.get(user_id)
     if name is None:
         return "Unknown User"
-    return name.upper()
+    return name.upper()       # mypy now knows name is str here
 ```
 ::
 
-**The lesson**: an `Optional[X]` annotation is a promise that must be honored with an actual `None` check in the code — it documents the possibility of `None` but does nothing to prevent a missed check unless a type checker is actually run, in strict mode, as a required CI gate rather than an optional local habit.
+**The lesson**: `Optional[X]` documents that `None` is possible. You must still check for it — and run the type checker as a required CI step.
 
 </details>
 

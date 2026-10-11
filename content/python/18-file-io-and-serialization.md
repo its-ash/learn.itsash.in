@@ -70,6 +70,24 @@ with open("large.bin", "rb") as f:
 ```
 ::
 
+### Read-position gotchas
+
+::code-wrapper{language="python"}
+```python
+with open("notes.txt", "w", encoding="utf-8") as f:
+    f.write("a\nb\n")
+
+with open("notes.txt", encoding="utf-8") as f:
+    print(repr(f.read()))   # 'a\nb\n'
+    print(repr(f.read()))   # ''   ← the cursor is at the end; nothing left
+    f.seek(0)               # rewind
+    print(f.readline())     # 'a\n' — lines keep their newline!
+
+with open("notes.txt", "w", encoding="utf-8") as f:
+    pass                    # opening with "w" ALREADY emptied the file — even with no write
+```
+::
+
 ## `pathlib` — The Modern Way to Handle Paths
 
 ::code-wrapper{language="python"}
@@ -144,6 +162,14 @@ print(json.dumps(data_fixed))   # {"coords": [1, 2], "tags": [...]}  — order o
 round_tripped = json.loads(json.dumps({"coords": (1, 2)}))
 print(round_tripped)                # {'coords': [1, 2]}
 print(type(round_tripped["coords"]))  # <class 'list'> — NOT tuple!
+
+# Dict keys always become strings
+print(json.loads(json.dumps({1: "a"})))           # {'1': 'a'}  ← int key is now "1"
+print(json.loads(json.dumps({1: "a", True: "b"})))  # {'1': 'b'} — 1 and True were one key already
+
+# Python allows NaN, but strict JSON does not
+print(json.dumps(float("nan")))    # 'NaN' — invalid JSON for many other parsers!
+# json.dumps(float("nan"), allow_nan=False)   # ValueError: Out of range float values are not JSON compliant
 ```
 ::
 

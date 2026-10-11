@@ -1,87 +1,51 @@
 # 06 — Strings & Text
 
-## String Representation — Unicode Code Points, Not Bytes or Graphemes
+## Strings Are Immutable Sequences of Code Points
 
 ::code-wrapper{language="python"}
 ```python
-# Python str stores Unicode CODE POINTS (integers in 0..0x10FFFF).
-# This is NEITHER bytes (the on-disk encoding) NOR graphemes (what users see).
+s = "hello"
+# s[0] = "H"          # TypeError: 'str' object does not support item assignment
+s = "H" + s[1:]       # build a NEW string instead
+print(s)              # Hello
 
-# ── The three-level model ──
-s = "café"
-print(len(s))                     # 4 — four CODE POINTS: c, a, f, é
-print(len(s.encode("utf-8")))     # 5 — five BYTES (é is 2 bytes in UTF-8: 0xC3 0xA9)
-# User-perceived "characters" (grapheme clusters) can differ from both — see below
-
-# ── Code point ↔ integer conversion ──
-print(ord("A"))                   # 65 — the integer value of code point U+0041
-print(chr(65))                    # 'A' — code point U+0041 → str
-print(hex(ord("é")))             # '0xe9' — U+00E9 (precomposed form)
-
-# ── Production: Unicode normalization before comparison/lookup ──
-# "é" has TWO valid Unicode representations:
-#   NFC (precomposed):  U+00E9      — one code point, "é"
-#   NFD (decomposed):   U+0065 + U+0301 — "e" + combining acute accent — two code points
-import unicodedata
-
-nfc = "é"                          # precomposed — \u00e9
-nfd = "e\u0301"                    # decomposed — "e" + combining accent
-
-print(nfc == nfd)                  # False! — different code point sequences
-print(len(nfc), len(nfd))          # 1 2 — different lengths!
-print(unicodedata.normalize("NFC", nfd) == nfc)   # True — normalize before comparing
-
-# ANTI-PATTERN: using user-supplied strings as dict keys without normalization
-# A user who types "café" via a compose key vs. a dead-key accent produces
-# different code point sequences — they'll be DIFFERENT keys in a dict.
-user_input_a = "café"              # NFC from one input method
-user_input_b = "cafe\u0301"        # NFD from another input method
-cache = {user_input_a: "data"}
-print(user_input_b in cache)       # False — miss! same visual string, different code points
-
-# CORRECT: normalize all strings to NFC before use as keys/comparisons
-def normalize_key(s: str) -> str:
-    return unicodedata.normalize("NFC", s)
-
-cache = {normalize_key(user_input_a): "data"}
-print(normalize_key(user_input_b) in cache)   # True — normalized comparison works
+t = s
+s += "!"              # s points to a new string; t still points to the old one
+print(t, s)           # Hello Hello!
 ```
 ::
 
+`len()` counts **code points**, not bytes and not "what you see":
+
 ::code-wrapper{language="python"}
 ```python
-# ── Grapheme clusters: what users perceive vs. what len() reports ──
-# Emoji and flags are the most common source of "len() is wrong" bugs.
+print(len("café"))                  # 4 code points
+print(len("café".encode("utf-8")))  # 5 bytes — é takes 2 bytes in UTF-8
+print(len("🇺🇸"))                   # 2 — a flag is TWO code points
+print(ord("A"), chr(97))            # 65 'a'
+```
+::
 
-flag = "🇺🇸"                       # US flag — two REGIONAL INDICATOR code points
-print(len(flag))                   # 2 — two code points, one visible glyph
-print([hex(ord(c)) for c in flag]) # ['0x1f1fa', '0x1f1f8'] — U=U+1F1FA, S=U+1F1F8
+**Tricky**: two strings can look identical but not be equal:
 
-family = "👨‍👩‍👧‍👦"                  # family emoji — joined by ZWJ (zero-width joiner)
-print(len(family))                 # 7 — seven code points (4 people + 3 ZWJ), one glyph
-# ZWJ = U+200D — invisible joiner that tells the renderer to combine adjacent emoji
+::code-wrapper{language="python"}
+```python
+a = "café"            # é as ONE code point (U+00E9)
+b = "cafe\u0301"      # e + combining accent (TWO code points)
+print(a, b)           # café café  — same on screen
+print(a == b)         # False
+print(len(a), len(b)) # 4 5
 
-# For correct user-perceived character counting, use the \X regex grapheme cluster
-# (requires the `regex` module, not stdlib `re`, which lacks grapheme support)
-# import regex
-# print(len(regex.findall(r"\X", family)))   # 1 — one grapheme cluster
+import unicodedata
+print(unicodedata.normalize("NFC", b) == a)   # True — normalize user input before comparing
+```
+::
 
-# ── Production: truncating user-display text at grapheme boundaries ──
-# Naive truncation at code point N can split a combining character from its base
-def truncate_naive(s: str, max_len: int) -> str:
-    """WRONG — can split combining accents from their base characters."""
-    return s[:max_len]              # cuts at code point boundary, not grapheme boundary
+And reversing a flag gives a different flag:
 
-def truncate_safe(s: str, max_len: int) -> str:
-    """CORRECT — counts grapheme clusters, not code points (requires `regex` module)."""
-    import regex
-    clusters = regex.findall(r"\X", s)
-    return "".join(clusters[:max_len])
-
-# "café" in NFD form: c, a, f, e, combining-acute — truncating at 4 drops the accent
-nfd_cafe = "cafe\u0301"
-print(truncate_naive(nfd_cafe, 4))   # "cafe" — accent lost! displays as "cafe" not "café"
-# print(truncate_safe(nfd_cafe, 4))  # "café" — correct, keeps the combining cluster intact
+::code-wrapper{language="python"}
+```python
+print("🇺🇸"[::-1])     # 🇸🇺 — the code points U,S became S,U
 ```
 ::
 
@@ -123,6 +87,39 @@ print("hello world".title())                          # "Hello World"
 print("  ".isspace())                                    # True
 print("42".isdigit())                                      # True
 print("Hello123".isalnum())                                   # True
+```
+::
+
+### Method gotchas
+
+::code-wrapper{language="python"}
+```python
+# strip() removes a SET OF CHARACTERS, not a substring
+print("report.txt".rstrip(".txt"))       # 'repor'  ← the 't' of 'report' is gone too!
+print("report.txt".removesuffix(".txt")) # 'report' — correct (3.9+)
+
+# split() vs split(" ")
+print(" a  b ".split())        # ['a', 'b']               — any whitespace, drops empties
+print(" a  b ".split(" "))     # ['', 'a', '', 'b', '']   — exact separator, keeps empties
+print("".split(","))           # ['']   ← one empty string, not []
+print("".split())              # []
+# "abc".split("")              # ValueError: empty separator
+
+# The empty string is "inside" every string
+print("" in "abc")             # True
+print("abc".count(""))         # 4 — before a, b, c and at the end
+
+# title() treats ' as a word break
+print("they're".title())       # "They'Re"
+
+# upper() can change length
+print("ß".upper())             # 'SS'
+
+# Comparison is by code point: all capitals come before all lowercase
+print("Zebra" < "apple")       # True
+print("10" < "9")              # True — compares '1' vs '9', not numbers
+print(sorted(["b", "A", "a"])) # ['A', 'a', 'b']
+print(sorted(["b", "A", "a"], key=str.lower))   # ['A', 'a', 'b'] (case-insensitive)
 ```
 ::
 

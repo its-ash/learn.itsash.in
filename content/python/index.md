@@ -31,7 +31,7 @@ A comprehensive, edge-case-covering, idiomatic Python curriculum. Each document 
 | 02 | [Variables & Data Types](/python/02-variables-and-data-types) | Dynamic typing, `int`/`float`/`bool`/`str`/`None`, duck typing. |
 | 03 | [Operators & Expressions](/python/03-operators-and-expressions) | Arithmetic, `is` vs `==`, chained comparisons, the walrus operator. |
 | 04 | [Control Flow](/python/04-control-flow) | `if`/`while`/`for`, loop `else`, structural pattern matching (`match`/`case`). |
-05 | [Functions](/python/05-functions) | `def`, `*args`/`**kwargs`, the mutable default argument trap. |
+| 05 | [Functions](/python/05-functions) | `def`, `*args`/`**kwargs`, the mutable default argument trap. |
 | 06 | [Strings & Text](/python/06-strings-and-text) | `str` methods, f-strings, encodings, `bytes` vs `str`, `re`. |
 | 07 | [Lists & Tuples](/python/07-lists-and-tuples) | Mutability, slicing, comprehensions, packing/unpacking, `copy`/`deepcopy`. |
 | 08 | [Dictionaries & Sets](/python/08-dictionaries-and-sets) | Insertion order, hashing, `defaultdict`, `Counter`, set algebra. |

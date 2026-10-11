@@ -181,6 +181,32 @@ print(config.database_url)     # NO print this time — found directly in __dict
 ```
 ::
 
+### The `__getattr__` typo trap
+
+A catch-all `__getattr__` hides typos everywhere in the class:
+
+::code-wrapper{language="python"}
+```python
+class Settings:
+    def __init__(self):
+        self.items = [1, 2, 3]
+
+    def __getattr__(self, name):
+        return None                 # "missing settings are None"
+
+    @property
+    def count(self):
+        return len(self.itmes)      # typo! → __getattr__("itmes") → None
+
+s = Settings()
+print(s.colour)                     # None — fine, intended
+# print(s.count)                    # TypeError: object of type 'NoneType' has no len()
+#                                   # ← the real bug (a typo) is reported as a None problem
+```
+::
+
+Keep `__getattr__` narrow: handle only the names you expect, and `raise AttributeError(name)` for the rest.
+
 ### `__setattr__` — intercepting every attribute assignment
 
 ::code-wrapper{language="python"}
@@ -218,7 +244,6 @@ class LoggingAccess:
 obj = LoggingAccess(42)
 print(obj.value)
 # accessing 'value'
-# accessing 'value'   (once for the __getattribute__ call machinery, once for actual access, implementation detail)
 # 42
 ```
 ::

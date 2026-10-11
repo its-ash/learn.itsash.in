@@ -1,139 +1,65 @@
 # 26 — Performance & Optimization
 
-## Profiling Workflow — Measure Before Optimizing
+## Measure Before Optimizing
 
-::code-wrapper{language="python"}
-```python
-# ── Production profiling workflow: cProfile → identify hotspots → line_profiler → optimize ──
+Guessing where code is slow is usually wrong. Measure first.
 
-import cProfile
-import pstats
-import time
-from io import StringIO
+::code-wrapper{language="bash"}
+```bash
+# time a tiny snippet (runs it many times, reports the best)
+python -m timeit -s "data = list(range(1000))" "sum(data)"
+# 20000 loops, best of 5: 9.5 usec per loop
 
-def find_primes_below(n: int) -> list[int]:
-    """Sieve of Eratosthenes — a realistic CPU-bound function to profile."""
-    sieve = [True] * n
-    sieve[0] = sieve[1] = False
-    for i in range(2, int(n ** 0.5) + 1):
-        if sieve[i]:
-            for j in range(i * i, n, i):
-                sieve[j] = False
-    return [i for i, is_prime in enumerate(sieve) if is_prime]
-
-def count_primes_in_ranges(ranges: list[tuple[int, int]]) -> dict[int, int]:
-    """Count primes in multiple ranges — calls find_primes_below repeatedly."""
-    results = {}
-    for range_id, (lo, hi) in enumerate(ranges):
-        primes = find_primes_below(hi)
-        count = sum(1 for p in primes if p >= lo)
-        results[range_id] = count
-    return results
-
-# ── Step 1: cProfile — identify WHICH function dominates ──
-def profile_with_cprofile():
-    """Run cProfile and print top functions by cumulative time."""
-    ranges = [(0, 100_000), (0, 200_000), (0, 50_000), (0, 300_000)]
-
-    profiler = cProfile.Profile()
-    profiler.enable()
-    result = count_primes_in_ranges(ranges)
-    profiler.disable()
-
-    # Sort by cumulative time — shows which functions dominate total runtime
-    stats = pstats.Stats(profiler)
-    stats.sort_stats("cumulative")
-    stats.print_stats(10)   # top 10 functions
-
-    # Key columns:
-    #   ncalls    — how many times the function was called
-    #   tottime   — time IN this function alone (excluding sub-calls)
-    #   cumtime   — time including all sub-calls
-    #   percall   — tottime or cumtime / ncalls
-
-profile_with_cprofile()
-# Output reveals: find_primes_below dominates — called 4 times, most cumtime
-# The inner loop `for j in range(i*i, n, i): sieve[j] = False` is the actual hotspot
+# find which FUNCTION is slow in a whole script
+python -m cProfile -s cumulative my_script.py | head -20
 ```
 ::
 
 ::code-wrapper{language="python"}
 ```python
-# ── Memory profiling with tracemalloc — find allocation hotspots ──
+import timeit
 
-import tracemalloc
+print(timeit.timeit("x in data", "data = list(range(10_000)); x = 9_999", number=1000))  # list: slow
+print(timeit.timeit("x in data", "data = set(range(10_000)); x = 9_999", number=1000))   # set: fast
+```
+::
 
-def memory_inefficient(n: int) -> list[int]:
-    """Builds many intermediate lists — each comprehension allocates a new list."""
-    result = []
-    for i in range(n):
-        squares = [x ** 2 for x in range(i)]   # allocates a new list EACH iteration
-        if squares:
-            result.append(squares[-1])
-    return result
+## Tricky Speed Facts
 
-def memory_efficient(n: int) -> list[int]:
-    """Avoids intermediate lists — computes directly, O(1) extra memory per iteration."""
-    return [(i - 1) ** 2 for i in range(1, n)]   # one list, no intermediates
+::code-wrapper{language="python"}
+```python
+r = range(10**9)
 
-def profile_memory(func, *args):
-    """Snapshot tracemalloc before/after, show top allocation sites."""
-    tracemalloc.start()
-    snapshot_before = tracemalloc.take_snapshot()
-
-    func(*args)
-
-    snapshot_after = tracemalloc.take_snapshot()
-    stats = snapshot_after.compare_to(snapshot_before, "lineno")
-
-    print(f"\\nMemory allocation diff for {func.__name__}:")
-    for stat in stats[:5]:   # top 5 allocation sites
-        print(f"  {stat}")
-
-profile_memory(memory_inefficient, 1000)
-profile_memory(memory_efficient, 1000)
-# memory_inefficient shows many allocations from the inner comprehension line
-# memory_efficient shows a single allocation from the outer comprehension
+print(10**9 - 1 in r)     # instant — range checks ints with math, not a loop
+print(10**9 - 1.0 in r)   # ~30 SECONDS — a float is not an int, so range falls
+                          # back to comparing all 1,000,000,000 items one by one
 ```
 ::
 
 ::code-wrapper{language="python"}
 ```python
-# ── numpy vectorization: the single biggest performance win in numeric Python ──
+from collections import deque
+import timeit
 
-import numpy as np
-import time
+# insert(0, x) shifts EVERY item → O(n). deque.appendleft is O(1)
+print(timeit.timeit("lst.insert(0, 1)", "lst = []", number=50_000))                          # ~0.5s
+print(timeit.timeit("d.appendleft(1)", "from collections import deque; d = deque()", number=50_000))  # ~0.0007s
+```
+::
 
-N = 10_000_000
+::code-wrapper{language="python"}
+```python
+d = {i: str(i) for i in range(100_000)}
 
-# ANTI-PATTERN: element-wise Python loop over numpy array — defeats vectorization
-def slow_square(arr: np.ndarray) -> np.ndarray:
-    result = np.empty_like(arr)
-    for i in range(len(arr)):
-        result[i] = arr[i] ** 2   # Python loop, per-element dispatch
-    return result
+"99999" in d             # O(1) — checks KEYS with a hash lookup
+"99999" in d.values()    # O(n) — values have no hash index, it's a linear scan
+```
+::
 
-# CORRECT: vectorized operation — single C call over contiguous memory
-def fast_square(arr: np.ndarray) -> np.ndarray:
-    return arr ** 2   # numpy dispatches to SIMD-optimized C, no Python loop
-
-arr = np.arange(N, dtype=np.float64)
-
-t0 = time.perf_counter()
-_ = fast_square(arr)
-vectorized = time.perf_counter() - t0
-print(f"numpy vectorized: {vectorized:.4f}s  ({N:,} elements, SIMD C)")
-
-# Don't even try the slow version on 10M elements — it would take minutes
-# On 100k elements for comparison:
-small = np.arange(100_000, dtype=np.float64)
-t0 = time.perf_counter()
-_ = slow_square(small)
-python_loop = time.perf_counter() - t0
-t0 = time.perf_counter()
-_ = fast_square(small)
-numpy_fast = time.perf_counter() - t0
-print(f"Python loop (100k): {python_loop:.4f}s vs numpy: {numpy_fast:.4f}s → {python_loop/numpy_fast:.0f}x faster")
+::code-wrapper{language="python"}
+```python
+# len() is O(1) for list/str/dict/set — no need to cache it "for speed"
+# but sum(1 for _ in gen) is O(n) and CONSUMES the generator
 ```
 ::
 

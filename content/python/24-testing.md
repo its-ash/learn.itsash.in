@@ -80,6 +80,33 @@ def test_list_equality():
 ```
 ::
 
+### Three assertions that always pass (or always fail)
+
+::code-wrapper{language="python"}
+```python
+import pytest
+
+def test_tuple_assert():
+    x = 0
+    assert (x == 1, "x should be 1")   # ALWAYS passes — a non-empty tuple is truthy
+    # SyntaxWarning: assertion is always true, perhaps remove parentheses?
+    # correct: assert x == 1, "x should be 1"
+
+def test_float():
+    # assert 0.1 + 0.2 == 0.3          # FAILS — float rounding
+    assert 0.1 + 0.2 == pytest.approx(0.3)   # passes
+
+def test_mock_typo():
+    from unittest.mock import Mock
+    m = Mock()
+    m(1)
+    assert m.has_been_called_with(2)   # PASSES — Mock invents any attribute, and a Mock is truthy!
+    m.assert_called_with(1)            # the real assertion method
+```
+::
+
+Since Python 3.12, `Mock` blocks common misspellings starting with `assert`/`assret`/`called_`… (e.g. `m.called_once_with(...)` raises `AttributeError`), but any other invented name still "works". Use `Mock(spec=RealClass)` to make unknown attributes fail.
+
 ## Fixtures: Reusable Setup and Teardown
 
 ::code-wrapper{language="python"}

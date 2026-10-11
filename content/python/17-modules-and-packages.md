@@ -30,6 +30,33 @@ print(sum_two(4, 5))                      # 9
 ```
 ::
 
+### `from x import y` copies the name, not a live link
+
+::code-wrapper{language="python"}
+```python
+# config.py
+DEBUG = False
+
+def enable_debug():
+    global DEBUG
+    DEBUG = True
+```
+::
+
+::code-wrapper{language="python"}
+```python
+# main.py
+from config import DEBUG, enable_debug
+import config
+
+enable_debug()
+print(DEBUG)          # False  ← your local name still points to the OLD object
+print(config.DEBUG)   # True   ← reading through the module sees the new value
+```
+::
+
+**Why**: `from config import DEBUG` makes a new name `DEBUG` in `main` that points to `False`. Rebinding `config.DEBUG` later does not touch your copy. Use `import config` and `config.DEBUG` for values that change.
+
 ## `if __name__ == "__main__":`
 
 ::code-wrapper{language="python"}
@@ -59,7 +86,7 @@ print(calculator.add(10, 20))   # 30 — the function is still perfectly usable
 
 A **package** is a directory containing an `__init__.py` file (making it importable as a single namespace) plus any number of module files or sub-packages.
 
-::code-wrapper{language="python"}
+::code-wrapper{language="bash"}
 ```bash
 myapp/
     __init__.py
@@ -229,7 +256,7 @@ importlib.reload(math_utils)   # re-executes the module's top-level code, useful
 
 Modern Python packaging (fully covered in chapter 25) declares a package's structure declaratively:
 
-::code-wrapper{language="ini"}
+::code-wrapper{language="toml"}
 ```toml
 [project]
 name = "myapp"
@@ -280,45 +307,38 @@ The `src/` layout (package code nested one level deeper than the project root) i
 
 ## 🧠 Spot the Bug
 
-A small project has a `utils.py` inside its package that shadows a name the developer didn't expect. Find the issue.
+This works with one command and fails with another. Why?
 
 ::code-wrapper{language="python"}
 ```python
-# project structure:
 # myapp/
 #     __init__.py
-#     queue.py
+#     queue.py        ← a project module named like the stdlib `queue`
 #     worker.py
 
-# myapp/queue.py
-import queue    # intends to import the STANDARD LIBRARY queue module
+# myapp/worker.py
+from queue import Queue    # wants the STANDARD LIBRARY queue
+print("worker ok", Queue)
+```
+::
 
-class TaskQueue:
-    def __init__(self):
-        self.q = queue.Queue()
+::code-wrapper{language="bash"}
+```bash
+python -m myapp.worker     # worker ok <class 'queue.Queue'>
+python myapp/worker.py     # ImportError: cannot import name 'Queue' from 'queue'
+                           # (consider renaming '.../myapp/queue.py' since it has the same
+                           #  name as the standard library module named 'queue' ...)
 ```
 ::
 
 <details>
 <summary>Answer</summary>
 
-`import queue` inside `myapp/queue.py` imports **itself**, not the standard library `queue` module — because the current package's directory is searched (as part of how Python resolves absolute imports inside a package in some configurations, and definitively so for any implicit relative-import-like resolution) and `myapp/queue.py` matches the name `queue` before the interpreter reaches the standard library entry on `sys.path`. This typically manifests as `AttributeError: module 'queue' has no attribute 'Queue'` — because `queue` resolved to the local file (which has no `Queue` class), not `queue.Queue` from the standard library, even though the error message doesn't say anything about "wrong module" directly.
+`python myapp/worker.py` puts `myapp/` at `sys.path[0]`. Now `import queue` finds `myapp/queue.py` **before** the standard library, so it imports your file, which has no `Queue`.
 
-The fix is to never name a module the same as a standard-library or widely-used third-party module — rename the local file:
-::code-wrapper{language="python"}
-```python
-# myapp/task_queue.py
-import queue   # now unambiguously the standard library
+`python -m myapp.worker` puts the project root on `sys.path` instead, so `queue` resolves to the standard library.
 
-class TaskQueue:
-    def __init__(self):
-        self.q = queue.Queue()
-```
-::
-
-If renaming isn't immediately possible, Python 3's absolute-import-by-default behavior (PEP 328) makes this specific collision less common than it was in Python 2, but it still occurs, particularly with `__init__.py`-relative resolution quirks and tooling that manipulates `sys.path` — the safest fix is always avoiding the name collision outright.
-
-**The lesson**: never name a project module identically to a standard-library module (`queue`, `json`, `types`, `email`, `string`, `random` are common real-world collisions) — the failure mode is a confusing `AttributeError` deep inside code that looks completely correct, not an obvious import error pointing at the real cause.
+Fix: rename the module (`task_queue.py`). Never name your files `queue`, `json`, `random`, `email`, `types`, `string`, `test`...
 
 </details>
 

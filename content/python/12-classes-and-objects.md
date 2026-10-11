@@ -1,64 +1,86 @@
 # 12 — Classes & Objects
 
-## Production Data Classes — `@dataclass` with Validation and `__slots__`
+## Defining a Class
 
 ::code-wrapper{language="python"}
 ```python
-# ── Production: a validated, memory-efficient data class ──
-# Combines @dataclass (auto __init__/__repr__/__eq__) with __slots__ (no __dict__)
-# and __post_init__ for validation that can't be expressed in type hints alone.
+class Dog:
+    def __init__(self, name, age=1):
+        self.name = name        # instance attributes
+        self.age = age
 
+    def bark(self):
+        return f"{self.name} says woof"
+
+rex = Dog("Rex", 3)
+print(rex.bark())       # Rex says woof
+print(rex.age)          # 3
+print(rex)              # <__main__.Dog object at 0x...> — no __repr__ yet
+```
+::
+
+**Tricky**: `__init__` must return `None`. It *initializes* an object that already exists — it does not create it:
+
+::code-wrapper{language="python"}
+```python
+class Bad:
+    def __init__(self):
+        return 42
+
+# Bad()   # TypeError: __init__() should return None, not 'int'
+```
+::
+
+**Tricky**: forgetting `self` in a method signature gives a confusing error:
+
+::code-wrapper{language="python"}
+```python
+class Cat:
+    def meow():                 # forgot self
+        return "meow"
+
+# Cat().meow()   # TypeError: Cat.meow() takes 0 positional arguments but 1 was given
+#                  ↑ the "1" is the instance, passed automatically as the first argument
+```
+::
+
+## `@dataclass` — Less Boilerplate
+
+::code-wrapper{language="python"}
+```python
 from dataclasses import dataclass, field
-from datetime import datetime
-
-@dataclass(frozen=True, slots=True)
-class User:
-    """
-    Immutable user record — frozen=True makes it hashable (can be a dict key/set member),
-    slots=True eliminates __dict__ overhead (~40% memory reduction per instance).
-    """
-    id: int
-    email: str
-    name: str
-    created_at: datetime = field(default_factory=datetime.now)  # mutable default → factory
-    roles: frozenset[str] = field(default_factory=frozenset)     # frozenset: immutable + hashable
-
-    def __post_init__(self):
-        # frozen=True means attributes can't be set normally — use object.__setattr__
-        # to work around the frozen restriction for validation-driven adjustments
-        if not self.email or "@" not in self.email:
-            raise ValueError(f"invalid email: {self.email!r}")
-        if self.id <= 0:
-            raise ValueError(f"id must be positive, got {self.id}")
-
-# Frozen + slots dataclass is hashable → usable as dict keys and set members
-user = User(id=1, email="ada@example.com", "name"="Ada")
-print(user)   # User(id=1, email='ada@example.com', name='Ada', created_at=..., roles=frozenset())
-# user.email = "x"  # FrozenInstanceError — can't mutate a frozen dataclass
-
-# Can be used as a dict key (hashable because frozen + all fields hashable)
-user_index = {user: "admin"}
-
-# ── Memory comparison: __dict__ vs __slots__ ──
-import sys
 
 @dataclass
-class UserDict:
-    id: int
-    email: str
-    name: str
+class Point:
+    x: int
+    y: int = 0
 
-@dataclass(slots=True)
-class UserSlots:
-    id: int
-    email: str
-    name: str
+p = Point(1)
+print(p)                      # Point(x=1, y=0) — free __repr__
+print(p == Point(1, 0))       # True            — free __eq__
 
-ud = UserDict(1, "a@b.com", "Ada")
-us = UserSlots(1, "a@b.com", "Ada")
-print(f"with __dict__:    {sys.getsizeof(ud) + sys.getsizeof(ud.__dict__)} bytes")
-print(f"with __slots__:   {sys.getsizeof(us)} bytes")
-# Typical: ~232 bytes vs ~64 bytes — 3.6× smaller, compounds at millions of instances
+@dataclass
+class Team:
+    # members: list = []      # ValueError: mutable default <class 'list'> ... use default_factory
+    members: list = field(default_factory=list)
+
+@dataclass(frozen=True)
+class Color:
+    r: int
+    g: int
+    b: int
+
+red = Color(255, 0, 0)
+# red.r = 0                   # FrozenInstanceError: cannot assign to field 'r'
+print({red: "red"})           # frozen → hashable → can be a dict key
+```
+::
+
+**Tricky**: a dataclass type hint is **not** checked at run time:
+
+::code-wrapper{language="python"}
+```python
+print(Point("a", "b"))        # Point(x='a', y='b') — no error
 ```
 ::
 
@@ -132,9 +154,11 @@ class ShoppingCartFixed:
     def __init__(self):
         self.items = []              # instance attribute — fresh list per instance
 
+    def add(self, item):
+        self.items.append(item)
+
 cart_c = ShoppingCartFixed()
 cart_d = ShoppingCartFixed()
-cart_c.add = lambda item: cart_c.items.append(item)
 cart_c.add("banana")
 print(cart_d.items)   # [] — correctly isolated
 ```
@@ -227,7 +251,7 @@ print([v1, v2])                # [Vector(1, 2), Vector(3, 4)] — repr used insi
 ```
 ::
 
-Without `__repr__`, printing an instance falls back to the unhelpful default `<__main__.Vector object at 0x7f...>`; without `__eq__`, `==` falls back to identity comparison (`is`), so two "equal" vectors with different `x`/`y` values but the same memory address would never occur, but two vectors with identical field values would incorrectly compare unequal.
+Without `__repr__`, printing an instance shows the unhelpful default `<__main__.Vector object at 0x7f...>`. Without `__eq__`, `==` falls back to identity (`is`), so `Vector(1, 2) == Vector(1, 2)` would be `False`.
 
 ## Checking Types: `isinstance` vs `type() ==`
 
