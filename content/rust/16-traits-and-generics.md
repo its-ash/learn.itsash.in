@@ -1,437 +1,263 @@
-# 16 — Traits and Generics
+# 16 — Traits & Generics
 
-Monomorphization is the axis everything in this chapter turns on: a generic function doesn't exist as compiled code until called with a concrete type, and then it exists **once per concrete type**.
+A **trait** is a set of methods a type promises to have (like an interface). **Generics** let one function or struct work with many types. Together: "this works for any `T` that implements `Trait`".
 
-## Under-the-Hood Mechanics
+## Defining and Implementing a Trait
 
-### Monomorphization: one function, N compiled copies
-
-::code-wrapper{language="rust" filename="main.rs"}
+::code-wrapper{language="rust"}
 ```rust
-fn max<T: PartialOrd + Copy>(a: T, b: T) -> T { if a > b { a } else { b } }
-
-fn use_it() {
-    max(3, 5);            // generates/uses max::<i32>
-    max(3.0, 5.0);        // generates/uses max::<f64>
-    max("a", "b");        // generates/uses max::<&str>
+trait Animal {
+    fn name(&self) -> String;                       // required
+    fn speak(&self) -> String {                     // default — may be overridden
+        format!("{} makes a sound", self.name())
+    }
 }
-// The binary contains three distinct compiled functions, not one generic one.
-```
-::
 
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// Proof: each instantiation is a real, independently-addressable function.
-fn id<T>(x: T) -> T { x }
+struct Dog;
+struct Cat;
+
+impl Animal for Dog {
+    fn name(&self) -> String { "Dog".into() }
+    fn speak(&self) -> String { "Woof".into() }     // override
+}
+
+impl Animal for Cat {
+    fn name(&self) -> String { "Cat".into() }       // uses the default speak()
+}
 
 fn main() {
-    let f1: fn(i32) -> i32 = id::<i32>;
-    let f2: fn(&str) -> &str = id::<&str>;
-    // f1 and f2 point at different machine addresses — two copies, not one.
-    println!("{:p} {:p}", f1 as *const (), f2 as *const ());
+    println!("{}", Dog.speak());   // Woof
+    println!("{}", Cat.speak());   // Cat makes a sound
 }
 ```
 ::
 
-### `dyn Trait`: a fat pointer and a vtable, generated once
+## Implementing Standard Traits
 
-::code-wrapper{language="rust" filename="main.rs"}
+::code-wrapper{language="rust"}
 ```rust
-trait Greet { fn say_hi(&self) -> String; }
-struct User { name: String }
-impl Greet for User { fn say_hi(&self) -> String { format!("hi {}", self.name) } }
+use std::fmt;
 
-fn print_all<T: Greet>(items: &[T]) { /* monomorphized per T — inlinable */ }
-fn print_dyn(items: &[Box<dyn Greet>]) { /* one shared codepath, vtable-indirected */ }
+struct Celsius(f64);
+
+impl fmt::Display for Celsius {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:.1}°C", self.0)
+    }
+}
 
 fn main() {
-    println!("{}", std::mem::size_of::<&dyn Greet>());  // 16 — fat pointer
-    println!("{}", std::mem::size_of::<&User>());        // 8  — thin pointer
+    let t = Celsius(21.456);
+    println!("{t}");                  // 21.5°C
+    let s: String = t.to_string();    // Display gives you to_string() for free
+    println!("{s}");
 }
 ```
 ::
 
-::code-wrapper{language="rust" filename="main.rs"}
+Many traits can be derived instead: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]`.
+
+## Generic Functions Need Bounds
+
+**Tricky**: a generic `T` can do **nothing** until you say what it supports:
+
+::code-wrapper{language="rust"}
 ```rust
-// Mechanically, a trait object is just this — no magic, just two words:
-struct FatPointer {
-    data: *const (),
-    vtable: *const (),   // table of fn pointers, one per trait method
-}
-// Calling `dyn_greet.say_hi()` = load vtable, index slot 0, indirect-call.
-```
-::
+// fn largest<T>(v: &[T]) -> &T {
+//     let mut m = &v[0];
+//     for x in v { if x > m { m = x; } }   // error[E0369]: binary operation `>` cannot be applied to type `&T`
+//     m                                     // help: consider restricting type parameter `T` with trait `PartialOrd`
+// }
 
-### Object safety is a mechanical constraint
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// NOT object-safe: `clone` returns Self by value.
-trait Cloneable { fn clone_it(&self) -> Self; }
-// let _: Box<dyn Cloneable> = ...;  // compile error: cannot be made into an object
-
-// NOT object-safe: generic method needs infinite vtable slots.
-trait Converter { fn convert<T: From<Self>>(&self) -> T where Self: Sized; }
-
-// IS object-safe: every method returns a fixed-size, erasure-compatible type.
-trait Shape { fn area(&self) -> f64; }
-let _: Box<dyn Shape>; // fine — `area` doesn't return `Self` or take a generic param
-```
-::
-
-### Associated types resolve at compile time; generic params resolve per call site
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-trait Container { type Item; fn get(&self, i: usize) -> Self::Item; }
-struct IntBag(Vec<i32>);
-impl Container for IntBag {
-    type Item = i32;                       // exactly one Item type, ever
-    fn get(&self, i: usize) -> i32 { self.0[i] }
+fn largest<T: PartialOrd>(v: &[T]) -> &T {
+    let mut m = &v[0];
+    for x in v {
+        if x > m { m = x; }
+    }
+    m
 }
 
-// Contrast: a generic trait parameter allows MULTIPLE impls for the same type.
-trait ConvertsTo<T> { fn convert(&self) -> T; }
-struct Meters(f64);
-impl ConvertsTo<f64> for Meters { fn convert(&self) -> f64 { self.0 } }      // to f64
-impl ConvertsTo<String> for Meters { fn convert(&self) -> String { format!("{}m", self.0) } } // to String — coexists
-```
-::
-
-## Cost, Performance, and Trade-Offs
-
-Static dispatch = zero-cost calls, N compiled copies. Dynamic dispatch = one copy, per-call indirection.
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-trait Summable { fn value(&self) -> i64; }
-
-// Static: monomorphized per T, inlinable, adds to binary size per instantiation.
-fn total_static<T: Summable>(items: &[T]) -> i64 {
-    items.iter().map(|i| i.value()).sum()
-}
-
-// Dynamic: one compiled body regardless of how many concrete types implement it.
-fn total_dyn(items: &[Box<dyn Summable>]) -> i64 {
-    items.iter().map(|i| i.value()).sum() // vtable call per `.value()`
+fn main() {
+    println!("{}", largest(&[3, 9, 2]));        // 9
+    println!("{}", largest(&["b", "z", "a"]));  // z
+    println!("{}", largest(&[1.5, 0.2]));       // 1.5
+    // largest::<i32>(&[]);                     // compiles, but panics: index out of bounds
 }
 ```
 ::
 
-::code-wrapper{language="rust" filename="main.rs"}
+Three ways to write the same bound:
+
+::code-wrapper{language="rust"}
 ```rust
-// Blanket impl trade-off: covers every Display type, but forever forecloses
-// a manual, more-specific impl for any future type — coherence forbids overlap.
 use std::fmt::Display;
 
-trait Describe { fn describe(&self) -> String; }
-impl<T: Display> Describe for T {
-    fn describe(&self) -> String { format!("value: {}", self) }
-}
-// impl Describe for i32 { ... }   // ERROR: conflicting implementations
+fn a<T: Display>(x: T) { println!("{x}"); }
+fn b<T>(x: T) where T: Display { println!("{x}"); }   // handy with many bounds
+fn c(x: impl Display) { println!("{x}"); }             // shortest
 ```
 ::
 
-`cargo bloat --release` shows codegen bloat from monomorphization; `cargo build --timings` shows crates dominated by trait-resolution cost — both are the measurable side of these trade-offs, not theoretical.
+## Generic Structs
 
-## Production Failure Modes & Anti-Patterns
-
-### Generic-everywhere causing runaway compile times and binary bloat
-
-::code-wrapper{language="rust" filename="main.rs"}
+::code-wrapper{language="rust"}
 ```rust
-// WRONG: a "generic for flexibility" API called with dozens of distinct
-// concrete types across a large codebase — each becomes a full compiled copy
-pub fn process<T, F, E>(items: Vec<T>, transform: F) -> Result<Vec<T>, E>
-where
-    F: Fn(&T) -> Result<(), E>,
-    T: Clone + std::fmt::Debug,
-{
-    for item in &items { transform(item)?; }
-    Ok(items)
+#[derive(Debug)]
+struct Pair<T> { a: T, b: T }
+
+impl<T: PartialOrd + Copy> Pair<T> {
+    fn max(&self) -> T { if self.a > self.b { self.a } else { self.b } }
+}
+
+fn main() {
+    let p = Pair { a: 3, b: 7 };
+    println!("{}", p.max());          // 7
+    // let q = Pair { a: 1, b: 2.0 }; // error[E0308]: mismatched types — both fields share ONE T
 }
 ```
 ::
 
-::code-wrapper{language="rust" filename="main.rs"}
+## Static vs Dynamic Dispatch
+
+**`impl Trait` / generics** — the compiler makes a copy per type; calls are direct and fast.
+**`dyn Trait`** — one copy; the method is looked up at run time. Needed for mixed types in one collection.
+
+::code-wrapper{language="rust"}
 ```rust
-// RIGHT: extract a non-generic core; keep only the unavoidable generic
-// surface thin, so the bulk of the work is compiled exactly once
-fn process_core(
-    len: usize,
-    transform: &mut dyn FnMut(usize) -> Result<(), Box<dyn std::error::Error>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    for i in 0..len { transform(i)?; }
-    Ok(())
-}
+trait Animal { fn speak(&self) -> String; }
+struct Dog;
+struct Cat;
+impl Animal for Dog { fn speak(&self) -> String { "Woof".into() } }
+impl Animal for Cat { fn speak(&self) -> String { "Meow".into() } }
 
-pub fn process<T, F, E>(items: Vec<T>, mut transform: F) -> Result<Vec<T>, E>
-where
-    F: FnMut(&T) -> Result<(), E>,
-{
-    for item in &items { transform(item)?; }
-    Ok(items)
-}
-// Profile with `cargo bloat` before micro-optimizing — know the lever exists.
-```
-::
-
-### Forcing `dyn Trait` into a hot loop for unused flexibility
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// WRONG: every call in a tight inner loop pays a vtable indirection for
-// polymorphism that's actually resolved once at startup
-struct Pixel;
-trait DrawStrategy { fn draw(&self, p: &mut Pixel); }
-
-struct Renderer { strategy: Box<dyn DrawStrategy> }
-impl Renderer {
-    fn render_frame(&self, pixels: &mut [Pixel]) {
-        for p in pixels.iter_mut() {
-            self.strategy.draw(p);   // vtable call, millions of times/frame
-        }
+fn main() {
+    // let zoo = vec![Dog, Cat];                         // error: mismatched types
+    let zoo: Vec<Box<dyn Animal>> = vec![Box::new(Dog), Box::new(Cat)];
+    for a in &zoo {
+        println!("{}", a.speak());
     }
 }
 ```
 ::
 
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// RIGHT: push the generic parameter up to where the strategy is chosen —
-// the hot loop monomorphizes and becomes inlinable/vectorizable
-struct Pixel;
-trait DrawStrategy { fn draw(&self, p: &mut Pixel); }
+**Tricky**: `impl Trait` in a return type is still **one** concrete type:
 
-struct Renderer<S: DrawStrategy> { strategy: S }
-impl<S: DrawStrategy> Renderer<S> {
-    fn render_frame(&self, pixels: &mut [Pixel]) {
-        for p in pixels.iter_mut() {
-            self.strategy.draw(p);   // monomorphized, inlinable, vectorizable
-        }
+::code-wrapper{language="rust"}
+```rust
+use std::fmt::Display;
+
+// fn pick(b: bool) -> impl Display {
+//     if b { 1 } else { "one" }   // error[E0308]: `if` and `else` have incompatible types
+// }
+
+fn pick(b: bool) -> Box<dyn Display> {
+    if b { Box::new(1) } else { Box::new("one") }
+}
+
+fn main() {
+    println!("{} {}", pick(true), pick(false));
+}
+```
+::
+
+## Traits Must Be in Scope
+
+**Tricky**: a method from a trait can't be called unless the trait is imported:
+
+::code-wrapper{language="rust"}
+```rust
+mod shapes {
+    pub trait Area { fn area(&self) -> f64; }
+    pub struct Sq(pub f64);
+    impl Area for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+}
+
+// use shapes::Area;        // ← without this line:
+fn main() {
+    let s = shapes::Sq(2.0);
+    // s.area();            // error[E0599]: no method named `area` found
+    //                      // help: trait `Area` ... is implemented but not in scope
+    println!("{}", shapes::Area::area(&s));   // or call it fully qualified
+}
+```
+::
+
+This is why you often see `use std::io::Write;` or `use std::fmt::Write;` just to call `.write_all()` / `write!`.
+
+## The Orphan Rule
+
+You can implement a trait for a type only if **the trait or the type** is defined in your crate:
+
+::code-wrapper{language="rust"}
+```rust
+use std::fmt;
+
+// impl fmt::Display for Vec<i32> { ... }
+// error[E0117]: only traits defined in the current crate can be implemented for types defined outside of the crate
+
+struct Numbers(Vec<i32>);          // newtype → now the type is yours
+impl fmt::Display for Numbers {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} numbers", self.0.len())
     }
 }
-```
-::
 
-### Trait method returning `Self` breaking object safety mid-refactor
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// WRONG: adding one "convenience" method silently breaks every existing
-// Box<dyn Shape> call site elsewhere in the codebase
-trait Shape {
-    fn area(&self) -> f64;
-    fn scaled(&self, factor: f64) -> Self;   // breaks object safety
+fn main() {
+    println!("{}", Numbers(vec![1, 2, 3]));   // 3 numbers
 }
 ```
 ::
 
-::code-wrapper{language="rust" filename="main.rs"}
+## Same Method Name in Two Traits
+
+::code-wrapper{language="rust"}
 ```rust
-// RIGHT: return a boxed trait object instead of Self — costs one allocation,
-// stays object-safe
-trait Shape {
-    fn area(&self) -> f64;
-    fn scaled(&self, factor: f64) -> Box<dyn Shape>;
-}
-```
-::
+trait Pilot { fn fly(&self) -> &str { "pilot" } }
+trait Wizard { fn fly(&self) -> &str { "wizard" } }
+struct Human;
+impl Pilot for Human {}
+impl Wizard for Human {}
 
-## Architectural Application
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// Library-boundary decision #1: generic param pushes monomorphization cost
-// onto every CALLER's binary — good for perf-sensitive libs (serde, allocators).
-pub fn serialize<T: serde::Serialize>(v: &T) -> Vec<u8> { /* ... */ vec![] }
-
-// vs. dyn Trait: implementation compiled once, INSIDE this library — better
-// for compile times across many callers, right when polymorphism is a real
-// runtime property (plugins), not just compile-time convenience.
-pub fn run_plugin(p: &dyn Plugin) { p.execute(); }
-trait Plugin { fn execute(&self); }
-```
-::
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// Orphan rule: cannot impl an external trait for an external type.
-// struct Wrapper(Vec<i32>);
-// impl std::fmt::Display for Vec<i32> { ... }   // ERROR: orphan rule
-
-// Newtype escape hatch — the standard, load-bearing workaround:
-struct Wrapper(Vec<i32>);
-impl std::fmt::Display for Wrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-```
-::
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// Sealed trait: lets a library add methods later without breaking semver,
-// because no external crate can implement it.
-mod sealed { pub trait Sealed {} }
-
-pub trait Widget: sealed::Sealed {
-    fn render(&self) -> String { "default".into() }  // safe to add later
-}
-struct Button;
-impl sealed::Sealed for Button {}
-impl Widget for Button {}
-```
-::
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// Marker traits (auto-traits) propagate structurally, zero annotation cost —
-// this is what makes a data race a compile error instead of an incident.
-struct Task<F> { job: F }
-
-fn spawn_task<F: FnOnce() + Send + 'static>(f: F) {
-    std::thread::spawn(f);   // requires F: Send — checked at compile time
+fn main() {
+    let h = Human;
+    // h.fly();                              // error[E0034]: multiple applicable items in scope
+    println!("{}", Pilot::fly(&h));           // pilot
+    println!("{}", <Human as Wizard>::fly(&h)); // wizard
 }
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: `cargo expand` shows each monomorphized instantiation the compiler generated.
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// cargo expand output for `max(3, 5); max(3.0, 5.0);` shows two distinct
-// fn bodies: `max::<i32>` and `max::<f64>` — proof of what got duplicated.
-```
-::
-
-- **Idiom**: implement `From`, never `Into` directly — the blanket impl gives you `Into` for free.
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-struct Celsius(f64);
-struct Fahrenheit(f64);
-impl From<Celsius> for Fahrenheit {
-    fn from(c: Celsius) -> Self { Fahrenheit(c.0 * 9.0 / 5.0 + 32.0) }
-}
-let f: Fahrenheit = Celsius(100.0).into();   // works via std's blanket impl
-```
-::
-
-- **Performance**: benchmark before assuming static or dynamic dispatch "obviously" wins for a hot path — `cargo bloat` for size, `criterion` for call-site cost.
-- **Idiom**: seal a trait the moment you want room to add methods later without a semver break (see sealed-trait example above).
-- **Debug**: `the trait Trait is not implemented for Type` can mean the impl exists for a *different* instantiation.
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-// impl MyTrait for Vec<i32> {}
-// fn use_it(v: Vec<u32>) { v.my_method(); }
-// error mentions MyTrait, not Vec<u32> vs Vec<i32> — read the full type
-```
-::
-
-- **Clippy**: `clippy::wrong_self_convention` flags `fn to_x(self)` — consuming `self` should use `into_`, not `to_`.
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-struct Buffer(Vec<u8>);
-impl Buffer {
-    fn to_vec(self) -> Vec<u8> { self.0 }   // lint: should be `into_vec`
-}
-```
-::
+- **Idiom** — `impl Trait` in arguments for simple cases; `<T: Trait>` when the same `T` appears twice.
+- **Idiom** — `where` clauses keep long bounds readable.
+- **Idiom** — implement `Display` instead of writing a custom `to_string()` method.
+- **Idiom** — use `dyn Trait` only when you need different types in one collection (or to cut compile time).
+- **Debug** — "method not found" on a type that clearly implements it usually means a missing `use Trait`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Orphan rule**: can't `impl ExternalTrait for ExternalType` — use newtype (see above).
-- **`Self` returns break object safety**:
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-trait Bad { fn dup(&self) -> Self; }        // NOT object-safe
-trait Good { fn dup(&self) -> Box<dyn Good>; } // object-safe
-```
-::
-
-- **Method resolution ambiguity** — disambiguate with UFCS:
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-trait A { fn go(&self) -> &str { "A" } }
-trait B { fn go(&self) -> &str { "B" } }
-struct S;
-impl A for S {} impl B for S {}
-fn main() {
-    // S.go();          // ERROR: ambiguous
-    println!("{}", A::go(&S));   // disambiguated
-}
-```
-::
-
-- **Blanket impl conflicts appear far from the blanket impl** — design them conservatively in public crates.
-- **`PartialEq` vs `Eq`**:
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-fn main() {
-    let nan = f64::NAN;
-    println!("{}", nan == nan);   // false — f64: PartialEq but not Eq
-}
-```
-::
-
-- **Trait objects cannot have generic methods**:
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-trait Bad { fn call<T>(&self, x: T); }   // no vtable slot for "every possible T"
-// let _: Box<dyn Bad>; // ERROR
-```
-::
-
-- **`impl Trait` in argument position is sugar for a generic**, not a trait-object acceptor:
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-fn f(x: impl std::fmt::Display) { println!("{x}"); }
-// desugars to: fn f<T: std::fmt::Display>(x: T) { ... } — still monomorphized
-```
-::
-
-- **`Self: Sized` bound excludes a method from the vtable** — deliberate technique for static-only convenience methods:
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-trait Shape {
-    fn area(&self) -> f64;
-    fn boxed_clone(&self) -> Box<dyn Shape> where Self: Sized + Clone {
-        Box::new(self.clone())
-    }
-}
-```
-::
+- **Bounds** — inside a generic function you can only use what the bounds allow (`>`, `+`, `{}`…).
+- **Scope** — trait methods need the trait imported.
+- **Orphan rule** — no `impl ForeignTrait for ForeignType`; wrap it in a newtype.
+- **impl Trait** — a return of `impl Trait` must be the same concrete type on every path.
+- **Name clash** — two traits with the same method need `Trait::method(&x)`.
+- **Generic struct** — `Pair<T> { a: T, b: T }` forces both fields to the same type.
 
 ## 🧠 Spot the Bug
 
-::code-wrapper{language="rust" filename="main.rs"}
+::code-wrapper{language="rust"}
 ```rust
-trait Shape {
-    fn area(&self) -> f64;
-    fn scaled(&self, factor: f64) -> Self;
-}
-
-struct Circle { radius: f64 }
-
-impl Shape for Circle {
-    fn area(&self) -> f64 { std::f64::consts::PI * self.radius * self.radius }
-    fn scaled(&self, factor: f64) -> Self { Circle { radius: self.radius * factor } }
+fn print_all<T: std::fmt::Display>(items: &[T]) {
+    for i in items {
+        println!("{i}");
+    }
 }
 
 fn main() {
-    let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Circle { radius: 2.0 })];
+    print_all(&[1, 2]);
+    print_all(&["a", "b"]);
+    print_all(&[1, "b"]);
 }
 ```
 ::
@@ -439,42 +265,68 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-`error[E0038]: the trait \`Shape\` cannot be made into an object` — `scaled(&self, factor: f64) -> Self` returns `Self` by value, and a vtable entry needs one fixed signature; it can't represent "return whatever concrete type this instance is."
+The last call fails: `error[E0308]: mismatched types`. A slice `&[T]` holds **one** type `T`; `1` and `"b"` are different types even though both implement `Display`.
 
-::code-wrapper{language="rust" filename="main.rs"}
+For mixed types, use trait objects:
+
+::code-wrapper{language="rust"}
 ```rust
-trait Shape {
-    fn area(&self) -> f64;
-    fn scaled(&self, factor: f64) -> Box<dyn Shape>;   // fixed return type — fine
+use std::fmt::Display;
+
+fn print_all(items: &[&dyn Display]) {
+    for i in items {
+        println!("{i}");
+    }
+}
+
+fn main() {
+    print_all(&[&1, &"b"]);
 }
 ```
 ::
 
-Same reason `Clone::clone(&self) -> Self` isn't object-safe, and why `dyn Clone` doesn't exist without a workaround.
+</details>
+
+## 🧠 Quick Quiz
+
+::code-wrapper{language="rust"}
+```rust
+trait Greet {
+    fn name(&self) -> &str;
+    fn hello(&self) -> String { format!("Hello, {}", self.name()) }
+}
+
+struct En;
+struct Fr;
+impl Greet for En { fn name(&self) -> &str { "Ann" } }
+impl Greet for Fr {
+    fn name(&self) -> &str { "Zoé" }
+    fn hello(&self) -> String { format!("Bonjour, {}", self.name()) }
+}
+
+fn main() {
+    let gs: [&dyn Greet; 2] = [&En, &Fr];
+    for g in gs { println!("{}", g.hello()); }
+}
+```
+::
+
+<details>
+<summary>Answer</summary>
+
+::code-wrapper{language="bash"}
+```bash
+Hello, Ann
+Bonjour, Zoé
+```
+::
+
+`En` uses the default `hello`, which calls its own `name()`. `Fr` overrides `hello`.
 
 </details>
 
 ## Summary
 
-- `T: Trait` (generics) → N compiled copies, zero-cost calls, bigger binary/compile time.
+Traits describe shared behavior; generics with trait bounds reuse code across types with zero run-time cost. Use `dyn Trait` for mixed collections. Remember: import the trait to call its methods, and the orphan rule forbids implementing foreign traits on foreign types.
 
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-fn f<T: Trait>(x: T) { /* one copy per concrete T */ }
-trait Trait {}
-```
-::
-
-- `dyn Trait` → one compiled copy, vtable indirection per call, smaller binary.
-
-::code-wrapper{language="rust" filename="main.rs"}
-```rust
-fn f(x: &dyn Trait) { /* one shared implementation */ }
-trait Trait {}
-```
-::
-
-- Object safety is mechanical: no `Self`-by-value returns, no generic methods.
-- Library boundary: pick generics for perf-critical, single-implementation code; pick `dyn Trait` where polymorphism is a genuine runtime property (plugins).
-
-Next: Closures — how captures compile to anonymous structs, and what `Fn`/`FnMut`/`FnOnce` actually cost at each capture mode.
+Next: Closures.

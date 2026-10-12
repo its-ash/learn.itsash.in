@@ -1,614 +1,197 @@
-# 27 — Attributes & Conditional Compilation
+# 27 — Attributes & `cfg`
 
-Attributes look like decoration — bracketed metadata above a function, easy to skim past. They are not: `#[cfg]` decides what code exists in the binary at all; `#[repr]` decides what a type *is* in memory; `#[global_allocator]`/`#[panic_handler]` decide what the program's runtime consists of. This chapter treats attributes as a compilation/codegen control surface, not a syntax list.
-
-## Under-the-Hood Mechanics
-
-### `#[cfg]` is a pre-parse filter, not an `if`
-
-`#[cfg(...)]` operates at the **item level**, before type-checking, and *removes* the annotated item from the AST on non-matching configurations. `cfg!(...)` is a **boolean expression evaluated after parsing** — both branches are parsed and type-checked, always.
+An **attribute** is metadata in `#[...]` that tells the compiler something about the next item. `#![...]` (with `!`) applies to the **whole enclosing** module or crate.
 
 ::code-wrapper{language="rust"}
 ```rust
-// #[cfg] — the non-matching branch is REMOVED before type-checking.
-#[cfg(windows)]
-fn platform_init() { windows_only_fn(); }
+#![allow(dead_code)]          // inner: applies to this entire file/crate
 
-#[cfg(not(windows))]
-fn platform_init() { unix_only_fn(); }
-
-// cfg!() — BOTH branches are type-checked for every build, always.
-fn platform_init_wrong() {
-    if cfg!(windows) {
-        windows_only_fn(); // must exist & type-check on ALL platforms, incl. Linux
-    } else {
-        unix_only_fn();
-    }
-}
+#[derive(Debug)]              // outer: applies to the struct below
+struct Point { x: i32, y: i32 }
 ```
 ::
 
-Proof that `#[cfg]` truly removes the item — this compiles despite `Windows`-only syntax nonsense existing nowhere on Linux:
+## Derive
 
 ::code-wrapper{language="rust"}
 ```rust
-#[cfg(windows)]
-fn uses_windows_only_type() -> windows::core::HRESULT {
-    // `windows` crate type doesn't even need to be a dependency on non-Windows —
-    // this whole item is gone from the AST before rustc looks up the path.
-    unreachable!()
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Level {
+    Low,
+    #[default]                 // which variant Default::default() returns
+    Mid,
+    High,
+}
+
+#[derive(Debug, Default)]
+struct Config {
+    retries: u32,
+    name: String,
+    verbose: bool,
+    level: Level,
 }
 
 fn main() {
-    println!("compiles fine on Linux/macOS too");
+    println!("{:?}", Config::default());
+    // Config { retries: 0, name: "", verbose: false, level: Mid }
+    println!("{}", Level::Low < Level::High);   // true — derived Ord follows declaration order
 }
 ```
 ::
 
-### Conditional compilation resolves once, per compilation invocation
+**Tricky**: derived ordering uses **declaration order**. Reordering enum variants silently changes `sort()` results and `<` comparisons.
 
-Every `cfg` predicate is a fixed boolean before rustc starts compiling — no runtime toggling, and no per-crate divergence within one build graph.
+## Lint Attributes
 
 ::code-wrapper{language="rust"}
 ```rust
-// This predicate is either true for the WHOLE build or false for the WHOLE build.
-// There is no code path where it flips mid-compilation or per-crate.
-#[cfg(feature = "async")]
-pub async fn fetch(url: &str) -> Result<String, std::io::Error> {
-    unimplemented!()
-}
+#[allow(unused_variables)]     // silence a warning here
+fn demo() { let x = 1; }
 
-#[cfg(not(feature = "async"))]
-pub fn fetch(url: &str) -> Result<String, std::io::Error> {
-    unimplemented!()
-}
+#![deny(unused_variables)]     // (at crate top) turn the warning into an error
+// error: unused variable: `x`
 ```
 ::
 
-### Derive macros generate AST-to-AST code, not runtime reflection
+| Level | Effect |
+|---|---|
+| `allow` | silent |
+| `warn` | warning (default for most lints) |
+| `deny` | error, but an inner `#[allow]` can override |
+| `forbid` | error, and **cannot** be overridden |
+
+## Helpful Warnings You Can Add
 
 ::code-wrapper{language="rust"}
 ```rust
-#[derive(Debug, Clone, Default)]
-struct Config {
-    retries: u32,
-    timeout_ms: u64,
-}
+#[must_use = "the result tells you if saving worked"]
+fn save() -> bool { true }
 
-// The above expands (roughly) to ordinary, hand-writable code:
-struct ConfigExpanded {
-    retries: u32,
-    timeout_ms: u64,
+#[deprecated(note = "use new_api instead")]
+fn old_api() {}
+
+fn main() {
+    save();       // warning: unused return value of `save` that must be used
+    old_api();    // warning: use of deprecated function `old_api`: use new_api instead
+    let _ = save(); // `let _ =` explicitly ignores it — no warning
 }
-impl std::fmt::Debug for ConfigExpanded {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("retries", &self.retries)
-            .field("timeout_ms", &self.timeout_ms)
-            .finish()
-    }
-}
-impl Default for ConfigExpanded {
-    fn default() -> Self {
-        Self { retries: Default::default(), timeout_ms: Default::default() }
-    }
-}
-// No reflection metadata ships in the binary — this is monomorphized,
-// statically-dispatched code, identical at the machine-code level to hand-written impls.
 ```
 ::
 
-The macro sees **types**, never **values** — it cannot encode a runtime-dependent default:
+## Conditional Compilation: `#[cfg]`
+
+Code under a false `#[cfg(...)]` is **removed before compiling**, as if it never existed:
 
 ::code-wrapper{language="rust"}
 ```rust
-#[derive(Default)]
-struct Retry {
-    attempts: u32, // Default::default() -> 0, always. The macro has no idea
-                   // you actually wanted 3 as a "sensible" default.
-}
+#[cfg(target_os = "macos")]
+fn os() -> &'static str { "mac" }
 
-// To get a non-zero default you must hand-write it — derive can't do this:
-impl Retry {
-    fn sensible() -> Self { Self { attempts: 3 } }
-}
-```
-::
-
-### `#[repr]` selects the layout algorithm
-
-::code-wrapper{language="rust"}
-```rust
-// Default repr — compiler is FREE to reorder fields to minimize padding.
-struct Unspecified {
-    a: u8,
-    b: u32,
-    c: u8,
-} // size/order not guaranteed stable across compiler versions
-
-#[repr(C)]
-struct CLayout {
-    a: u8,   // declaration order preserved, C ABI padding rules
-    b: u32,
-    c: u8,
-} // safe to pass across an FFI boundary
-
-#[repr(transparent)]
-struct Meters(f64); // guaranteed identical layout to f64 — ABI-invisible newtype
-
-#[repr(packed)]
-struct Packed {
-    a: u8,
-    b: u32, // no padding inserted — b may now be misaligned in memory
-}
-
-fn packed_ub_example(p: &Packed) {
-    // let r: &u32 = &p.b;         // UB: creates a misaligned reference
-    let v: u32 = unsafe { std::ptr::addr_of!(p.b).read_unaligned() }; // correct
-    println!("{v}");
-}
-```
-::
-
-### `#[panic_handler]` / `#[global_allocator]`: whole-program runtime replacement
-
-::code-wrapper{language="rust"}
-```rust
-use std::alloc::{GlobalAlloc, Layout, System};
-
-struct CountingAlloc;
-
-unsafe impl GlobalAlloc for CountingAlloc {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 { System.alloc(layout) }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { System.dealloc(ptr, layout) }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAlloc = CountingAlloc;
-// Every allocation in the binary — including inside dependencies you don't
-// control — now routes through this. Exactly one `#[global_allocator]`
-// can exist per binary; two is a compile error.
-```
-::
-
-## Cost, Performance, and Trade-Offs
-
-::code-wrapper{language="rust"}
-```rust
-// #[cfg]-eliminated code: zero cost. Never parsed into this build's AST.
-#[cfg(feature = "telemetry")]
-fn record_metric(name: &str, value: f64) { /* ... */ }
-
-// cfg!(): both branches type-check (real, if small, compile-time tax);
-// LLVM constant-folds the dead branch away at codegen, so runtime cost ~0.
-fn log_level() -> &'static str {
-    if cfg!(debug_assertions) { "trace" } else { "info" }
-}
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-// #[inline(always)] — trades compile time & binary size for maybe-faster code.
-#[inline(always)]
-fn add_forced(a: u32, b: u32) -> u32 { a + b } // large call sites hurt I-cache
-
-// #[inline] — a HINT; LLVM's cost model still decides. Safer default.
-#[inline]
-fn add_hinted(a: u32, b: u32) -> u32 { a + b }
-
-// No hint at all + cross-crate call = LLVM never sees the body during the
-// caller crate's codegen. Real, avoidable call overhead in release builds.
-pub fn add_opaque_across_crate_boundary(a: u32, b: u32) -> u32 { a + b }
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-// derive cost scales with FIELD COUNT, not usage — all 40 fields get real
-// generated code for each derived trait, whether or not any path calls it.
-#[derive(Debug, Clone, PartialEq, Hash)]
-struct WideStruct {
-    f01: u32, f02: u32, f03: u32, f04: u32, f05: u32,
-    f06: u32, f07: u32, f08: u32, f09: u32, f10: u32,
-    // ...30 more fields: 4 derives x 40 fields = real generated code,
-    // measurable compile-time cost, even if `Hash` is never called.
-}
-```
-::
-
-::code-wrapper{language="toml"}
-```toml
-# Lint attributes: compile-time-only cost, long-term payoff.
-[workspace.lints.rust]
-missing_docs = "deny"
-
-[workspace.lints.clippy]
-unsafe_code = "forbid" # catches regressions on every future build/CI run
-```
-::
-
-## Production Failure Modes & Anti-Patterns
-
-### Anti-pattern: reaching for `cfg!()` when you meant `#[cfg]`
-
-::code-wrapper{language="rust"}
-```rust
-// WRONG — must compile identically on every platform; breaks on Linux/macOS
-// the moment `windows_specific_helper` is a real Windows-only API.
-fn get_path_separator_wrong() -> char {
-    if cfg!(target_os = "windows") {
-        windows_specific_helper() // must exist & type-check EVERYWHERE
-    } else {
-        '/'
-    }
-}
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-// RIGHT — #[cfg] on separate definitions removes the non-matching
-// platform's code from that build's AST before type-checking.
-#[cfg(target_os = "windows")]
-fn get_path_separator() -> char { windows_specific_helper() }
-
-#[cfg(not(target_os = "windows"))]
-fn get_path_separator() -> char { '/' }
-```
-::
-
-Rule of thumb: `cfg!()` only when *both* branches are valid on *every* target (log verbosity, a debug-only assertion) — never to gate a platform-specific API.
-
-### Anti-pattern: `not(target_os = "X")` as a stand-in for "the other platform"
-
-::code-wrapper{language="rust"}
-```rust
-// WRONG — assumes "not Linux" means "some other Unix." Silently wrong on Windows.
 #[cfg(target_os = "linux")]
-fn separator() -> char { '/' }
+fn os() -> &'static str { "linux" }
 
-#[cfg(not(target_os = "linux"))]
-fn separator() -> char { '/' } // WRONG on Windows: separator is '\', no diagnostic anywhere
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn os() -> &'static str { "other" }
+
+fn main() {
+    println!("{}", os());
+
+    #[cfg(debug_assertions)]                // only in debug builds
+    println!("debug build");
+}
 ```
 ::
 
+Common conditions:
+
+| Condition | True when |
+|---|---|
+| `test` | running `cargo test` |
+| `debug_assertions` | debug build (not `--release`) |
+| `target_os = "windows"` | building for Windows |
+| `unix` / `windows` | building for that family |
+| `target_pointer_width = "64"` | 64-bit target |
+| `feature = "json"` | Cargo feature `json` is on (chapter 28) |
+
+Combine with `all(...)`, `any(...)`, `not(...)`.
+
+## `cfg!()` vs `#[cfg]`
+
+**Tricky**: the `cfg!()` macro is just a `true`/`false` value — **both branches are still compiled**:
+
 ::code-wrapper{language="rust"}
 ```rust
-// RIGHT — enumerate the platform families you actually mean.
-#[cfg(unix)]
-fn separator() -> char { '/' }
-
 #[cfg(windows)]
-fn separator() -> char { '\\' }
-```
-::
+fn win_only() {}
 
-### Anti-pattern: `#[forbid]` applied too broadly, discovered too late
+fn main() {
+    // if cfg!(windows) { win_only(); }
+    // On macOS/Linux: error[E0425]: cannot find function `win_only` in this scope
+    // — the call is still compiled, but the function was removed.
 
-::code-wrapper{language="rust"}
-```rust
-#![forbid(unsafe_code)] // well-intentioned crate-root lint...
-```
-::
+    #[cfg(windows)]
+    win_only();                 // correct: the call is removed together with the function
 
-::code-wrapper{language="rust"}
-```rust
-// ...months later, a legitimate need appears (FFI wrapper, SIMD intrinsic):
-#[allow(unsafe_code)] // COMPILE ERROR: forbid cannot be locally overridden,
-mod ffi {              // not here, not in a dependency's macro expansion either.
-    pub unsafe fn call_into_c() { /* ... */ }
-}
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-// RIGHT — deny (overridable) with a documented, justified escape hatch.
-#![deny(unsafe_code)]
-
-#[allow(unsafe_code)] // SAFETY: single FFI call into libc, bounds validated above
-mod ffi {
-    pub unsafe fn call_into_c() { /* ... */ }
-}
-```
-::
-
-### Anti-pattern: `#[must_use]` silently defeated in review
-
-::code-wrapper{language="rust"}
-```rust
-#[must_use = "ignoring this drops the transaction without committing"]
-pub fn commit(self) -> Result<(), TxError> { /* ... */ }
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-fn wrong(tx: Transaction) {
-    tx.commit(); // WARNING fires here — bare statement discards the Result
-}
-
-fn defeated_in_review(tx: Transaction) {
-    let _ = tx.commit(); // NO warning — "used" via a binding, silently discarded anyway
-}
-
-fn right(tx: Transaction) -> Result<(), TxError> {
-    tx.commit() // propagated, or explicitly handled
-}
-```
-::
-
-### Anti-pattern: silently divergent behavior across `debug_assertions`
-
-::code-wrapper{language="rust"}
-```rust
-// WRONG — output SEMANTICS differ between debug and release, not just perf.
-#[cfg(debug_assertions)]
-fn validate_input(x: i32) -> i32 {
-    assert!(x >= 0, "negative input");
-    x
-}
-
-#[cfg(not(debug_assertions))]
-fn validate_input(x: i32) -> i32 {
-    x.max(0) // silently clamps instead of panicking — different semantics!
-}
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-// RIGHT — debug_assertions changes COST (extra checking), never OUTCOME.
-fn validate_input(x: i32) -> i32 {
-    debug_assert!(x >= 0, "negative input"); // checked in debug, no-op in release
-    x.max(0) // same clamping behavior in BOTH builds
-}
-```
-::
-
-## Architectural Application
-
-::code-wrapper{language="rust"}
-```rust
-// Visibility is your crate's semver surface. Default to pub(crate); every
-// `pub` item is a breaking-change liability the moment its signature moves.
-pub(crate) fn internal_helper() { /* free to refactor, nothing outside sees it */ }
-
-pub fn public_api() { /* changing this signature is a semver break */ }
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-// #[non_exhaustive] — apply at first publish, not retroactively.
-#[non_exhaustive]
-pub enum Event {
-    Started,
-    Stopped,
-    // adding a variant later is non-breaking for external matchers
-    // that were forced to include a wildcard arm
-}
-
-pub fn handle(e: Event) {
-    match e {
-        Event::Started => {}
-        Event::Stopped => {}
-        _ => {} // external crates MUST have this; not required inside the defining crate
+    if cfg!(debug_assertions) { // fine when both branches compile everywhere
+        println!("debug");
     }
 }
 ```
 ::
 
+**Tricky**: `not(target_os = "linux")` is not "Windows" — it also matches macOS, FreeBSD, wasm, Android…
+
+**Tricky**: a typo in a cfg name is not an error by itself — `#[cfg(featrue = "json")]` is simply always false. Cargo now warns: `unexpected cfg condition name`. Read those warnings.
+
+## Other Useful Attributes
+
 ::code-wrapper{language="rust"}
 ```rust
-// Centralize #[cfg] behind a small platform module, not scattered through logic.
-mod platform {
-    #[cfg(unix)]
-    pub fn open_socket() -> std::io::Result<i32> { unix_impl::open() }
+#[inline]                         // hint: copy this small function into callers
+fn square(x: i32) -> i32 { x * x }
 
-    #[cfg(windows)]
-    pub fn open_socket() -> std::io::Result<i32> { windows_impl::open() }
+#[non_exhaustive]                 // other crates must use `_` when matching — you may add variants later
+pub enum Error { NotFound, Timeout }
 
-    #[cfg(unix)]
-    mod unix_impl { pub fn open() -> std::io::Result<i32> { Ok(0) } }
-    #[cfg(windows)]
-    mod windows_impl { pub fn open() -> std::io::Result<i32> { Ok(0) } }
-}
+#[repr(C)]                        // C-compatible layout (chapter 11, 26)
+struct Header { tag: u8, len: u32 }
 
-// Business logic stays platform-agnostic:
-fn start_server() -> std::io::Result<i32> { platform::open_socket() }
-```
-::
+#[cfg(test)]                      // compiled only for `cargo test` (chapter 21)
+mod tests {}
 
-::code-wrapper{language="toml"}
-```toml
-# Lint policy lives once, at the workspace level — not copy-pasted per crate.
-[workspace.lints.rust]
-unsafe_code = "deny"
-
-[workspace.lints.clippy]
-all = "warn"
-```
-::
-
-::code-wrapper{language="toml"}
-```toml
-# Each member crate opts in with one line — no drift between crates.
-[lints]
-workspace = true
+#[test]
+#[ignore = "slow"]
+fn big_test() {}
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Debug**: see which `cfg(feature = ...)` flags are actually active:
-
-::code-wrapper{language="bash"}
-```bash
-cargo build --features "a b c" -vv
-cargo tree -e features
-```
-::
-
-- **Idiom**: prefer `cfg_if!` over stacked `#[cfg]`/`#[cfg(not(...))]` pairs — reads top-to-bottom, no accidental gap where nothing matches:
-
-::code-wrapper{language="rust"}
-```rust
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "windows")] {
-        fn init() { /* windows */ }
-    } else if #[cfg(unix)] {
-        fn init() { /* unix */ }
-    } else {
-        fn init() { /* fallback — no silent gap */ }
-    }
-}
-```
-::
-
-- **Debug**: confirm which branch actually survived compilation for your target:
-
-::code-wrapper{language="bash"}
-```bash
-cargo expand --target x86_64-pc-windows-msvc
-```
-::
-
-- **Performance**: cross-crate inlining needs an explicit hint or LLVM never sees the callee body during the caller's codegen:
-
-::code-wrapper{language="rust"}
-```rust
-#[inline] // matters MUCH more across a crate boundary than within one
-pub fn hot_utility(x: u32) -> u32 { x.wrapping_mul(2654435761) }
-```
-::
-
-- **Idiom**: `#[non_exhaustive]` doesn't restrict construction *inside* the defining crate:
-
-::code-wrapper{language="rust"}
-```rust
-#[non_exhaustive]
-pub struct Point { pub x: i32, pub y: i32 }
-
-// Inside the defining crate — normal struct literal works fine:
-fn make() -> Point { Point { x: 0, y: 0 } }
-// Outside the crate, this literal is a compile error; callers need
-// a constructor fn or `..Default::default()`.
-```
-::
-
-- **Clippy**: layer lints incrementally rather than all-or-nothing:
-
-::code-wrapper{language="rust"}
-```rust
-#![warn(clippy::all)]
-#![warn(clippy::needless_pass_by_value)] // add pedantic lints one at a time
-```
-::
+- **Debug** — `rustc --print cfg` lists every `cfg` value active for your target.
+- **Idiom** — `#[must_use]` on functions whose result is the whole point (builders, `Result`-like status values).
+- **Idiom** — `#[cfg(test)]` helpers and test-only dependencies keep release binaries small.
+- **Idiom** — `#![deny(warnings)]` belongs in CI flags (`RUSTFLAGS="-D warnings"`), not in library source.
+- **Idiom** — prefer `#[cfg]` over `cfg!()` whenever the code inside only exists on some platforms.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **Syntax still parsed, just not type-checked**:
-
-::code-wrapper{language="rust"}
-```rust
-#[cfg(windows)]
-fn f() -> UnixOnlyType { syntax error here breaks EVERY platform's build }
-// but a TYPE error in this block is invisible on Linux CI until someone
-// actually builds for Windows.
-```
-::
-
-- **`cfg!()` type-checks both branches, `#[cfg]` doesn't**:
-
-::code-wrapper{language="rust"}
-```rust
-fn wrong() {
-    if cfg!(target_os = "linux") { linux_fn() } else { other_fn() }
-    // fails to compile ON LINUX if other_fn() doesn't exist there,
-    // even though the else branch "never runs" on Linux.
-}
-```
-::
-
-- **`#[forbid]` cannot be locally un-forbidden anywhere, ever**:
-
-::code-wrapper{language="rust"}
-```rust
-#![forbid(unsafe_code)]
-mod m {
-    #[allow(unsafe_code)] // COMPILE ERROR — forbid overrides all inner allow
-    unsafe fn f() {}
-}
-```
-::
-
-- **Innermost lint attribute wins — "allow at the top" doesn't protect inner code**:
-
-::code-wrapper{language="rust"}
-```rust
-#![allow(dead_code)]
-
-#[deny(dead_code)]
-mod strict {
-    fn unused() {} // ERROR here — inner #[deny] overrides outer #[allow]
-}
-```
-::
-
-- **`#[must_use]` is defeated by *any* use, even a throwaway binding**:
-
-::code-wrapper{language="rust"}
-```rust
-let _ = risky_operation(); // no warning; just as discarded as not calling it
-```
-::
-
-- **`#[repr(packed)]` + references = UB at creation, not just dereference**:
-
-::code-wrapper{language="rust"}
-```rust
-#[repr(packed)]
-struct P { a: u8, b: u32 }
-
-fn ub(p: &P) {
-    // let r = &p.b; // UB the instant this reference is created (misaligned)
-    let v = unsafe { std::ptr::addr_of!(p.b).read_unaligned() }; // correct
-}
-```
-::
-
-- **`target_os` negation traps**:
-
-::code-wrapper{language="rust"}
-```rust
-#[cfg(not(target_os = "linux"))]
-fn f() { /* ALSO matches Windows, macOS, BSD — not just "the other Unix" */ }
-
-#[cfg(unix)]
-fn g() { /* explicit: Linux, macOS, BSD — never Windows */ }
-```
-::
+- **cfg!()** — both branches must compile on every platform.
+- **not(...)** — `not(linux)` includes many platforms, not just the one you're thinking of.
+- **Typos** — a misspelled cfg is silently false (Cargo warns about unknown names).
+- **Derive order** — derived `PartialOrd`/`Ord` follow field/variant order; reordering changes behavior.
+- **forbid** — can't be relaxed later with `#[allow]`, even for one line.
+- **debug_assertions** — code under it disappears in release; never put real logic there.
 
 ## 🧠 Spot the Bug
 
-Why does this fail to compile only on Windows, even though it looks platform-agnostic?
-
 ::code-wrapper{language="rust"}
 ```rust
-#[cfg(not(target_os = "linux"))]
-fn get_separator() -> char {
-    std::path::MAIN_SEPARATOR
-}
-
-#[cfg(target_os = "linux")]
-fn get_separator() -> char {
-    '/'
-}
-
-fn main() {
-    println!("{}", get_separator());
+fn validate(amount: i64) -> i64 {
+    #[cfg(debug_assertions)]
+    if amount < 0 {
+        panic!("negative amount");
+    }
+    amount
 }
 ```
 ::
@@ -616,56 +199,27 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-It actually compiles fine everywhere as written. The trap appears once someone "simplifies" the non-Linux branch assuming it only needs to cover Unix-likes:
+The negative-amount check only exists in debug builds. In production (`--release`) it is removed entirely, and negative amounts pass straight through. Tests pass (they run in debug), production is wrong.
+
+Real validation must exist in every build:
 
 ::code-wrapper{language="rust"}
 ```rust
-#[cfg(not(target_os = "linux"))]
-fn get_separator() -> char {
-    '/' // assumes "not Linux" means "some other Unix" — WRONG on Windows
+fn validate(amount: i64) -> Result<i64, String> {
+    if amount < 0 {
+        return Err("negative amount".into());
+    }
+    Ok(amount)
 }
 ```
 ::
 
-`not(target_os = "linux")` matches *every* non-Linux target, Windows included. On Windows the correct separator is `\`, not `/` — this compiles, runs, and returns a wrong-but-plausible answer with zero diagnostics anywhere.
-
-::code-wrapper{language="rust"}
-```rust
-// FIX — enumerate the platforms you actually mean
-#[cfg(windows)]
-fn get_separator() -> char { '\\' }
-
-#[cfg(unix)]
-fn get_separator() -> char { '/' }
-```
-::
-
-**The lesson**: `not(target_os = "X")` means "every platform except X," not "the other major platform."
+Use `debug_assertions` / `debug_assert!` only for extra self-checks you're happy to lose in release.
 
 </details>
 
 ## Summary
 
-::code-wrapper{language="rust"}
-```rust
-// #[cfg]  -> removes code from the AST before type-checking. Zero cost.
-// cfg!()  -> chooses between two branches that BOTH had to compile.
-#[cfg(feature = "x")] fn a() {}
-fn b() { if cfg!(feature = "x") { /* both arms type-check */ } }
+Attributes configure items: `derive` generates code, lint levels control warnings, `#[must_use]`/`#[deprecated]` guide callers, and `#[cfg]` removes code per platform or build. Remember that `cfg!()` still compiles both branches.
 
-// #[derive] -> ordinary compiled code from a type's shape. No reflection.
-#[derive(Debug, Default)] struct S { n: u32 }
-
-// #[repr] -> selects the actual memory-layout algorithm (ABI/alignment matter).
-#[repr(C)] struct Ffi { a: u8, b: u32 }
-
-// #[non_exhaustive] / #[must_use] / #[allow]/#[deny]/#[forbid] -> semver &
-// correctness tools; innermost lint wins, forbid is permanent.
-#[non_exhaustive] pub enum E { A }
-
-// #[global_allocator] / #[panic_handler] -> whole-program runtime
-// replacement points, decided once at the binary crate.
-```
-::
-
-Next: Cargo features and release engineering — how conditional compilation scales across a dependency graph.
+Next: Cargo Features.

@@ -1,255 +1,283 @@
-# 34 — Production Pitfalls: Why Idiomatic Rust Isn't Style, It's Load-Bearing
+# 34 — Common Pitfalls
 
-Every pitfall in this chapter has the same shape: a pattern that compiles, passes review, passes tests, and fails in production under conditions the author didn't consider — usually concurrency, scale, or an edge case the type system permitted but the domain didn't. Treat these as production post-mortems, not a style checklist.
+A one-page collection of the traps from this course. Each one: the surprising code, why it happens, and the fix. All outputs were checked with Rust 1.97 (edition 2024).
 
-## Under-the-Hood Mechanics
+## Numbers
 
-### Why the borrow checker rejects "obviously fine" code
-
-::code-wrapper{language="rust"}
-```rust
-let mut v = vec![1, 2, 3];
-let first = &v[0];      // immutable borrow starts, live until last use of `first`
-v.push(4);               // ERROR: cannot borrow `v` as mutable while borrowed as immutable
-println!("{first}");
-```
-::
-
-This isn't the compiler being overcautious — `push` can reallocate, moving every element to a new heap address, turning `first` into a dangling pointer the instant that happens. The borrow checker's rejection is the compile-time version of the exact bug ASan catches at runtime in C++.
+### 1. Overflow behaves differently in debug and release
 
 ::code-wrapper{language="rust"}
 ```rust
-// Fix: end the borrow before the mutation.
-let mut v = vec![1, 2, 3];
-let first = v[0];  // copy the value out (i32 is Copy) instead of borrowing
-v.push(4);          // now fine — no live borrow to conflict with
-println!("{first}");
-```
-::
-
-### Why `unwrap()` on `Mutex::lock()` is a poison-propagation decision, not a formality
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::Mutex;
-let m = Mutex::new(0);
-
-let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    let _guard = m.lock().unwrap();
-    panic!("boom while holding the lock"); // poisons the mutex
-}));
-
-// Every OTHER thread's .lock().unwrap() now panics too, on an unrelated
-// code path, with a PoisonError they have no context for:
-match m.lock() {
-    Ok(_) => println!("fine"),
-    Err(poisoned) => println!("poisoned: {poisoned}"), // this branch runs
+fn main() {
+    let x: u8 = std::env::args().count() as u8 + 249;   // 250 at run time
+    let y = x + 10;    // debug: panic "attempt to add with overflow" | release: 4
+    println!("{y}");
 }
 ```
 ::
 
-### Why `Deref`-based "inheritance" produces surprising method resolution
+**Fix**: say what you want — `checked_add` (→ `Option`), `wrapping_add`, `saturating_add`.
+
+### 2. `as` never fails — it silently changes values
 
 ::code-wrapper{language="rust"}
 ```rust
-// Resolution order: inherent methods -> in-scope trait methods -> auto-deref, repeat.
-// This exists so &Box<T> can call T's methods without an explicit *box — it was
-// never designed as inheritance, so using it that way has none of inheritance's guarantees.
-struct Inner;
-impl Inner { fn greet(&self) { println!("inner"); } }
-
-struct Wrapper(Inner);
-impl std::ops::Deref for Wrapper {
-    type Target = Inner;
-    fn deref(&self) -> &Inner { &self.0 }
+fn main() {
+    println!("{}", 300i32 as u8);      // 44
+    println!("{}", -1i32 as u32);      // 4294967295
+    println!("{}", 3.99f64 as i32);    // 3
+    println!("{:?}", u8::try_from(300i32));   // Err(TryFromIntError(()))  ← the safe way
 }
-
-let w = Wrapper(Inner);
-w.greet(); // auto-derefs to Inner::greet — no virtual dispatch, no override, no `super`
 ```
 ::
 
-## Cost, Performance, and Trade-Offs
-
-| Pitfall | What it costs when "fixed" naively | Correct trade-off |
-|---|---|---|
-| `.clone()` to dodge a borrow error | Real allocation + copy cost, paid every call, silently accepted forever | Restructure the borrow (narrow scope, split the struct) — costs review time once, not runtime forever |
-| `Arc<Mutex<T>>` for single-threaded state | Atomic refcounting + lock overhead for zero actual concurrency | `Rc<RefCell<T>>` — cheaper, and honestly signals "not shared across threads" to future readers |
-| `tokio::sync::Mutex` to "fix" locking across `.await` | Async-aware lock overhead, and doesn't fix the underlying design smell | Scope the `std::sync::Mutex` guard to drop before the `.await`; only reach for the async mutex if the critical section itself must await |
-| `unwrap_or_default()` to avoid handling `Err` | Silently substitutes a valid-looking default that's indistinguishable from a real result | `Result`/`Option` propagation via `?`, or an explicit sentinel type that can't be confused with real data |
-| `Box<dyn Trait>` for a closed, known set of types | Vtable indirection blocks inlining in what's often actually a hot path | `enum` dispatch — exhaustiveness-checked, inlinable, no allocation |
-
-The unifying cost pattern: **every pitfall in this chapter is a way of trading a compiler error today for a runtime failure later** — and the runtime failure is always more expensive, because it happens in production, under load, without a stack trace pointing at the actual design decision that caused it.
-
-## Production Failure Modes & Anti-Patterns
-
-### 1. `.clone()` as borrow-checker painkiller
+### 3. `len() - 1` on an empty collection
 
 ::code-wrapper{language="rust"}
 ```rust
-// Naive: clone to dodge every borrow conflict, without asking why one exists.
-fn process_order(orders: &mut Vec<Order>, id: OrderId) {
-    let order = orders.iter().find(|o| o.id == id).cloned(); // clones the whole Order
-    if let Some(order) = order {
-        orders.retain(|o| o.id != id);
-        orders.push(apply_discount(order));
+fn main() {
+    let v: Vec<i32> = vec![];
+    // let last_index = v.len() - 1;   // panic: attempt to subtract with overflow
+    println!("{:?}", v.len().checked_sub(1));   // None
+    println!("{:?}", v.last());                 // None — usually what you wanted anyway
+}
+```
+::
+
+### 4. `abs()` of the smallest integer
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let x = i32::MIN;
+    // x.abs()                            // overflow: +2147483648 doesn't fit in i32
+    println!("{:?}", x.checked_abs());    // None
+    println!("{}", x.unsigned_abs());     // 2147483648 (as u32)
+}
+```
+::
+
+### 5. Integer division and remainder
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    println!("{} {}", -7 / 2, -7 % 2);               // -3 -1   (truncates toward zero)
+    println!("{} {}", (-7i32).div_euclid(2), (-7i32).rem_euclid(2));   // -4 1
+}
+```
+::
+
+## Strings
+
+### 6. `len()` counts bytes; slicing can panic
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let s = "héllo";
+    println!("{} {}", s.len(), s.chars().count());   // 6 5
+    // &s[0..2]                                       // panic: byte index 2 is not a char boundary
+    println!("{:?}", s.get(0..2));                   // None — safe version
+}
+```
+::
+
+### 7. `parse()` does not trim
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    println!("{:?}", " 42".parse::<i32>());           // Err(InvalidDigit)
+    println!("{:?}", " 42".trim().parse::<i32>());    // Ok(42)
+}
+```
+::
+
+### 8. String comparison is by code point
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    println!("{}", "Zebra" < "apple");    // true — all uppercase letters sort before lowercase
+    let mut v = vec!["b", "A", "a"];
+    v.sort_by_key(|s| s.to_lowercase());  // case-insensitive sort
+    println!("{v:?}");                    // ["A", "a", "b"]
+}
+```
+::
+
+## Ownership & Borrowing
+
+### 9. `for x in v` consumes `v`
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let v = vec![String::from("a")];
+    for s in &v { println!("{s}"); }   // borrow
+    println!("{}", v.len());           // still usable
+    // for s in v {} ; v.len()         // error[E0382]: borrow of moved value: `v`
+}
+```
+::
+
+### 10. Holding a reference while modifying
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let first = v[0];        // copy the value, don't keep `&v[0]`
+    v.push(first);
+    println!("{v:?}");       // [1, 2, 3, 1]
+}
+```
+::
+
+### 11. `.clone()` to silence the compiler
+
+A clone copies all the data. If the function only reads, take `&T` / `&str` / `&[T]` instead.
+
+### 12. `..base` moves non-Copy fields
+
+::code-wrapper{language="rust"}
+```rust
+#[derive(Debug, Clone)]
+struct Cfg { host: String, port: u16 }
+
+fn main() {
+    let base = Cfg { host: "localhost".into(), port: 80 };
+    let a = Cfg { port: 8080, ..base.clone() };   // clone, or `base` is partially moved
+    let b = Cfg { port: 443, ..base };
+    println!("{a:?} {b:?}");
+}
+```
+::
+
+## Patterns & Control Flow
+
+### 13. A name in a pattern binds — it doesn't compare
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let expected = 5;
+    let got = 7;
+    match got {
+        n if n == expected => println!("equal"),   // compare with a guard
+        _ => println!("different"),                // printed
     }
+    // `match got { expected => ... }` would match ANYTHING and bind a new `expected`.
 }
 ```
 ::
 
-Invisible at low volume. At scale — called per checkout, `Order` holding dozens of `LineItem`s — every call pays a full deep clone to sidestep a borrow the compiler was right to flag. Ten hot functions with this reflex pay ten unnecessary allocations per request, invisible until a profiler shows `Order::clone` eating double-digit percent of request time.
+### 14. `_ =>` hides new enum variants
+
+List the variants explicitly so adding one gives a compile error at every `match`.
+
+### 15. `return` inside a closure
+
+`return` in `v.iter().for_each(|x| { ... return; })` only leaves the closure. Use `any`, `find`, or a `for` loop.
+
+## Collections & Iterators
+
+### 16. Iterators are lazy
+
+`v.iter().map(|x| println!("{x}"));` prints nothing. Use `for` or end with a consumer (`collect`, `for_each`, `count`).
+
+### 17. `zip` stops at the shorter side; `dedup` only removes neighbours
 
 ::code-wrapper{language="rust"}
 ```rust
-// Production-grade: restructure to avoid needing two overlapping borrows.
-fn process_order(orders: &mut Vec<Order>, id: OrderId) {
-    if let Some(pos) = orders.iter().position(|o| o.id == id) {
-        let order = orders.remove(pos); // moves out, no clone, no overlapping borrow
-        orders.push(apply_discount(order));
-    }
+fn main() {
+    println!("{:?}", [1, 2, 3].iter().zip(["a"]).collect::<Vec<_>>());   // [(1, "a")]
+    let mut d = vec![1, 2, 1];
+    d.dedup();
+    println!("{d:?}");          // [1, 2, 1] — sort first to remove all duplicates
 }
 ```
 ::
 
-### 2. `unwrap()` on lock poisoning, cascading a single panic across a fleet of threads
+### 18. `HashMap` order is random
+
+Never depend on it in output or tests. Use `BTreeMap` or sort the keys.
+
+### 19. Errors swallowed by `.ok()` / `.flatten()` / `filter_map`
 
 ::code-wrapper{language="rust"}
 ```rust
-// Naive: every access path assumes the lock is never poisoned.
-struct MetricsStore { counts: std::sync::Mutex<HashMap<String, u64>> }
-
-impl MetricsStore {
-    fn increment(&self, key: &str) {
-        let mut g = self.counts.lock().unwrap(); // panics fleet-wide if ever poisoned
-        *g.entry(key.to_string()).or_insert(0) += 1;
-    }
+fn main() {
+    let input = ["1", "x", "3"];
+    let silent: Vec<i32> = input.iter().filter_map(|s| s.parse().ok()).collect();
+    let loud: Result<Vec<i32>, _> = input.iter().map(|s| s.parse::<i32>()).collect();
+    println!("{silent:?} {loud:?}");   // [1, 3] Err(ParseIntError { kind: InvalidDigit })
 }
 ```
 ::
 
-**Why it fails at scale**: one panic inside *any* critical section holding this lock — an unrelated bug, an unwrap on unexpected input, a bounds error — poisons the mutex. Every other thread calling `increment()` afterward now also panics, immediately, on `.unwrap()`, with a `PoisonError` message that gives zero insight into the *original* panic. A single localized bug becomes a fleet-wide metrics outage, and the on-call engineer chases the wrong stack trace for the first hour. The production-grade version makes a deliberate poison policy instead of an accidental one:
+## Smart Pointers & Concurrency
 
-::code-wrapper{language="rust"}
-```rust
-// Production-grade: explicit poison-recovery policy, documented as a decision.
-fn increment(&self, key: &str) {
-    // Metrics are best-effort; a poisoned lock still holds a valid (if
-    // possibly-inconsistent) HashMap, and losing a counter update is
-    // strictly preferable to cascading a panic across every caller.
-    let mut g = self.counts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    *g.entry(key.to_string()).or_insert(0) += 1;
-}
-```
-::
+### 20. `RefCell` panics at run time
 
-### 3. Locking across `.await`, serializing unrelated concurrent work
+Holding `cell.borrow()` while calling `cell.borrow_mut()` panics with `RefCell already borrowed`. Keep borrows short.
 
-::code-wrapper{language="rust"}
-```rust
-// Naive: holding a std Mutex guard across an await point.
-async fn record_and_notify(state: &std::sync::Mutex<State>, event: Event) {
-    let mut g = state.lock().unwrap();
-    g.apply(event);
-    notify_subscribers(&g).await; // guard held across the entire async call
-}
-```
-::
+### 21. `Rc` cycles leak
 
-**Why it fails at scale**: `std::sync::Mutex` isn't designed for async — holding its guard across an `.await` means every other task that touches `state` blocks (actually spins on a non-async-aware lock, which can starve the executor) for the full duration of `notify_subscribers`, an operation that might involve network I/O. Under load, this single lock becomes the effective concurrency ceiling for the entire subsystem, regardless of how many worker threads the runtime has. The fix isn't reflexively swapping to `tokio::sync::Mutex` — it's shrinking the critical section so nothing async happens inside it:
+Two `Rc`s pointing at each other are never freed. Use `Weak` for back-links.
 
-::code-wrapper{language="rust"}
-```rust
-// Production-grade: extract what's needed, release the lock, then await.
-async fn record_and_notify(state: &std::sync::Mutex<State>, event: Event) {
-    let snapshot = {
-        let mut g = state.lock().unwrap();
-        g.apply(event);
-        g.snapshot() // cheap, owned copy of what notify_subscribers needs
-    }; // guard dropped here
-    notify_subscribers(&snapshot).await;
-}
-```
-::
+### 22. `let _ = mutex.lock()` unlocks immediately
 
-### 4. `Deref`-based fake inheritance, breaking invisibly on a stdlib update
+Bind guards to a name (`let _guard = ...`). The compiler now rejects `let _ =` on a lock.
 
-::code-wrapper{language="rust"}
-```rust
-// Naive: "inherit" a wrapped type's methods via Deref instead of explicit delegation.
-struct AuditedConnection(DbConnection);
-impl std::ops::Deref for AuditedConnection {
-    type Target = DbConnection;
-    fn deref(&self) -> &DbConnection { &self.0 }
-}
-// AuditedConnection.execute(query) "just works" via deref coercion
-```
-::
+### 23. A channel loop that never ends
 
-**Why it fails at scale**: every method `DbConnection` has — including ones added to it later by an upstream crate update, with no corresponding audit-logging wrapper — becomes silently callable on `AuditedConnection` as if it were audited, because the compiler auto-derefs to find it. The entire premise of the wrapper (every DB call is audited) is violated the moment `DbConnection` gains a new method upstream, with **no compile error, no warning, nothing** — a caller writes `audited_conn.new_upstream_method()`, it compiles, it runs, it isn't audited, and nobody notices until a compliance review asks for logs that don't exist. The production-grade fix is explicit delegation — more boilerplate, but the API surface is exactly what you wrote, not whatever the wrapped type happens to expose this week:
+`for msg in rx` waits until **every** `Sender` is dropped — including the original one in `main`. `drop(tx)` before the loop.
 
-::code-wrapper{language="rust"}
-```rust
-// Production-grade: explicit surface, nothing leaks through by accident.
-struct AuditedConnection(DbConnection);
-impl AuditedConnection {
-    fn execute(&self, query: &Query) -> Result<Rows, DbError> {
-        audit_log(query);
-        self.0.execute(query)
-    }
-    // any new DbConnection method requires a deliberate addition here
-}
-```
-::
+### 24. Async: sequential `.await`, blocking calls, locks across `.await`
 
-## Architectural Application
+- `a.await; b.await;` runs one after the other → use `tokio::join!`.
+- `std::thread::sleep` inside async freezes other tasks → use `tokio::time::sleep` or `spawn_blocking`.
+- A `std::sync::MutexGuard` alive across `.await` makes the task non-`Send` → drop it first.
 
-Every pitfall above is a **local decision with a non-local blast radius** — that's the actual definition of a footgun in a systems language. The architectural discipline that prevents them at scale:
+## Build & Tooling
 
-- **Lock scope is an API contract, not an implementation detail** — document (and enforce via code review) that critical sections never contain `.await` or any call that might block/allocate unpredictably. This belongs in a team's Rust style guide, not tribal knowledge.
-- **Poison policy is a decision, made once, applied consistently** — pick "poisoned lock is a fatal error" (rare, only when the protected invariant truly can't tolerate any inconsistency) or "poisoned lock recovers via `into_inner()`" (the common case) per subsystem, and don't let it default silently to whichever the first engineer who wrote `.unwrap()` happened to pick.
-- **`Deref` is reserved for actual smart-pointer semantics** — a team convention banning `Deref`/`DerefMut` outside of genuine pointer-like types (and enforcing it via a clippy lint or review checklist) prevents an entire category of invisible API-surface leakage.
-- **`clone()` at a borrow conflict is a prompt to ask "why," not a fix** — treat `clippy::redundant_clone` findings as a design-review trigger in code review, not a lint to silence.
+### 25. `cfg!()` still compiles both branches
+
+`if cfg!(windows) { windows_only_fn(); }` fails to compile on Linux/macOS. Use `#[cfg(windows)]` on the statement.
+
+### 26. Timing in debug mode
+
+Debug builds can be 10–100× slower. Benchmark with `--release` and `std::hint::black_box`.
 
 ## 💡 Tips & Tricks
 
-- **Debug**: when the borrow checker rejects something that "should" work, try ending the conflicting borrow earlier (a block `{ }`, reordering statements) before reaching for `.clone()`, which just papers over the design tension.
-- **Clippy**: run `cargo clippy --all-targets -- -D warnings` in CI — `&Vec<T>` params, needless `.clone()`, reachable `unwrap()` all have dedicated lints that catch them automatically.
-- **Debug**: `RUST_BACKTRACE=full cargo run` on an `unwrap()` panic gives the exact call chain — pair with `#[track_caller]` on your own `unwrap`-like helpers so panics report the *caller's* line, not the helper's.
-- **Idiom**: `cargo expand` on a struct with `#[derive(Default)]` plus `..Default::default()` shows exactly which fields get defaulted — useful for auditing whether a "smelly" global default is hiding inside builder-style construction.
-- **Performance**: benchmark before *and* after applying any fix in this chapter — some (`&[T]` over `&Vec<T>`) are zero-cost by construction; others (`Rc<RefCell<T>>` to `Arc<Mutex<T>>`) have a real, measurable cost worth confirming is actually needed.
-- **Safety**: `cargo miri test` on anything touching raw pointers, `unsafe`, or manual memory management — "compiles and passes tests" and "is actually sound" diverge exactly in the categories this chapter covers.
+- **Lint** — `cargo clippy` catches many of these automatically (redundant clones, `&Vec` params, needless collects).
+- **Debug** — read the whole compiler error, especially the `help:` lines; they often contain the exact fix.
+- **Test** — run `cargo test --release` too, so overflow and `debug_assert!` differences surface.
+- **Idiom** — prefer `.get()`, `checked_*`, `try_from` and `?` over panicking shortcuts on any external input.
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **`&Vec<T>` and `&[T]` are not interchangeable in both directions**: a function taking `&[T]` accepts `&Vec<T>` via coercion, but a function taking `&Vec<T>` rejects a plain array or slice — this is a real API restriction, not just style.
-- **`unwrap_or_default()` can silently substitute a value indistinguishable from a real result**: `s.parse::<i32>().unwrap_or_default()` returns `0` both on parse failure *and* for the literal input `"0"` — downstream code checking `if result == 0` can't tell which happened.
-- **Switching to `tokio::sync::Mutex` doesn't fix a design that shouldn't need async locking at all**: if the critical section doesn't actually need to await internally, the real fix is scoping a `std::sync::Mutex` guard to drop before the `.await` — swapping mutex types can mask the structural problem instead of solving it.
-- **`as` casts fail differently depending on direction**: widening (`u8 as u32`) is always lossless; narrowing (`u32 as u8`) silently truncates — the same keyword means "always safe" one way and "silently dangerous" the other.
-- **`match` exhaustiveness protects only actual `match` expressions**: adding an enum variant forces every `match` to update, but does nothing for `if`/`else` chains, lookup tables, or serialization mappings elsewhere that also needed updating.
-- **Platform-independent trap — `HashMap` iteration order differs between runs of the *same* binary**: randomized per-process by design (a DoS mitigation), not platform-specific — code that happens to pass because order was "stable enough" in one CI environment can fail nondeterministically on a re-run of the identical binary.
+The list above *is* the gotcha list. The three that cause the most production bugs:
+
+- **Silent wrong values** — `as` casts and release-mode overflow.
+- **Silent swallowed errors** — `.ok()`, `filter_map`, `unwrap_or_default`.
+- **Silent ordering assumptions** — `HashMap` iteration, `swap_remove`, derived `Ord` on reordered enums.
 
 ## 🧠 Spot the Bug
 
-What's wrong with this "safe" refactor of a division function, and why does it pass every existing test?
-
 ::code-wrapper{language="rust"}
 ```rust
-fn safe_divide(a: i32, b: i32) -> i32 {
-    if b == 0 {
-        return 0;
-    }
-    a / b
-}
-
-fn apply_discount(price: i32, discount_count: i32, total_discounts: i32) -> i32 {
-    let per_discount = safe_divide(price, total_discounts);
-    price - (per_discount * discount_count)
+fn average_age(lines: &[&str]) -> u8 {
+    let ages: Vec<u8> = lines.iter().filter_map(|l| l.parse().ok()).collect();
+    let total: u8 = ages.iter().sum();
+    total / ages.len() as u8
 }
 
 fn main() {
-    let final_price = apply_discount(100, 2, 0);
-    println!("{final_price}");
+    println!("{}", average_age(&["30", " 40", "50"]));
 }
 ```
 ::
@@ -257,31 +285,29 @@ fn main() {
 <details>
 <summary>Answer</summary>
 
-Prints `100` — silently wrong, not a crash, easily mistaken for "the discount just didn't apply."
+Three pitfalls in four lines:
 
-`safe_divide` "fixes" the divide-by-zero panic by returning `0`, but `0` is a legitimate result here, not a meaningless sentinel — `apply_discount` happily multiplies and subtracts it as if it were a real per-discount amount, with no way to distinguish "there were zero discounts, so I made something up" from "the actual per-unit discount computed to zero." Existing tests pass because none of them exercise `total_discounts == 0` with an assertion on the *correctness* of the fallback value, only on the absence of a panic. The original panic, unpleasant as it was, was at least loud and immediate; this refactor trades a crash for silent, incorrect business logic.
+1. `" 40"` fails to parse (no trim) and `filter_map` silently drops it.
+2. `total: u8` overflows once ages add up past 255 (panic in debug, wrong in release).
+3. An empty list divides by zero → panic.
 
 ::code-wrapper{language="rust"}
 ```rust
-fn safe_divide(a: i32, b: i32) -> Option<i32> {
-    if b == 0 { None } else { Some(a / b) }
-}
-
-fn apply_discount(price: i32, discount_count: i32, total_discounts: i32) -> i32 {
-    match safe_divide(price, total_discounts) {
-        Some(per_discount) => price - (per_discount * discount_count),
-        None => price,
+fn average_age(lines: &[&str]) -> Result<Option<u32>, std::num::ParseIntError> {
+    let ages: Vec<u32> = lines.iter().map(|l| l.trim().parse()).collect::<Result<_, _>>()?;
+    if ages.is_empty() {
+        return Ok(None);
     }
+    Ok(Some(ages.iter().sum::<u32>() / ages.len() as u32))
 }
+// average_age(&["30", " 40", "50"]) → Ok(Some(40))
 ```
 ::
-
-**The lesson**: replacing a panic with a made-up default value doesn't make error handling safe — it moves the bug from "loud and immediate" to "silent and semantically wrong," which is strictly worse in production.
 
 </details>
 
 ## Summary
 
-Every pitfall here is a compiler error deferred into a production incident: `.clone()` deferring a design question into a perf regression, `.unwrap()` on `lock()` deferring a poison policy into a cascading fleet-wide panic, locking across `.await` deferring a concurrency-architecture decision into a throughput ceiling, `Deref`-based fake inheritance deferring an API-surface decision into an invisible compliance gap. The fix in every case is the same shape: make the deferred decision explicit, once, at the design level — don't let the compiler's permissiveness stand in for an actual decision.
+Most Rust bugs that survive compilation fall into a few families: silent numeric conversions, swallowed errors, hidden ordering assumptions, and borrows or locks held too long. Make the behavior explicit and the compiler — and your tests — will catch the rest.
 
-Next: Final exam-style questions and project ideas.
+Next: Exercises & Projects.

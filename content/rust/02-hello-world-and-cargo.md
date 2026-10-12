@@ -1,10 +1,8 @@
-# 02 — Hello World & Cargo Deep Dive
+# 02 — Hello World & Cargo
 
-`println!("Hello, world!")` is the least interesting line here. What matters is how `rustc`/`cargo` turn source into an artifact, and where the dependency/feature resolution model breaks down at scale.
+## Hello, World
 
-## Under-the-Hood Mechanics
-
-::code-wrapper{language="rust" filename="main.rs"}
+::code-wrapper{language="rust" filename="src/main.rs"}
 ```rust
 fn main() {
     println!("Hello, world!");
@@ -12,297 +10,200 @@ fn main() {
 ```
 ::
 
-`println!` is a macro, not a function — Rust has no runtime reflection or variadic functions in its native ABI:
+`println!` ends in `!` because it is a **macro**, not a function. The compiler checks the format string against the arguments **at compile time**:
 
 ::code-wrapper{language="rust"}
 ```rust
 fn main() {
     let name = "Ferris";
-    println!("Hello, {name}!");        // fine: format string validated against args at compile time
-    // println!("Hello, {}!");         // COMPILE ERROR: missing argument, caught before running
-    // println!("Hello, {} {}!", name);// COMPILE ERROR: too few arguments for placeholders
+    println!("Hello, {name}!");          // OK
+    // println!("Hello, {}!");           // error: 1 positional argument in format string, but no arguments were given
+    // println!("{} {}", name);          // error: 2 positional arguments in format string, but there is 1 argument
 }
 ```
 ::
 
-Compiling directly with `rustc` skips Cargo entirely:
+## Formatting Cheat Sheet
 
-::code-wrapper{language="bash"}
-```bash
-rustc src/main.rs && ./main      # produces ./main (or main.exe)
-# No dependency resolution, no feature unification, no incremental cache —
-# same compiler pipeline cargo build invokes, just without the orchestration layer.
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let name = "Ferris";
+    let n = 42;
+
+    println!("{{name}} = {name}");          // {name} = Ferris   ← {{ }} print literal braces
+    println!("[{n:5}] [{n:<5}] [{n:05}]");  // [   42] [42   ] [00042]
+    println!("{:.2}", 3.14159);             // 3.14
+    println!("{:?} {}", "hi", "hi");        // "hi" hi            ← Debug shows quotes
+    println!("{0} {1} {0}", "a", "b");      // a b a              ← reuse by index
+    println!("{:x} {:b} {:#x}", 255, 5, 255); // ff 101 0xff
+    println!("{:#?}", (1, "x"));            // pretty, multi-line Debug
+
+    print!("no newline ");                  // print! does not add \n
+    eprintln!("this goes to stderr");       // errors/logs → stderr
+}
 ```
 ::
 
-### `Cargo.toml` vs `Cargo.lock`: two different graphs
+**Tricky**: `{}` needs the `Display` trait, `{:?}` needs `Debug`. A `Vec` has only `Debug`:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{v:?}");     // [1, 2, 3]
+    // println!("{v}");    // error[E0277]: `Vec<{integer}>` doesn't implement `std::fmt::Display`
+}
+```
+::
+
+## Cargo Basics
+
+::code-wrapper{language="bash"}
+```bash
+cargo new hello          # creates hello/Cargo.toml and hello/src/main.rs, plus git init
+cd hello
+cargo run                # build (debug) + run
+cargo check              # type-check only — much faster than build
+cargo build --release    # optimized binary in target/release/
+cargo test               # run tests
+cargo run -- --verbose   # everything after -- goes to YOUR program
+```
+::
+
+**Tricky**: without `--`, Cargo tries to read the flag itself:
+
+::code-wrapper{language="bash"}
+```bash
+cargo run --verbose      # Cargo becomes verbose; your program gets no arguments
+cargo run -- --verbose   # your program receives "--verbose"
+```
+::
+
+## `Cargo.toml` vs `Cargo.lock`
 
 ::code-wrapper{language="toml" filename="Cargo.toml"}
 ```toml
 [package]
-name = "my_app"
+name = "hello"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
-publish = false
+edition = "2024"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }   # "1.0" means ^1.0: >=1.0.0, <2.0.0
-tokio = { version = "1", features = ["full"] }
+rand = "0.8"        # means >=0.8.0, <0.9.0  (caret rule)
+serde = { version = "1", features = ["derive"] }
 
-[dev-dependencies]
+[dev-dependencies]  # only for tests/examples/benches
 pretty_assertions = "1"
-
-[features]
-default = ["json"]
-json = ["serde"]
 ```
 ::
 
-::code-wrapper{language="toml" filename="Cargo.lock (excerpt)"}
-```toml
-[[package]]
-name = "serde"
-version = "1.0.203"     # the EXACT version actually resolved and built — frozen, reproducible
+- `Cargo.toml` — the versions you **accept**.
+- `Cargo.lock` — the exact versions that were **built**. Commit it for apps.
+
+**Tricky**: the caret rule is stricter below `1.0`:
+
+| Written | Accepts |
+|---|---|
+| `"1.2"` | `>=1.2.0, <2.0.0` |
+| `"0.8"` | `>=0.8.0, <0.9.0` ← a 0.x minor bump is "breaking" |
+| `"0.0.3"` | exactly `0.0.3` |
+| `"=1.2.3"` | exactly `1.2.3` |
+
+::code-wrapper{language="bash"}
+```bash
+cargo add rand            # add a dependency (edits Cargo.toml)
+cargo update -p rand      # update one crate inside the allowed range
+cargo build --locked      # fail if Cargo.lock is out of date — use in CI
+cargo tree                # show the dependency tree
 ```
 ::
 
-### Feature unification is a build-graph-wide OR, not per-crate
+## Multiple Binaries
 
-::code-wrapper{language="toml" filename="crate-a/Cargo.toml"}
-```toml
-[dependencies]
-serde = { version = "1.0" }              # doesn't ask for "derive"
-```
-::
-
-::code-wrapper{language="toml" filename="crate-b/Cargo.toml"}
-```toml
-[dependencies]
-serde = { version = "1.0", features = ["derive"] }  # DOES ask for "derive"
-```
-::
-
-If `crate-a` and `crate-b` are both in one build graph, `serde/derive` compiles for **both** — features are unified globally per compilation, never scoped per-consumer.
-
-## Cost, Performance, and Trade-Offs
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-# Dangerous: re-exporting a transitive dependency's feature as your own public feature.
-[features]
-json = ["serde/derive"]   # the instant ANY consumer enables "json", derive compiles for EVERYONE
+::code-wrapper{language="bash"}
+```bash
+src/
+├── main.rs          # binary "hello"
+└── bin/
+    └── tool.rs      # binary "tool" — found automatically
 ```
 ::
 
 ::code-wrapper{language="bash"}
 ```bash
-cargo check     # parse -> HIR -> type inference -> BORROW CHECK -> stop, no codegen/link
-cargo build     # everything check does, PLUS LLVM IR, optimization, codegen, linking
-# check is an order of magnitude faster — make it your default inner-loop command.
+cargo run --bin tool
+cargo run            # error: `cargo run` could not determine which binary to run
+                     # (when there are 2+ binaries and no default-run set)
 ```
 ::
 
-Workspaces compile shared deps once; independent crates duplicate:
-
-::code-wrapper{language="toml" filename="workspace/Cargo.toml"}
-```toml
-[workspace]
-members = ["core", "cli", "service"]
-
-[workspace.dependencies]
-serde = "1.0"   # declared once; every member references via serde.workspace = true
-```
-::
-
-Path deps rebuild fast locally but can silently block publishing:
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[dependencies]
-local_lib = { path = "../local" }              # unpublishable to crates.io: no `version` field
-local_lib2 = { path = "../local2", version = "0.1" }  # publishable: has a version fallback
-```
-::
-
-## Production Failure Modes & Anti-Patterns
-
-**Anti-pattern: no committed `Cargo.lock` for a service.**
-
-::code-wrapper{language="bash"}
-```bash
-# .gitignore
-Cargo.lock   # WRONG for a binary/service — fine for a pure library, wrong here
-```
-::
-
-::code-wrapper{language="bash"}
-```bash
-# fix: commit Cargo.lock, and make CI verify it stays in sync
-cargo build --locked   # fails loudly if Cargo.lock is stale, instead of silently re-resolving
-cargo build --frozen   # --locked, plus forbids any network access entirely
-```
-::
-
-**Anti-pattern: leaking dependency features through your public API without realizing it.**
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[dependencies]
-tokio = { version = "1", features = ["full"] }   # pulls in signal handling, process spawning, everything
-```
-::
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[dependencies]
-# Enumerate exactly what the LIBRARY needs; let the final BINARY decide if it wants "full".
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-```
-::
-
-## Architectural Application
-
-Workspaces collapse the build graph for a monorepo of related crates:
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[dependencies]
-serde.workspace = true   # mechanical enforcement: one version of serde across the whole monorepo
-```
-::
-
-Feature flags as compile-time dependency injection — must be strictly additive:
+## Compile-Time Environment
 
 ::code-wrapper{language="rust"}
 ```rust
-#[cfg(feature = "postgres")]
-fn backend() -> impl Backend { PostgresBackend::new() }
+fn main() {
+    // env!  → read at COMPILE time (set by Cargo); missing → compile error
+    println!("version {}", env!("CARGO_PKG_VERSION"));
 
-#[cfg(not(feature = "postgres"))]
-fn backend() -> impl Backend { InMemoryBackend::new() }
-// Additive: a feature only ever turns capability ON, never changes existing default behavior —
-// Cargo's unification means you're never the only crate deciding whether it's enabled.
-```
-::
-
-Git/path deps as a deliberate, time-boxed escape hatch:
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[dependencies]
-upstream = { git = "https://github.com/org/upstream", rev = "a1b2c3d" }
-# Pin to a `rev` or `tag` the moment this needs to survive more than a sprint —
-# an unpinned branch means your build's reproducibility depends on someone else not force-pushing.
-```
-::
-
-Reading diagnostics as a design signal, not a workaround prompt:
-
-::code-wrapper{language="rust"}
-```rust
-struct Widget { data: Vec<i32> }
-
-fn bad(w: &mut Widget) {
-    let a = &mut w.data;
-    let b = &mut w.data;      // E0499: two &mut borrows — restructure ownership, don't reach for Rc<RefCell<_>>
-    a.push(1);
-    b.push(2);
+    // std::env::var → read at RUN time; missing → Err
+    match std::env::var("HOME") {
+        Ok(home) => println!("home = {home}"),
+        Err(e) => println!("no HOME: {e}"),
+    }
 }
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: run `cargo build --locked` (or `--frozen`) in every CI pipeline for a binary crate.
-- **Debug**: `rustc --explain E0382` prints the compiler team's own detailed explanation for any error code.
-- **Performance**: enumerate exact features for library dependencies rather than `"full"`.
-- **Idiom**: `cargo tree -d` surfaces duplicate major versions of the same crate linked simultaneously.
-- **Debug**: `cargo run -- --flag value` — only args after `--` reach your binary's `argv`.
-- **Idiom**: set `publish = false` immediately for any crate not meant for crates.io.
+- **Speed** — use `cargo check` while coding; it skips code generation.
+- **Debug** — `rustc --explain E0382` prints a full explanation of any error code.
+- **Tooling** — `cargo clippy` and `cargo fmt` before every commit.
+- **Idiom** — `{name}` inline captures (Rust 2021+) are cleaner than `{}` with a trailing argument.
+- **Tooling** — `cargo tree -d` shows crates included in two different versions.
 
 ## ⚠️ Edge Cases & Gotchas
 
-::code-wrapper{language="bash"}
-```bash
-# src/bin/*.rs each become independent binary targets automatically.
-cargo run --bin extra   # required once you have more than one — bare `cargo run` is ambiguous
-```
-::
+- **Format** — `{}` needs `Display`; most collections and your own structs only get `Debug` (`{:?}`) via `#[derive(Debug)]`.
+- **Format** — to print a literal `{`, write `{{`.
+- **Args** — `cargo run --flag` passes the flag to Cargo; use `cargo run -- --flag`.
+- **Versions** — `"0.8"` will never update to `0.9`. Pre-1.0 crates treat minor bumps as breaking.
+- **Env** — `env!("X")` is baked in at compile time; changing `X` later has no effect until you rebuild.
+- **Lockfile** — without `--locked`, `cargo build` silently updates an out-of-date `Cargo.lock`.
 
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[patch.crates-io]
-some-crate = { path = "../some-crate-fork" }   # applies WORKSPACE-WIDE, not just to one crate
-```
-::
+## 🧠 Quick Quiz
 
-::code-wrapper{language="rust" filename="build.rs"}
-```rust
-fn main() {
-    println!("cargo:rerun-if-changed=schema.proto");
-    // Forgetting this: Cargo may not rebuild when schema.proto changes — stale generated code, no error.
-}
-```
-::
+What does this print?
 
 ::code-wrapper{language="rust"}
 ```rust
 fn main() {
-    // Only populated by Cargo itself — unset if you invoke `rustc` directly (see chapter top).
-    println!("{}", env!("CARGO_PKG_VERSION"));
+    let x = 7;
+    println!("{{{x}}}");
+    println!("[{x:>3}]");
+    println!("{:?}", "a\"b");
 }
 ```
 ::
 
-::code-wrapper{language="bash"}
-```bash
-cargo update -p some_crate --precise 1.2.3   # bump exactly one dependency, e.g. a security patch
-```
-::
-
-::code-wrapper{language="toml" filename="Cargo.toml"}
-```toml
-[dependencies]
-tracing = { version = "0.1", optional = true }         # implicitly defines feature "tracing"
-tracing = { package = "tracing", version = "0.1", optional = true }
-my-feature = { dep = "tracing" }  # use dep: syntax to decouple the feature name from the crate name
-```
-::
-
-## 🧠 Spot the Bug
-
-::code-wrapper{language="yaml" filename=".github/workflows/ci.yml"}
-```yaml
-- run: cargo build
-- run: cargo test
-```
-::
-
-A team's CI passes on every PR. Two weeks later a production deploy fails with a trait-bound error nobody can reproduce locally. What's missing?
-
 <details>
 <summary>Answer</summary>
 
-Nothing pins resolution with `--locked`, and nothing rebuilds from a clean state matching the release pipeline:
-
 ::code-wrapper{language="bash"}
 ```bash
-# Local dev machine: warm cache, old resolution reused, everything compiles.
-cargo build
-
-# Release pipeline: fresh Docker image, no cache, Cargo.lock slightly stale vs Cargo.toml —
-# re-resolves part of the graph, lands on a newer transitive version with different trait bounds.
-cargo build   # FAILS here, never locally
+{7}
+[  7]
+"a\"b"
 ```
 ::
 
-**The lesson**: `cargo build`/`cargo test` without `--locked` will happily re-resolve and rewrite an out-of-sync `Cargo.lock` instead of failing — assert the lock file is authoritative in CI.
+`{{` and `}}` are literal braces around the `{x}` placeholder. `>3` right-aligns in width 3. `Debug` for strings adds quotes and escapes the inner quote.
 
 </details>
 
 ## Summary
 
-Cargo's manifest/lock split separates an *acceptable range* from the *exact graph* actually built and tested — treat `Cargo.lock` as source of truth for binaries, remember features unify globally rather than per-consumer, and use workspaces to collapse a monorepo's build graph into one coherent, reproducible unit.
+`println!` is a compile-checked macro. Cargo builds, runs, tests and manages dependencies; `Cargo.toml` says what you accept, `Cargo.lock` records what you built.
 
-Next: Variables & Mutability — how `let`, `mut`, and immutability-by-default set up the aliasing guarantees the borrow checker (and therefore ownership) depends on.
+Next: Variables & Mutability.

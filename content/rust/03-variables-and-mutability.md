@@ -1,361 +1,287 @@
 # 03 — Variables & Mutability
 
-Immutability-by-default is load-bearing: the borrow checker's aliasing model assumes "immutable" means "no one can change this out from under an existing reference." The rest of ownership is built on `let`/`mut`/`const`/`static`.
-
-## Under-the-Hood Mechanics
-
-::code-wrapper{language="rust"}
-```rust
-let x = 5;          // immutable
-let mut y = 5;      // mutable
-y += 1;
-// x = 6;           // ERROR: cannot assign twice to immutable variable
-```
-::
-
-`mut` is a property of the **binding**, not a distinct type:
-
-::code-wrapper{language="rust"}
-```rust
-fn takes_mut(mut n: i32) -> i32 {   // parameter re-declared mut locally
-    n += 1;
-    n
-}
-
-fn main() {
-    let a = 5;              // immutable binding
-    let b = a;               // moved/copied into a NEW binding — b's mutability is independent
-    let mut c = b;           // now mutable, same underlying value, different binding
-    c += 1;
-    println!("{}", takes_mut(c));
-    // At the LLVM IR level there is no "mutable i32" vs "immutable i32" — this is 100%
-    // a rustc front-end (borrow-checker) concept, erased before codegen.
-}
-```
-::
-
-The aliasing rule this underwrites — no other reference while a `&mut` is live:
+## Immutable by Default
 
 ::code-wrapper{language="rust"}
 ```rust
 fn main() {
-    let mut v = vec![1, 2, 3];
-    let r = &mut v;
-    r.push(4);
-    // let r2 = &v;   // ERROR while r is live — untracked mutation via `v` would break this too
-    println!("{r:?}");
+    let x = 5;
+    // x = 6;          // error[E0384]: cannot assign twice to immutable variable `x`
+
+    let mut y = 5;
+    y += 1;
+    println!("{x} {y}");   // 5 6
 }
 ```
 ::
 
-### Shadowing creates a new binding, not a new value in the old slot
+`mut` belongs to the **name** (binding), not the value. Moving a value into a new binding can change it:
 
 ::code-wrapper{language="rust"}
 ```rust
-let x = 5;
-let x = x + 1;          // shadows, same type
-let x = x.to_string();  // shadows with new type — totally fine
+fn main() {
+    let v = vec![1];
+    let mut w = v;     // same Vec, now through a mutable binding
+    w.push(2);
+    println!("{w:?}"); // [1, 2]
+}
 ```
 ::
+
+**Tricky**: `mut` does not let you change the **type**:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let mut x = 5;
+    // x = "hi";       // error[E0308]: mismatched types — expected integer, found `&str`
+}
+```
+::
+
+## Declare Now, Assign Later
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let label;                     // no value yet, no `mut` needed
+    let n = 7;
+    if n > 3 {
+        label = "big";
+    } else {
+        label = "small";
+    }
+    println!("{label}");           // big — assigned exactly once on every path
+}
+```
+::
+
+Reading before assigning is a compile error, not garbage memory:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let x: i32;
+    // println!("{x}");   // error[E0381]: used binding `x` isn't initialized
+}
+```
+::
+
+## Shadowing
+
+A new `let` with the same name creates a **new variable** that hides the old one:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let input = "  42  ";
+    let input = input.trim();              // &str
+    let input: i32 = input.parse().unwrap(); // now i32 — a different type is fine
+    println!("{}", input + 1);             // 43
+}
+```
+::
+
+**Tricky**: shadowing inside a block ends at the block:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let x = 5;
+    {
+        let x = x * 2;
+        println!("inner {x}");   // inner 10
+    }
+    println!("outer {x}");       // outer 5  ← the original was never changed
+}
+```
+::
+
+Compare with `mut`, which really changes the one variable:
+
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let mut x = 5;
+    {
+        x = x * 2;
+    }
+    println!("{x}");   // 10
+}
+```
+::
+
+**Tricky**: shadowing does **not** destroy the old value early. Both live until the end of scope, and drop in reverse order:
 
 ::code-wrapper{language="rust"}
 ```rust
 struct Loud(&'static str);
 impl Drop for Loud {
-    fn drop(&mut self) { println!("dropping {}", self.0); }
+    fn drop(&mut self) { println!("drop {}", self.0); }
 }
 
 fn main() {
     let s = Loud("a");
-    let s = Loud("b");   // does NOT drop "a" early — both stay alive until scope end
-    println!("using {}", s.0);
-} // prints: dropping b, then dropping a (reverse declaration order)
+    let s = Loud("b");      // "a" is hidden, not dropped
+    let _ = Loud("c");      // `_` does NOT bind → dropped immediately
+    let _d = Loud("d");     // `_d` DOES bind → lives to the end
+    println!("end of main");
+}
+// drop c
+// end of main
+// drop d
+// drop b
+// drop a
 ```
 ::
 
-### `const` is inlined; `static` has one address
+`let _ = ...` vs `let _name = ...` matters for things like lock guards (chapter 22).
+
+## Constants and Statics
 
 ::code-wrapper{language="rust"}
 ```rust
-const MAX_POINTS: u32 = 100_000;   // inlined at every use site — no memory address
-static LANGUAGE: &str = "Rust";     // one fixed address for the whole program
+const MAX_POINTS: u32 = 100_000;     // type is REQUIRED, value copied in at each use
+static GREETING: &str = "hello";     // one fixed memory location for the whole program
 
 fn main() {
-    println!("{MAX_POINTS} {LANGUAGE}");
-    let p1: *const &str = &LANGUAGE;
-    let p2: *const &str = &LANGUAGE;
-    assert_eq!(p1, p2);   // same address every time — not true for MAX_POINTS (no address to take)
+    println!("{MAX_POINTS} {GREETING}");
 }
 ```
 ::
 
-`static mut` requires `unsafe` for every access — no synchronization at all:
+| | `let` | `const` | `static` |
+|---|---|---|---|
+| Type annotation | optional | **required** | **required** |
+| Value | any, at run time | compile-time constant | compile-time constant |
+| Scope | block | anywhere (even global) | anywhere |
+| Memory | stack slot | inlined, no address | one fixed address |
 
 ::code-wrapper{language="rust"}
 ```rust
-static mut COUNTER: u32 = 0;
+// const N = 5;                      // error: missing type for `const` item
+// const S: String = String::from("x"); // error: cannot call non-const fn in constants
+const S: &str = "x";                 // OK — string literals are fine
+```
+::
 
-fn bump() {
-    unsafe {
-        COUNTER += 1;   // two threads racing here is immediate, textbook undefined behavior
-    }
+### Avoid `static mut`
+
+::code-wrapper{language="rust"}
+```rust
+static mut COUNT: u32 = 0;
+
+fn main() {
+    // let r = unsafe { &COUNT };
+    // error: creating a shared reference to mutable static (deny by default in edition 2024)
 }
 ```
 ::
 
-## Cost, Performance, and Trade-Offs
-
-`const` vs `static`: code-size vs indirection.
-
-::code-wrapper{language="rust"}
-```rust
-const SMALL: i32 = 42;
-fn use_const() -> i32 { SMALL * 2 }   // "42" and the multiply are baked in — no memory load
-
-static BIG_TABLE: [u8; 4096] = [0; 4096];
-fn use_static() -> u8 { BIG_TABLE[0] } // one shared copy, loaded from memory — no 4096-byte duplication
-```
-::
-
-Shadowing: zero runtime cost, real cognitive cost:
-
-::code-wrapper{language="rust"}
-```rust
-fn parse_positive(input: &str) -> Result<i32, String> {
-    let s = input.trim();               // &str
-    let s: i32 = s.parse().map_err(|_| "not a number".to_string())?;  // now i32, SAME NAME
-    // `git diff` on this line shows "a type changed under an unchanged name" — harder to review
-    // than differently-named steps, even though it costs zero extra instructions.
-    Ok(s)
-}
-```
-::
-
-`OnceLock` — lazy static init cost is a one-time atomic check, not free like `const`:
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::OnceLock;
-
-static CONFIG: OnceLock<String> = OnceLock::new();
-
-fn config() -> &'static str {
-    CONFIG.get_or_init(|| std::fs::read_to_string("config.toml").unwrap())
-    // Every call after the first pays only an atomic load — negligible vs. unsafe static mut.
-}
-```
-::
-
-## Production Failure Modes & Anti-Patterns
-
-**Anti-pattern: reaching for `static mut` for shared mutable state.**
-
-::code-wrapper{language="rust"}
-```rust
-static mut REQUEST_COUNT: u32 = 0;
-
-fn handle_request() {
-    unsafe {
-        REQUEST_COUNT += 1;   // UB the instant two threads call this concurrently
-    }
-}
-```
-::
+Use an atomic instead — no `unsafe` needed:
 
 ::code-wrapper{language="rust"}
 ```rust
 use std::sync::atomic::{AtomicU32, Ordering};
 
-static REQUEST_COUNT: AtomicU32 = AtomicU32::new(0);
-
-fn handle_request() {
-    REQUEST_COUNT.fetch_add(1, Ordering::Relaxed);   // safe, no `unsafe` needed
-}
-```
-::
-
-For anything richer than a counter, use `OnceLock<Mutex<T>>` or an explicitly passed `Arc<Mutex<T>>` — global mutable state is the anti-pattern, not just the unsynchronized mechanism.
-
-**Anti-pattern: silent type-widening shadow chains that hide a lossy conversion.**
-
-::code-wrapper{language="rust"}
-```rust
-fn process(input: &str) -> u32 {
-    let input = input.trim();
-    let input = input.parse::<i64>().unwrap_or(0);
-    let input = input as u32;   // silently truncates/wraps negative or oversized i64
-    input
-}
-```
-::
-
-::code-wrapper{language="rust"}
-```rust
-fn process(input: &str) -> Result<u32, ProcessError> {
-    let parsed: i64 = input.trim().parse().map_err(|_| ProcessError::InvalidInput)?;
-    u32::try_from(parsed).map_err(|_| ProcessError::OutOfRange)
-    // TryFrom turns the silent wraparound into an explicit Result the caller must handle.
-}
-```
-::
-
-## Architectural Application
-
-`const` vs `static` as an API-design signal:
-
-::code-wrapper{language="rust"}
-```rust
-pub const MAX_RETRIES: u32 = 3;              // config limit — inline everywhere, no indirection
-pub static VERSION: &str = env!("CARGO_PKG_VERSION"); // singular, identity-bearing — one address
-```
-::
-
-Global state via dependency injection, not hidden globals:
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::Arc;
-
-struct AppState { db: Arc<Database> }
+static COUNT: AtomicU32 = AtomicU32::new(0);
 
 fn main() {
-    let db = Arc::new(Database::connect());
-    let state = AppState { db: Arc::clone(&db) };   // constructed once, passed explicitly
-    run_server(state);
-    // grep-able: every function signature that touches state says so — a hidden `static` erases this.
+    COUNT.fetch_add(1, Ordering::Relaxed);
+    println!("{}", COUNT.load(Ordering::Relaxed));   // 1
 }
 ```
 ::
 
-Shadowing as the idiomatic replacement for `input2`/`input3` naming:
+For a value computed once at run time, use `OnceLock`:
 
 ::code-wrapper{language="rust"}
 ```rust
-fn validate(s: &str) -> Result<u32, String> {
-    let s = s.trim();
-    let n: u32 = s.parse().map_err(|_| "bad number")?;
-    Ok(n)
+use std::sync::OnceLock;
+
+static NAME: OnceLock<String> = OnceLock::new();
+
+fn name() -> &'static str {
+    NAME.get_or_init(|| "computed once".to_uppercase())
+}
+
+fn main() {
+    println!("{}", name());   // COMPUTED ONCE
 }
 ```
 ::
 
-`let-else` as the default for "validate or bail":
+## `let ... else`
 
 ::code-wrapper{language="rust"}
 ```rust
 fn first_word(s: &str) -> &str {
     let Some(word) = s.split_whitespace().next() else {
-        return "";   // linear flow — no nested if-let-else
+        return "";          // the else block MUST exit (return/break/panic)
     };
     word
+}
+
+fn main() {
+    println!("[{}]", first_word("hello world"));   // [hello]
+    println!("[{}]", first_word("   "));           // []
 }
 ```
 ::
 
 ## 💡 Tips & Tricks
 
-::code-wrapper{language="rust"}
-```rust
-fn compute() -> i32 { 41 }
-
-fn main() {
-    let y = dbg!(compute()) + 1;   // prints file, line, expression text, value — then returns ownership
-    let _ = expensive_side_effect();  // silences "unused value" lint while still RUNNING it — grep for this
-    println!("{y}");
-}
-
-fn expensive_side_effect() -> i32 { println!("ran"); 0 }
-```
-::
-
-- **Idiom**: reach for `std::sync::OnceLock` instead of `static mut` or `lazy_static!`/`once_cell` — it's the modern, `unsafe`-free default.
-- **Performance**: `const` for small hot-loop scalars; `static` when you need a stable `&'static` address (FFI, singleton identity).
-- **Clippy**: `clippy::let_and_return` flags `let x = expr; x` as unnecessary.
-- **Idiom**: `let-else` removes a full nesting level for the single most common validation shape.
+- **Debug** — `dbg!(expr)` prints file, line, the expression and its value, then returns the value: `let y = dbg!(x * 2) + 1;`
+- **Idiom** — prefer shadowing (`let s = s.trim();`) over names like `s2`, `s_trimmed`.
+- **Idiom** — `_unused` silences "unused variable" warnings but still keeps the value alive.
+- **Readability** — `1_000_000` is the same as `1000000`.
+- **Lint** — the compiler warns when a `mut` is never mutated: `variable does not need to be mutable`.
 
 ## ⚠️ Edge Cases & Gotchas
 
-::code-wrapper{language="rust"}
-```rust
-static mut FLAG: bool = false;
+- **Shadowing** — a shadow inside `{ }` disappears at the `}`; the outer value is unchanged.
+- **Type** — `mut` cannot change a variable's type; shadowing can.
+- **Drop** — `let _ = value;` drops immediately; `let _x = value;` keeps it to the end of scope.
+- **Const** — `const` items always need an explicit type and cannot call normal (non-`const`) functions.
+- **Static** — in edition 2024, taking `&` or `&mut` to a `static mut` is a hard error by default.
+- **Init** — `let x;` without a type works only if the compiler can infer it from a later assignment.
 
-fn read_only() -> bool {
-    unsafe { FLAG }   // even a READ is UB without synchronization — no "read-only race is fine" exception
-}
-```
-::
+## 🧠 Quick Quiz
 
-::code-wrapper{language="rust"}
-```rust
-let mut x = 5;
-let x = "hello";       // legal: `let` always creates a fresh binding, mut-ness of the old one is irrelevant
-// x = "world";         // this WOULD be constrained by the new binding's lack of `mut`
-```
-::
+What does this print?
 
 ::code-wrapper{language="rust"}
 ```rust
-let (a, b) = (String::from("hi"), 5);
-let a = 10;    // shadows only `a`; `b` is untouched and still owns its String
-println!("{a} {b}");
-```
-::
-
-- **Portability**: `const fn` capabilities (loops, mutable locals, trait bounds) vary by Rust version — code may compile on your toolchain and fail on an older declared MSRV.
-- **Idiom**: a `const` cannot hold `String`/`Vec`/`Box` — no heap at compile time; use `static` + `OnceLock` instead.
-
-## 🧠 Spot the Bug
-
-::code-wrapper{language="rust"}
-```rust
-static mut COUNTER: u64 = 0;
-
-fn record_request() {
-    unsafe {
-        let current = COUNTER;
-        COUNTER = current + 1;
+fn main() {
+    let x = 1;
+    let x = x + 1;
+    {
+        let x = x * 10;
+        println!("{x}");
     }
+    let mut y = x;
+    y += 100;
+    println!("{x} {y}");
 }
 ```
 ::
-
-Under low traffic the counter looks right; under load-test traffic, the final count is consistently *lower* than the actual request count. Why?
 
 <details>
 <summary>Answer</summary>
 
-A classic read-modify-write race — two unsynchronized, separate operations:
-
-::code-wrapper{language="rust"}
-```rust
-// Thread A                    Thread B
-// let current = COUNTER;      (COUNTER == 41)
-//                              let current = COUNTER;   // also reads 41!
-// COUNTER = current + 1;      (writes 42)
-//                              COUNTER = current + 1;   // ALSO writes 42 — one increment lost
+::code-wrapper{language="bash"}
+```bash
+20
+2 102
 ```
 ::
 
-`unsafe` suppresses compiler *checks*, not the *need* for synchronization — this is also undefined behavior under the Rust memory model, not merely a logic bug.
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn record_request() {
-    COUNTER.fetch_add(1, Ordering::Relaxed);   // hardware-guaranteed indivisible increment
-}
-```
-::
-
-**The lesson**: `static mut` incremented from multiple threads loses updates under real contention, regardless of how convincing a single-threaded manual test looked.
+The inner `x` (20) only exists inside the block. `y` is a copy of `x` (an `i32` is `Copy`), so changing `y` does not change `x`.
 
 </details>
 
 ## Summary
 
-`mut` is a compile-time-only property of a binding underwriting the borrow checker's aliasing guarantees; `const` inlines everywhere with no address, `static` has one fixed address for the program's life, and `static mut` is an unsynchronized footgun that atomics or `OnceLock`-guarded state should replace in any concurrent context. Shadowing creates genuinely new bindings at zero runtime cost, with the real cost paid in reviewability.
+Variables are immutable unless marked `mut`. Shadowing makes a new variable (it may change type); `mut` changes the same one. Use `const` for fixed values, atomics or `OnceLock` instead of `static mut`.
 
-Next: Data Types — how these bindings' underlying scalar and compound types are actually laid out in memory, and where casting between them silently loses information.
+Next: Data Types.

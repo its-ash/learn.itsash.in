@@ -5,7 +5,7 @@ description: A comprehensive, edge-case-covering, idiomatic Rust curriculum. 35 
 
 # 🦀 Learn Rust — From Zero to Pro
 
-A comprehensive, edge-case-covering, idiomatic Rust curriculum. Each document is self-contained and covers its concept deeply enough that a careful reader can go from beginner to pro Rust developer.
+A comprehensive, edge-case-covering, idiomatic Rust curriculum. Each document is self-contained and teaches with **short, simple examples**, followed by **tricky cases and edge cases** — the code a beginner is likely to get wrong. Every example output was checked against Rust 1.97 (edition 2024).
 
 ## How to Use This Course
 
@@ -40,7 +40,7 @@ A comprehensive, edge-case-covering, idiomatic Rust curriculum. Each document is
 | 07 | [Ownership](/rust/07-ownership) | Move semantics, `Drop`, `Copy`. |
 | 08 | [References & Borrowing](/rust/08-references-and-borrowing) | `&T`/`&mut T`, NLL, borrow rules. |
 | 09 | [Slices](/rust/09-slices) | `&[T]`, `&str`, fat pointers. |
-| 10 | [Lifetimes](/rust/10-lifetimes) | `'a`, elision, `'static`, variance. |
+| 10 | [Lifetimes](/rust/10-lifetimes) | `'a`, elision rules, `'static`, `T: 'static`. |
 
 ### Part III — Modeling Data
 
@@ -64,38 +64,38 @@ A comprehensive, edge-case-covering, idiomatic Rust curriculum. Each document is
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 19 | [Smart Pointers](/rust/19-smart-pointers) | `Box`/`Rc`/`Arc`/`RefCell`/`Mutex`/`Cow`/`Pin`. |
+| 19 | [Smart Pointers](/rust/19-smart-pointers) | `Box`/`Rc`/`Cell`/`RefCell`/`Weak`, cycles. |
 | 20 | [Modules & Crates](/rust/20-modules-and-crates) | Visibility, paths, `use`, workspaces. |
-| 21 | [Testing](/rust/21-testing) | Unit/integration/doc tests, `criterion`, fuzzing. |
+| 21 | [Testing](/rust/21-testing) | Unit/integration/doc tests, `should_panic`, parallel-test traps. |
 
 ### Part VI — Concurrency & Async
 
 | # | Topic | Why It Matters |
 |---|---|---|
 | 22 | [Concurrency & Multithreading](/rust/22-concurrency) | `Send`/`Sync`, threads, channels, atomics. |
-| 23 | [Async / Await](/rust/23-async-await) | Futures, runtimes, `select!`, streams, `spawn_blocking`. |
+| 23 | [Async / Await](/rust/23-async-await) | Lazy futures, `join!`, `spawn`, timeouts, `spawn_blocking`, `Send`. |
 
 ### Part VII — Metaprogramming
 
 | # | Topic | Why It Matters |
 |---|---|---|
-| 24 | [Macros](/rust/24-macros) | `macro_rules!`, proc-macros, `cargo expand`. |
-| 25 | [Unsafe Rust](/rust/25-unsafe-rust) | Raw pointers, FFI, soundness, `Miri`. |
-| 26 | [FFI](/rust/26-ffi) | Calling C, calling Rust from C, `bindgen`/`cxx`. |
+| 24 | [Macros](/rust/24-macros) | `macro_rules!`, repetition, hygiene, double-evaluation trap. |
+| 25 | [Unsafe Rust](/rust/25-unsafe-rust) | Raw pointers, safe wrappers, soundness, `Miri`. |
+| 26 | [FFI](/rust/26-ffi) | Calling C, `CString`/`CStr`, exporting Rust, panics across FFI. |
 
 ### Part VIII — Production Engineering
 
 | # | Topic | Why It Matters |
 |---|---|---|
 | 27 | [Attributes & Conditional Compilation](/rust/27-attributes-and-cfg) | `#[cfg]`, `#[derive]`, lints, `#[non_exhaustive]`. |
-| 28 | [Cargo Features & Release Engineering](/rust/28-cargo-features) | Features, profiles, CI, publishing. |
-| 29 | [Advanced Type System](/rust/29-advanced-type-system) | Variance, HRTBs, GATs, const generics. |
+| 28 | [Cargo Features & Release Engineering](/rust/28-cargo-features) | Features, optional deps, profiles, build scripts. |
+| 29 | [Advanced Type System](/rust/29-advanced-type-system) | Associated types, operators, const generics, `PhantomData`, `?Sized`, `dyn` rules. |
 | 30 | [Design Patterns & Idiomatic Rust](/rust/30-design-patterns) | Builder, typestate, newtype, RAII. |
-| 31 | [Performance, Profiling & Optimization](/rust/31-performance) | `criterion`, `flamegraph`, allocation pitfalls. |
+| 31 | [Performance, Profiling & Optimization](/rust/31-performance) | Release-mode timing, `black_box`, hidden O(n²) loops, profiling. |
 | 32 | [Documentation](/rust/32-documentation) | `rustdoc`, doc tests, intra-doc links. |
-| 33 | [Ecosystem Tour](/rust/33-ecosystem) | Curated map of crates for every domain. |
-| 34 | [Common Pitfalls & Idiomatic Fixes](/rust/34-common-pitfalls) | 40+ traps and their fixes. |
-| 35 | [Exercises & Project Ideas](/rust/35-exercises-and-projects) | From beginner to pro. |
+| 33 | [Ecosystem Tour](/rust/33-ecosystem) | `serde`, `clap`, `anyhow`/`thiserror`, logging, choosing crates. |
+| 34 | [Common Pitfalls & Idiomatic Fixes](/rust/34-common-pitfalls) | 26 short traps with fixes, in one page. |
+| 35 | [Exercises & Project Ideas](/rust/35-exercises-and-projects) | Predict-the-output warm-up, exercises with solutions, projects. |
 
 ## Learning Path Suggestions
 

@@ -1,198 +1,63 @@
-# 35 — Senior-Level Scenarios: Design, Diagnose, Defend
+# 35 — Exercises & Projects
 
-Design under constraints, diagnose from symptoms + code, or defend a choice against a failure mode. Each has a canonical resolution in a collapsed `<details>` block — reason through it yourself first.
+Reading builds understanding; writing code builds skill. Try each exercise before opening the answer.
 
-## How to Use This Chapter
+## Warm-Up: Predict the Output
 
-- **Design scenarios**: produce an actual design — types, module boundaries, and the specific trade-off you're making and why. There is no single right answer; there is a defensible one.
-- **Diagnose scenarios**: given symptoms and a code excerpt, find the root cause before reading the answer. This is the skill that actually separates a senior engineer in an incident channel.
-- **Defend scenarios**: articulate why a design decision holds up under a stated attack (scale, concurrency, adversarial input) — the format of an actual design-review conversation.
+Every line comes from a gotcha earlier in the course. Write down your answers, then check.
 
-## Under-the-Hood Mechanics
+::code-wrapper{language="rust"}
+```rust
+fn main() {
+    let a: u8 = 200;
+    println!("{}", a.wrapping_add(100));                         // 1
 
-Before diagnosing production Rust systems, you need working mental models of what's actually happening beneath the abstractions you're debugging:
+    println!("{}", "naïve".len());                               // 2
 
-- **Async runtimes are cooperative schedulers over a task graph** — a `tokio` task that never yields (a tight CPU-bound loop with no `.await`) starves every other task on that worker thread, because the scheduler only gets control back at an await point. This is the mechanism behind "why did my whole service stall under load" incidents that have nothing to do with I/O.
-- **`Arc` cycles leak, they don't crash** — `Arc`'s strong-count reaching zero triggers drop; a cycle (`A` holds `Arc<B>`, `B` holds `Arc<A>`) means neither count ever reaches zero, so neither drops, ever. This is memory growth with no panic, no error, no stack trace — just a slowly climbing RSS graph that looks identical to a dozen other causes until you have a heap profile in hand.
-- **Lock-free structures trade blocking for retry storms** — a CAS (compare-and-swap) loop that fails, retries, under contention, doesn't block, but it doesn't guarantee forward progress for any *specific* thread either (only for the system as a whole, in the lock-free sense) — a livelock-adjacent failure mode that looks like "the CPU is at 100% but throughput is near zero."
+    let v = vec![1, 2, 3];
+    let s: i32 = v.iter().map(|x| x * x).filter(|x| x % 2 == 1).sum();
+    println!("{s}");                                             // 3
 
-## Design Scenarios
+    let mut x = 5;
+    { let x = x + 1; let _ = x; }
+    x += 1;
+    println!("{x}");                                             // 4
 
-### 1. Design a bounded, lock-free single-producer single-consumer ring buffer for a real-time audio pipeline
+    let o: Option<i32> = None;
+    println!("{}", o.map(|n| n + 1).unwrap_or(-1));              // 5
 
-**Constraints**: the audio callback thread (producer) has a hard real-time deadline — it must never block, never allocate, never take a lock. The consumer thread (network sender) can be arbitrarily delayed. Data loss on overflow is acceptable; a missed deadline is not.
-
-Design the buffer's synchronization strategy (atomics only — no `Mutex`), decide what happens on overflow (drop newest? drop oldest? overwrite?), and justify your choice of `Ordering` (`Relaxed`/`Acquire`/`Release`/`SeqCst`) for each atomic operation.
+    println!("{:?}", (1..=3).rev().collect::<Vec<_>>());         // 6
+    println!("{}", -17 % 5);                                     // 7
+    println!("{:?}", "a,b,".split(',').collect::<Vec<_>>());     // 8
+}
+```
+::
 
 <details>
-<summary>Reference approach</summary>
+<summary>Answers</summary>
 
-Two atomic indices, no CAS — single writer/single reader eliminates the multi-writer race a general lock-free queue must solve:
-
-::code-wrapper{language="rust" filename="spsc_ring.rs"}
-```rust
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::cell::UnsafeCell;
-
-const CAP: usize = 1024;
-
-struct RingBuffer<T> {
-    buf: [UnsafeCell<Option<T>>; CAP],
-    head: AtomicUsize, // consumer-owned index
-    tail: AtomicUsize, // producer-owned index
-    dropped: AtomicUsize, // Relaxed counter — exact ordering vs. other state doesn't matter
-}
-
-unsafe impl<T: Send> Sync for RingBuffer<T> {}
-
-impl<T> RingBuffer<T> {
-    // Producer: real-time thread — never blocks, never allocates, never locks.
-    fn push(&self, val: T) {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Acquire); // must see consumer's progress
-        if tail.wrapping_sub(head) >= CAP {
-            self.dropped.fetch_add(1, Ordering::Relaxed); // DROP NEWEST — never overwrite old, unsent audio
-            return; // never block waiting for the consumer — that violates the deadline
-        }
-        unsafe { *self.buf[tail % CAP].get() = Some(val); }
-        self.tail.store(tail.wrapping_add(1), Ordering::Release); // publish: data visible before index update
-    }
-
-    // Consumer: arbitrarily delayed, can block.
-    fn pop(&self) -> Option<T> {
-        let head = self.head.load(Ordering::Relaxed);
-        let tail = self.tail.load(Ordering::Acquire); // happens-before edge with the Release store above
-        if head == tail { return None; }
-        let val = unsafe { (*self.buf[head % CAP].get()).take() };
-        self.head.store(head.wrapping_add(1), Ordering::Release);
-        val
-    }
-}
-// SeqCst is unnecessary: no third thread needs a total order across both indices —
-// Acquire/Release is both correct and cheaper here.
+::code-wrapper{language="bash"}
+```bash
+44            # 1  300 wraps around 256
+6             # 2  ï is 2 bytes in UTF-8
+10            # 3  squares 1, 4, 9 → odd ones 1 + 9
+6             # 4  the inner x is a shadow; the outer x goes 5 → 6
+-1            # 5  map on None stays None
+[3, 2, 1]     # 6
+-2            # 7  remainder takes the sign of the left side
+["a", "b", ""] # 8 a trailing separator gives an empty last piece
 ```
 ::
 
 </details>
 
-### 2. Design the error-type hierarchy for a payments library used by a dozen internal services
-
-**Constraints**: some callers need to `match` on specific failure reasons (insufficient funds vs. network timeout vs. invalid card) to drive different UI/retry behavior; some callers just want to log-and-alert on any failure; the library must not force `anyhow` on downstream binaries that want typed errors.
-
-<details>
-<summary>Reference approach</summary>
-
-The library exposes a `thiserror`-based enum, never `anyhow::Error`, because `anyhow` erases the type — a caller who needs to distinguish "retry with backoff" (timeout) from "show the user a message, don't retry" (insufficient funds) can't `match` on a boxed `dyn Error`. Structure the enum so retryable and non-retryable failures are distinguishable at the type level, not just by string inspection of the message:
+And one that doesn't compile — why?
 
 ::code-wrapper{language="rust"}
 ```rust
-#[derive(Debug, thiserror::Error)]
-pub enum PaymentError {
-    #[error("insufficient funds: available {available}, requested {requested}")]
-    InsufficientFunds { available: u64, requested: u64 },
-    #[error("card declined: {reason}")]
-    CardDeclined { reason: DeclineReason },
-    #[error("upstream timeout after {0:?}")]
-    Timeout(std::time::Duration),
-    #[error("transient upstream failure")]
-    Transient(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl PaymentError {
-    pub fn is_retryable(&self) -> bool {
-        matches!(self, PaymentError::Timeout(_) | PaymentError::Transient(_))
-    }
-}
-```
-::
-
-Log-and-alert callers convert at the boundary — the correct dependency direction (`anyhow` depends on `std::error::Error`, not the reverse):
-
-::code-wrapper{language="rust"}
-```rust
-// Application code (not library code) converting at the boundary:
-fn charge_card(req: ChargeRequest) -> anyhow::Result<Receipt> {
-    let receipt = payments::charge(req)?; // PaymentError -> anyhow::Error via From
-    Ok(receipt)
-}
-
-// Typed callers match on specific variants instead of string-sniffing:
-match payments::charge(req) {
-    Ok(r) => handle_success(r),
-    Err(e) if e.is_retryable() => schedule_retry(e), // centralized policy, not per-caller enumeration
-    Err(PaymentError::InsufficientFunds { available, requested }) =>
-        show_user(format!("need {requested}, have {available}")),
-    Err(e) => alert_and_fail(e),
-}
-# struct ChargeRequest; struct Receipt;
-# mod payments { pub use super::PaymentError; pub fn charge(_: super::ChargeRequest) -> Result<super::Receipt, PaymentError> { unimplemented!() } }
-# fn handle_success(_: Receipt) {} fn schedule_retry(_: PaymentError) {} fn show_user(_: String) {} fn alert_and_fail(_: PaymentError) {}
-```
-::
-
-</details>
-
-### 3. Design a plugin system where third-party crates provide `Handler` implementations, loaded at startup from configuration
-
-**Constraints**: the set of handler types is not known at compile time (config-driven). Handlers run in a hot path processing thousands of events/sec. You are asked to justify why this specific design does or doesn't need `Box<dyn Handler>`, given the performance guidance from Chapter 31.
-
-<details>
-<summary>Reference approach</summary>
-
-Legitimate `Box<dyn Handler>` case — the handler set is config-driven, not a closed compile-time set, so `enum` dispatch isn't available. Resolve the trait object once at startup, then amortize the indirect call:
-
-::code-wrapper{language="rust"}
-```rust
-trait Handler: Send + Sync {
-    fn handle_batch(&self, events: &[Event]); // batched, not per-event dispatch
-}
-
-struct EventRouter { handlers: Vec<Box<dyn Handler>> } // resolved once at startup, not per event
-
-impl EventRouter {
-    fn dispatch(&self, events: &[Event]) {
-        for h in &self.handlers {
-            h.handle_batch(events); // one vtable call per batch, not per event —
-        }                            // amortizes indirect-call cost across many events
-    }
-}
-# struct Event;
-```
-::
-
-If profiling later shows the vtable call itself dominates (plausible at millions/sec, unlikely at thousands/sec), batching further is the next lever — not abandoning `dyn`.
-
-</details>
-
-## Diagnose Scenarios
-
-### 4. Diagnose a leaked `Arc` cycle in production
-
-A long-running service's memory grows steadily under normal, steady-state traffic — no traffic spikes, no obvious leak in the allocator logs, just RSS climbing a few MB/hour indefinitely. `cargo miri` on the test suite is clean (Miri doesn't run the production workload, and leaks aren't UB anyway). Here's the suspect code:
-
-::code-wrapper{language="rust"}
-```rust
-use std::sync::Arc;
-use std::sync::Mutex;
-
-struct Session {
-    id: String,
-    connection_pool: Arc<ConnectionPool>,
-}
-
-struct ConnectionPool {
-    active_sessions: Mutex<Vec<Arc<Session>>>,
-}
-
-impl ConnectionPool {
-    fn register(pool: &Arc<Self>, id: String) -> Arc<Session> {
-        let session = Arc::new(Session {
-            id,
-            connection_pool: Arc::clone(pool),
-        });
-        pool.active_sessions.lock().unwrap().push(Arc::clone(&session));
-        session
-    }
+fn main() {
+    let mut stack = vec![1, 2];
+    println!("{:?} {:?}", stack.last(), stack.pop());
 }
 ```
 ::
@@ -200,272 +65,191 @@ impl ConnectionPool {
 <details>
 <summary>Answer</summary>
 
-`ConnectionPool` holds `Arc<Session>`; every `Session` holds `Arc<ConnectionPool>` back — a cycle. Neither strong count ever reaches zero while the other side is alive. This is why "no spikes, steady climb" points at a cycle: it leaks proportionally to sessions created, at a steady rate.
-
-**Two independent fixes** — both needed, since either `Arc` alone completes the cycle:
-
-::code-wrapper{language="rust" filename="fixed.rs"}
-```rust
-use std::sync::{Arc, Mutex, Weak};
-
-struct Session {
-    id: String,
-    connection_pool: Weak<ConnectionPool>, // FIX 2: a session shouldn't keep the pool alive
-}
-
-struct ConnectionPool {
-    active_sessions: Mutex<Vec<Weak<Session>>>, // FIX 1: registry finds sessions, doesn't own them
-}
-
-impl ConnectionPool {
-    fn register(pool: &Arc<Self>, id: String) -> Arc<Session> {
-        let session = Arc::new(Session { id, connection_pool: Arc::downgrade(pool) });
-        pool.active_sessions.lock().unwrap().push(Arc::downgrade(&session));
-        session
-    }
-
-    fn live_sessions(&self) -> Vec<Arc<Session>> {
-        self.active_sessions.lock().unwrap()
-            .iter()
-            .filter_map(Weak::upgrade) // None if the session already dropped elsewhere
-            .collect()
-    }
-}
-```
-::
-
-**How you'd find this without reading source first**: a heap profiler (`dhat`, `massif`, a jemalloc dump) showing `Session`/`ConnectionPool` counts climbing together, never decreasing — then grep every `Arc<X>` field on both types for a cycle back.
+`error[E0502]: cannot borrow stack as mutable because it is also borrowed as immutable`. All `println!` arguments are evaluated before printing, so the `&` from `last()` is still alive when `pop()` needs `&mut`. Print them in two statements.
 
 </details>
 
-### 5. Diagnose why a "lock-free" counter benchmark shows worse throughput than a mutex-based one under high contention
+## Beginner Exercises
 
-::code-wrapper{language="rust"}
-```rust
-use std::sync::atomic::{AtomicU64, Ordering};
+### 1. FizzBuzz with `match`
 
-struct Counter { value: AtomicU64 }
-
-impl Counter {
-    fn increment_if_below(&self, limit: u64) -> bool {
-        loop {
-            let current = self.value.load(Ordering::SeqCst);
-            if current >= limit {
-                return false;
-            }
-            if self.value.compare_exchange(
-                current, current + 1, Ordering::SeqCst, Ordering::SeqCst,
-            ).is_ok() {
-                return true;
-            }
-            // retry
-        }
-    }
-}
-```
-::
-
-Sixteen threads hammer `increment_if_below` near the limit. Throughput is *worse* than an equivalent `Mutex<u64>`-guarded version. Why?
+Return `"Fizz"`, `"Buzz"`, `"FizzBuzz"` or the number as a `String` — using one `match` on a tuple.
 
 <details>
-<summary>Answer</summary>
-
-CAS-retry-storm: near the limit, many threads load a similar `current`, only one `compare_exchange` per round succeeds, the rest retry immediately — cache-line ping-pong that burns more bandwidth than a `Mutex`, which instead **parks** losers instead of spinning them:
+<summary>Solution</summary>
 
 ::code-wrapper{language="rust"}
 ```rust
-// The fix isn't necessarily "use a mutex" — add backoff, or shard the contention away:
-use std::sync::atomic::{AtomicU64, Ordering};
-
-struct ShardedCounter { shards: Vec<AtomicU64> } // sum-on-read instead of one hot atomic
-
-impl ShardedCounter {
-    fn increment(&self, shard_hint: usize) {
-        self.shards[shard_hint % self.shards.len()].fetch_add(1, Ordering::Relaxed);
-        // N threads on different shards -> no single hot cache line -> no retry storm
-    }
-    fn total(&self) -> u64 {
-        self.shards.iter().map(|s| s.load(Ordering::Relaxed)).sum() // approximate under concurrent writes
-    }
-}
-```
-::
-
-Lock-free is a **progress guarantee** ("the system as a whole advances"), not a performance guarantee ("this thread advances quickly") — under sustained contention a spinning CAS loop can lose badly to a blocking primitive that yields the core.
-
-</details>
-
-### 6. Diagnose an async service that intermittently drops requests under moderate load, with no errors logged
-
-::code-wrapper{language="rust"}
-```rust
-async fn handle_request(req: Request) -> Response {
-    let result = tokio::task::spawn(async move {
-        compute_expensive_response(req)
-    });
-    // handler moves on without awaiting `result`
-    Response::accepted()
-}
-```
-::
-
-<details>
-<summary>Answer</summary>
-
-Dropping the `JoinHandle` doesn't cancel the task — it keeps running detached — but discards the only signal that it panicked or is still in flight at shutdown. `Response::accepted()` returns regardless of outcome:
-
-::code-wrapper{language="rust"}
-```rust
-// BAD: bare, unobserved spawn — the JoinHandle is dropped, failure is invisible
-async fn handle_request_bad(req: Request) -> Response {
-    tokio::task::spawn(async move { compute_expensive_response(req) });
-    Response::accepted() // returned even if the task panics or never runs before shutdown
-}
-
-// FIX A: await and propagate failure when the caller can wait
-async fn handle_request_awaited(req: Request) -> Response {
-    match tokio::task::spawn(async move { compute_expensive_response(req) }).await {
-        Ok(result) => Response::ok(result),
-        Err(_join_err) => Response::internal_error(), // panic surfaced, not silently lost
+fn fizzbuzz(n: u32) -> String {
+    match (n % 3, n % 5) {
+        (0, 0) => "FizzBuzz".into(),
+        (0, _) => "Fizz".into(),
+        (_, 0) => "Buzz".into(),
+        _ => n.to_string(),
     }
 }
 
-// FIX B: explicit fire-and-forget with observability via a supervised JoinSet
-async fn handle_request_supervised(req: Request, tasks: &mut tokio::task::JoinSet<()>) -> Response {
-    tasks.spawn(async move { let _ = compute_expensive_response(req); });
-    Response::accepted() // acknowledged failures surface via tasks.join_next() elsewhere
+fn main() {
+    let line: Vec<String> = (1..=15).map(fizzbuzz).collect();
+    println!("{}", line.join(" "));
+    // 1 2 Fizz 4 Buzz Fizz 7 8 Fizz Buzz 11 Fizz 13 14 FizzBuzz
 }
-# struct Request; struct Response;
-# impl Response { fn accepted() -> Self { Response } fn ok(_: String) -> Self { Response } fn internal_error() -> Self { Response } }
-# fn compute_expensive_response(_: Request) -> String { String::new() }
 ```
 ::
 
 </details>
 
-## Defend Scenarios
+### 2. Palindrome
 
-### 7. Defend (or reject) sharding a `HashMap<UserId, Session>` behind a single `RwLock` for a service with 500K concurrent users
-
-State the read/write ratio at which `RwLock` stops being the right answer, and the specific alternative you'd move to, with a justification tied to measured contention rather than a general "shard everything" reflex.
+`is_palindrome("A man, a plan, a canal: Panama")` → `true`. Ignore case and punctuation. Edge cases: `""` → `true`, `"ab"` → `false`.
 
 <details>
-<summary>Reference approach</summary>
-
-`RwLock` scales reads with zero contention between readers, but every write is fully exclusive. Defensible until write frequency × hold time starts blocking reads against your latency SLO — measured, not guessed:
+<summary>Solution</summary>
 
 ::code-wrapper{language="rust"}
 ```rust
-use std::sync::RwLock;
+fn is_palindrome(s: &str) -> bool {
+    let c: Vec<char> = s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    c.iter().eq(c.iter().rev())
+}
+```
+::
+
+</details>
+
+### 3. Word Frequency
+
+Count words in a text, case-insensitive, ignoring punctuation. Return them sorted by count (highest first), then alphabetically.
+
+<details>
+<summary>Solution</summary>
+
+::code-wrapper{language="rust"}
+```rust
 use std::collections::HashMap;
 
-// Single lock: fine while writes are rare relative to reads.
-struct SessionStore { sessions: RwLock<HashMap<UserId, Session>> }
-impl SessionStore {
-    fn lookup(&self, id: &UserId) -> Option<Session> {
-        self.sessions.read().unwrap().get(id).cloned() // readers never block each other
+fn word_freq(text: &str) -> Vec<(String, usize)> {
+    let mut m: HashMap<String, usize> = HashMap::new();
+    for w in text.split_whitespace() {
+        let w = w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        if w.is_empty() { continue; }
+        *m.entry(w).or_default() += 1;
     }
-    fn update(&self, id: UserId, s: Session) {
-        self.sessions.write().unwrap().insert(id, s); // blocks ALL readers and writers
-    }
+    let mut v: Vec<_> = m.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));   // HashMap order is random → sort!
+    v
 }
 
-// Past the measured threshold: shard N-way. Reads stay fast, writes spread out.
-struct ShardedSessionStore { shards: Vec<RwLock<HashMap<UserId, Session>>> }
-impl ShardedSessionStore {
-    fn shard(&self, id: &UserId) -> &RwLock<HashMap<UserId, Session>> {
-        &self.shards[hash(id) % self.shards.len()] // cost: no atomic whole-map iteration/size
-    }
+fn main() {
+    println!("{:?}", word_freq("The cat. the DOG, the end!"));
+    // [("the", 3), ("cat", 1), ("dog", 1), ("end", 1)]
 }
-// dashmap packages this shard-of-locks pattern, battle-tested — prefer it over hand-rolling
-// unless a non-standard sharding key or dynamic shard count forces a custom implementation.
-# type UserId = u64; #[derive(Clone)] struct Session;
-# fn hash(id: &UserId) -> usize { *id as usize }
 ```
 ::
 
 </details>
 
-### 8. Defend a decision to use `unsafe` for a custom SIMD-accelerated parser, against a reviewer who says "just use safe Rust, this isn't proven to be a bottleneck"
+### 4. Generic Stack
+
+Build `Stack<T>` with `push`, `pop -> Option<T>`, `peek -> Option<&T>`, `len`, `is_empty`.
 
 <details>
-<summary>Reference approach</summary>
-
-The reviewer's skepticism is correct process — the defense is evidence, in this order, not authority:
+<summary>Solution</summary>
 
 ::code-wrapper{language="rust"}
 ```rust
-// 1. Profile first — flamegraph/perf must show the SCALAR parser as dominant cost,
-//    not a guess. No profile, no case.
+struct Stack<T> { items: Vec<T> }
 
-// 2. Confirm LLVM genuinely fails to auto-vectorize the safe version (cargo asm / Godbolt).
-//    If it already vectorizes, hand-written SIMD adds unsafe for zero measured gain.
-fn parse_scalar(input: &[u8]) -> usize {
-    input.iter().filter(|&&b| b == b',').count() // check the compiled asm before assuming this needs unsafe
-}
-
-// 3. Every unsafe block carries a documented # Safety contract + a miri-clean test
-//    covering the exact alignment/bounds assumptions relied on:
-/// # Safety
-/// `input.len()` must be a multiple of 32; caller guarantees 32-byte alignment.
-unsafe fn parse_simd(input: &[u8]) -> usize {
-    debug_assert!(input.len() % 32 == 0);
-    todo!("AVX2 comma-count kernel")
-}
-
-// 4. Scalar fallback gated on runtime feature detection, benchmarked on the
-//    ACTUAL deployment CPU, not the dev machine:
-fn parse(input: &[u8]) -> usize {
-    if is_x86_feature_detected!("avx2") {
-        unsafe { parse_simd(input) }
-    } else {
-        parse_scalar(input)
-    }
+impl<T> Stack<T> {
+    fn new() -> Self { Stack { items: Vec::new() } }
+    fn push(&mut self, t: T) { self.items.push(t); }
+    fn pop(&mut self) -> Option<T> { self.items.pop() }
+    fn peek(&self) -> Option<&T> { self.items.last() }
+    fn len(&self) -> usize { self.items.len() }
+    fn is_empty(&self) -> bool { self.items.is_empty() }
 }
 ```
 ::
 
-Skipping straight to "SIMD is faster" without evidence at each step is the premature optimization this course warns against since Chapter 31 — produce the evidence, don't win on authority.
+</details>
+
+### 5. Balanced Brackets
+
+`balanced("([]{})")` → `true`; `"(]"` → `false`; `"(("` → `false`; `""` → `true`.
+
+<details>
+<summary>Solution</summary>
+
+::code-wrapper{language="rust"}
+```rust
+fn balanced(s: &str) -> bool {
+    let mut st = Vec::new();
+    for c in s.chars() {
+        match c {
+            '(' | '[' | '{' => st.push(c),
+            ')' => if st.pop() != Some('(') { return false },
+            ']' => if st.pop() != Some('[') { return false },
+            '}' => if st.pop() != Some('{') { return false },
+            _ => {}
+        }
+    }
+    st.is_empty()   // leftover openers → unbalanced
+}
+```
+::
 
 </details>
 
-## Reading Code to Mastery
+## Intermediate Exercises
 
-Reading production-grade Rust internalizes judgment that no tutorial conveys: how real systems draw error-type boundaries, where they accept `unsafe` and how they document its contract, how they structure concurrency under real contention. Approach a large crate by reading its public API surface first (`src/lib.rs`'s `pub` items), tracing one real call path end-to-end, and only then reading internals — you now understand what the API promises before judging how it's implemented.
+6. **Safe parser** — `parse_kv("a=1;b=2")` → `HashMap<String, i32>`. Return a custom error enum for missing `=`, bad numbers and duplicate keys (chapter 18). Test every error case.
+7. **Iterator** — implement `Fibonacci` as an `Iterator<Item = u64>` that **stops** (returns `None`) instead of overflowing. Use `checked_add`.
+8. **Matrix** — `Matrix<const R: usize, const C: usize>` with `transpose()` and `Add` (chapter 29). Adding different sizes must not compile.
+9. **Typestate** — a `Connection<Disconnected>` → `Connection<Connected>` → `Connection<Authenticated>` where `send()` only exists on `Authenticated` (chapter 30).
+10. **Thread pool** — sum `1..=10_000_000` across 4 threads using `thread::scope` and `chunks`; compare with `rayon`'s `par_iter().sum()`.
+11. **Channels** — a producer sends 100 jobs, 3 workers process them, results come back on a second channel. Make sure the program exits (drop your senders!).
 
-- **`tokio`** — the scheduler and `JoinHandle`/cancellation semantics directly explain Scenario 6 above.
-- **`crossbeam`** — epoch-based memory reclamation is the production answer to "how do lock-free structures free memory safely without a GC," relevant to Scenario 1 and 5.
-- **`dashmap`** — a real, battle-tested implementation of the sharded-lock pattern from Scenario 7; read it after attempting the scenario yourself.
-- **`sqlx`** — compile-time SQL verification via macros, a case study in pushing a correctness guarantee from runtime into compile time, the same instinct behind everything in Chapter 34.
-- **`std::sync` source** (`alloc`/`core`) — `Arc`'s actual strong/weak count implementation, worth reading after Scenario 4 to see exactly how `Weak::upgrade` avoids resurrecting a dropped value.
+## Projects
 
-## Open Source Contribution
+### Beginner
 
-Contributing to real infrastructure is the fastest way to have your design judgment checked by people maintaining production systems at scale: `tokio-rs/*`, `serde-rs/*`, `rust-lang/rust` (good-first-issue labeled), `bevyengine/bevy`. Read a project's `CONTRIBUTING.md` and its recent PR review threads before your first PR — the review comments are often more instructive than the code itself, because they surface the trade-offs a maintainer weighed that aren't visible in the merged diff.
+1. **CLI to-do list** — `add`, `list`, `done`, `remove` with `clap`; save to a JSON file with `serde`. Handle a missing or corrupt file without panicking.
+2. **Guessing game** — read input in a loop, `trim()` + `parse()`, give "too high/low" hints, handle non-numbers.
+3. **Unit converter** — newtypes `Celsius`, `Fahrenheit`, `Kelvin` with `From` impls between them.
+
+### Intermediate
+
+4. **Log analyzer** — stream a large log file line by line (`BufReader::lines`), count status codes, print the top 10 IPs. Don't load the whole file.
+5. **Key-value store** — `get`/`set`/`delete` commands over TCP with `tokio`; persist to disk; handle many clients.
+6. **Markdown to HTML** — headings, bold, links, lists; snapshot-test the output.
+
+### Advanced
+
+7. **Mini interpreter** — tokenizer → parser → evaluator for arithmetic with variables. Use enums for tokens and AST nodes.
+8. **Web API** — `axum` + `sqlx` CRUD service with input validation, typed errors mapped to HTTP status codes, and integration tests.
+9. **FFI library** — expose a Rust function to C (`cdylib`, `#[unsafe(no_mangle)]`), call it from a C program, and free memory correctly (chapter 26).
 
 ## 💡 Tips & Tricks
 
-- **Idiom**: for every design scenario above, write down the trade-off you rejected, not just the one you chose — a senior design review is judged as much on "why not X" as "why Y."
-- **Debug**: for the diagnose scenarios, resist reading the answer until you've named a concrete tool (heap profiler, `perf`, `tokio-console`) you'd actually reach for — "I'd look at the code more carefully" isn't a diagnostic strategy.
-- **Debug**: `tokio-console` (a live async-task inspector) makes Scenario 6's class of bug — detached, unobserved tasks — visible in real time; it's worth setting up on any tokio service before you need it during an incident.
-- **Safety**: run `cargo miri test` and `loom` (for concurrency-critical code) on your own solutions to Scenarios 1, 2, and 5 — both catch classes of bugs that "it passed my manual testing" cannot.
-- **Performance**: benchmark your Scenario 1 and 5 solutions against `crossbeam-channel`/`dashmap` with `criterion` — matching correctness is the first milestone; matching a battle-tested crate's performance is a materially higher bar, worth confirming honestly.
+- **Workflow** — `cargo check` while writing, `cargo clippy` before committing, `cargo test` always.
+- **Edge cases** — for every function, test: empty input, one item, very large values, negative numbers, non-ASCII text.
+- **Learning** — after solving an exercise, read how a standard-library function does the same thing (`Vec::dedup`, `str::split`).
 
 ## ⚠️ Edge Cases & Gotchas
 
-- **A clean `cargo miri` run on your test suite doesn't mean your production workload is leak-free**: Miri catches undefined behavior, not resource leaks — an `Arc` cycle (Scenario 4) is a perfectly well-defined, perfectly legal Rust program that leaks memory forever, and Miri has nothing to say about it.
-- **Lock-free is a progress guarantee, not a performance guarantee**: Scenario 5 is the general case — a spinning CAS loop can lose to a blocking mutex under sustained contention, because "lock-free" only promises the *system* makes progress, not that any given thread does so efficiently.
-- **`spawn`-and-forget silently drops failure information, not just cancellation**: dropping a `JoinHandle` doesn't cancel the task, but it does discard the only signal you had that the task panicked or is still pending at shutdown.
-- **A design that's correct under your test suite's concurrency level can fail only under production-scale contention**: none of Scenario 5's problem is visible with two threads in a unit test — it requires realistic concurrent load, which is why load testing (not just correctness testing) belongs in the review of any concurrency-sensitive design.
+- **Sorting** — `HashMap` results must be sorted before you compare them in tests.
+- **Overflow** — Fibonacci, factorial and sums overflow sooner than you think; use `checked_*` or `u128`.
+- **Input** — always `trim()` text from stdin or files before `parse()`.
+- **Threads/channels** — a program that "hangs at the end" usually has an un-dropped `Sender` or an un-joined thread.
 
 ## Where to Go From Here
 
-You've now covered the mechanics, the costs, and the failure modes. The remaining gap between "knows Rust" and "ships and operates Rust systems at scale" closes only by reading code written by people solving these exact problems under real constraints:
-
-- **`tokio-rs/tokio`** — the scheduler internals (`tokio/src/runtime/scheduler`) for how a real work-stealing async runtime handles the starvation and detached-task problems in this chapter.
-- **`rust-lang/rust`** — the standard library's `alloc::sync` module for `Arc`/`Weak`'s actual implementation, and the compiler's own borrow-checker source (`compiler/rustc_borrowck`) if you want to go a level deeper than "the compiler rejects this."
-- **`crossbeam-rs/crossbeam`** — epoch-based reclamation and the `crossbeam-channel` implementation, the production-grade version of Scenario 1's design space.
-- **`tikv/tikv`** — a distributed transactional key-value store in Rust, a genuine large-scale systems codebase demonstrating error handling, concurrency, and observability patterns at a scale most side projects never reach.
-- **`influxdata/influxdb` (the Rust-rewritten core, "IOx")** — a production analytical database, useful for seeing how a team structures a large, multi-crate Rust workspace with real performance constraints.
-
-Read one of these with a specific question in mind — "how do they handle lock poisoning," "how do they structure their error types across crate boundaries" — rather than reading linearly. That's how the scenarios in this chapter stop being exercises and start being pattern-matches against code you've actually read.
+- [The Rust Book](https://doc.rust-lang.org/book/) — the official guide.
+- [Rust by Example](https://doc.rust-lang.org/rust-by-example/) — short runnable examples.
+- [Rustlings](https://github.com/rust-lang/rustlings) — small exercises that fix compiler errors.
+- [Exercism Rust track](https://exercism.org/tracks/rust) — mentored practice.
+- [The Rustonomicon](https://doc.rust-lang.org/nomicon/) — for `unsafe` in depth.
+- [Asynchronous Programming in Rust](https://rust-lang.github.io/async-book/) — for async in depth.
